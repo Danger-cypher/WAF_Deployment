@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+
+  backend:
+    build: ./backend
+    container_name: waf-backend
+
+    restart: unless-stopped
+
+    volumes:
+      - ./backend/app/config:/app/app/config
+      - /var/log/modsec:/var/log/modsec:ro
+      - /etc/nginx:/etc/nginx
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      ML_API=http://ml-engine:9000
+
+
+  ml-engine:
+
+    build: ./ml-waf
+
+    container_name: waf-ml
+
+    restart: unless-stopped
+
+    ports:
+      - "9000:9000"
+
+    volumes:
+      - ./ml-waf/models:/app/models
+
+
+  frontend:
+
+    build: ./frontend
+
+    container_name: waf-frontend
+
+    restart: unless-stopped
+
+    depends_on:
+      - backend
+
+    ports:
+      - "3000:80"
+
+networks:
+
+  default:
+    driver: bridge
