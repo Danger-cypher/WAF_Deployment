@@ -207,3 +207,52 @@ To maintain a lightweight footprint without requiring a bulky database engine, l
 * **Stateless JWT Tokens:** Upon successful login, the backend generates a **JSON Web Token (JWT)**. The user's browser saves this token in `localStorage`. For every future dashboard action, the browser automatically sends this token. The backend verifies the token's validity mathematically, meaning it doesn't need to look up active sessions in a database.
 * **Role-Based Access Control:** Users are assigned either an `Admin` role (can modify settings, reload Nginx, turn WAF off) or an `Analyst` role (read-only access to view logs, charts, and statistics).
 * **Note on Bypassing Authentication:** In local, development, or single-tenant direct-access environments, frontend login checks can be bypassed by setting `isAuthenticated` state to `true` in `App.jsx` and corresponding API dependency mocks in `auth.py`.
+
+---
+
+## 🐳 Dockerized Deployment & Operations
+
+CyberSentinel WAF is fully containerized using **Docker Compose** to isolate services, guarantee consistent runtimes, and simplify orchestration.
+
+### 1. Service Map & Internal Networks
+All backend and caching engines run within an isolated virtual network (`waf-network`), exposing ports only to peer services:
+* **`waf-openresty`** (Gateway Proxy): Mounts rule engines and binds host port `3001` (Single Entry Point).
+* **`waf-backend`** (FastAPI API): Port `8000` (internal only, maps to `/api` proxy).
+* **`waf-frontend`** (React + Nginx): Port `80` (internal only, maps to `/` fallback proxy).
+* **`waf-ml`** (ML Prediction Engine): Port `9000` (internal only).
+* **`waf-redis`** (Telemetry Store): Port `6379` (secured with internal credentials).
+
+### 2. Quickstart Deployment Commands
+
+To compile, link, and launch the WAF and all subsystems:
+
+```bash
+# Clone the repository
+cd /opt/ModSecurity/WAF_GUI
+
+# Compile the production React build (from host)
+cd frontend && npm install && npm run build && cd ..
+
+# Build and start all Docker services in detached mode
+sudo docker compose up -d --build
+```
+
+### 3. Management & Maintenance
+
+* **Reload Nginx / Apply Rules**:
+  ```bash
+  sudo docker exec waf-openresty nginx -s reload
+  ```
+* **Verify System Health**:
+  ```bash
+  curl -s http://localhost:3001/api/health
+  ```
+* **Check Service Status**:
+  ```bash
+  sudo docker compose ps
+  ```
+* **Rebuild Backend Routes after changes**:
+  ```bash
+  sudo docker compose up -d --build backend
+  ```
+
