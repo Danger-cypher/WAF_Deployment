@@ -20,11 +20,7 @@ DEFAULT_SETTINGS = {
     },
     "auth": {
         "password_hash": "",
-        "analyst_password_hash": "",
-        "mfa_enabled": False,
-        "mfa_secret": "",
-        "analyst_mfa_enabled": False,
-        "analyst_mfa_secret": ""
+        "analyst_password_hash": ""
     },
     "auto_learning": {
         "enabled": False,
@@ -193,26 +189,7 @@ class SettingsManager:
         )
         self.save_settings(self.settings)
 
-    def get_mfa_settings(self) -> Dict[str, Any]:
-        return {
-            "mfa_enabled": self.settings.get("auth", {}).get("mfa_enabled", False),
-            "mfa_secret": self.settings.get("auth", {}).get("mfa_secret", ""),
-            "analyst_mfa_enabled": self.settings.get("auth", {}).get("analyst_mfa_enabled", False),
-            "analyst_mfa_secret": self.settings.get("auth", {}).get("analyst_mfa_secret", "")
-        }
 
-    def update_mfa_settings(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        auth = self.settings.setdefault("auth", {})
-        if "mfa_enabled" in data:
-            auth["mfa_enabled"] = data["mfa_enabled"]
-        if "mfa_secret" in data:
-            auth["mfa_secret"] = data["mfa_secret"]
-        if "analyst_mfa_enabled" in data:
-            auth["analyst_mfa_enabled"] = data["analyst_mfa_enabled"]
-        if "analyst_mfa_secret" in data:
-            auth["analyst_mfa_secret"] = data["analyst_mfa_secret"]
-        self.save_settings(self.settings)
-        return self.get_mfa_settings()
 
     def get_custom_response(self) -> Dict[str, Any]:
         return self.settings.get("custom_response", DEFAULT_SETTINGS["custom_response"])

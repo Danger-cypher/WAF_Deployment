@@ -133,7 +133,8 @@ if secret_file then
     end
 end
 
-local ok, err = red:connect("127.0.0.1", 6379)
+local redis_host = os.getenv("REDIS_HOST") or "127.0.0.1"
+local ok, err = red:connect(redis_host, 6379)
 if ok then
     -- Only authenticate if password was loaded from the secret file
     local auth_ok = true
@@ -206,10 +207,17 @@ local function crs_only_fallback(reason)
     end
 end
 
-local uds_path = "unix:/opt/ModSecurity/WAF_GUI/ml-waf/run/ml_waf.sock"
-local ok, err = httpc:connect(uds_path)
+local ml_host = os.getenv("ML_HOST") or "127.0.0.1"
+local ml_port = tonumber(os.getenv("ML_PORT")) or 8003
+local ok, err
+if string.match(ml_host, "^unix:") then
+    ok, err = httpc:connect(ml_host)
+else
+    ok, err = httpc:connect(ml_host, ml_port)
+end
+
 if not ok then
-    crs_only_fallback("ML daemon socket unreachable: " .. (err or "unknown"))
+    crs_only_fallback("ML daemon unreachable: " .. (err or "unknown"))
     return
 end
 
@@ -218,7 +226,7 @@ local res, err = httpc:request({
     method = "POST",
     body = json.encode(payload),
     headers = {
-        ["Host"] = "127.0.0.1",
+        ["Host"] = string.match(ml_host, "^unix:") and "127.0.0.1" or ml_host,
         ["Content-Type"] = "application/json",
     }
 })

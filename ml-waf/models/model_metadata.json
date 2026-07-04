@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
   "xgboost": {
-    "version": 2,
+    "version": 3,
     "type": "production",
-    "training_date": "2026-07-01T21:30:04.853614Z",
-    "sample_count": 4077,
-    "accuracy": 1.0,
-    "notes": "4069 benign + 8 attack samples used for training."
+    "training_date": "2026-07-02T21:30:07.799891Z",
+    "sample_count": 4080,
+    "accuracy": 0.999,
+    "notes": "4072 benign + 8 attack samples used for training."
   },
   "isolation_forest": {
-    "version": 2,
+    "version": 3,
     "type": "production",
-    "training_date": "2026-07-01T21:30:03.692167Z",
-    "sample_count": 5087,
+    "training_date": "2026-07-02T21:30:06.215445Z",
+    "sample_count": 5090,
     "accuracy": null,
-    "notes": "Trained on 5087 benign baseline samples."
+    "notes": "Trained on 5090 benign baseline samples."
   }
 }

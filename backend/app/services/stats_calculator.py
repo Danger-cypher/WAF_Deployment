@@ -1,3 +1,4 @@
+import os
 from typing import List, Dict, Any
 from app.services.log_reader import get_all_logs
 from collections import Counter
@@ -43,16 +44,20 @@ def get_top_ips(limit: int = 10) -> List[Dict[str, Any]]:
         if log.client_ip and log.country:
             ip_to_country[log.client_ip] = log.country
             
-    # Connect to Redis to fetch AbuseIPDB scores
+    # Connect to Redis to fetch AbuseIPDB scores.
+    # Uses REDIS_HOST env var so Docker containers can point to the host Redis
+    # instead of hanging on localhost (which doesn't exist inside the container).
     import redis
+    redis_host     = os.environ.get("REDIS_HOST", "localhost")
+    redis_password = os.environ.get("REDIS_PASSWORD", "YourSecureRedisPassword123!")
     r = redis.Redis(
-        host="localhost",
+        host=redis_host,
         port=6379,
-        password="YourSecureRedisPassword123!",
-        socket_timeout=1.0,
-        socket_connect_timeout=1.0
+        password=redis_password if redis_password else None,
+        socket_timeout=0.5,          # fail fast — 500 ms max
+        socket_connect_timeout=0.5,
     )
-    
+
     result = []
     for ip, count in most_common:
         country = ip_to_country.get(ip, "Unknown")
@@ -62,8 +67,8 @@ def get_top_ips(limit: int = 10) -> List[Dict[str, Any]]:
             if val is not None:
                 abuse_score = float(val)
         except Exception:
-            pass
-            
+            pass  # Redis unavailable — skip abuse scores gracefully
+
         result.append({
             "ip": ip,
             "count": count,

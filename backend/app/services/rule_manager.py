@@ -335,6 +335,29 @@ def _run_nginx_reload() -> Tuple[bool, str]:
     Spawns NGINX configuration test and reloads.
     If sudo access is restricted, runs gracefully in fail-safe simulation mode.
     """
+    # 1. Try Docker Exec variants first
+    try:
+        # Check config syntax in Docker container
+        subprocess.run(
+            ["docker", "exec", "waf-openresty", "nginx", "-t"],
+            capture_output=True, text=True, check=True
+        )
+        # Reload openresty inside Docker container
+        subprocess.run(
+            ["docker", "exec", "waf-openresty", "openresty", "-s", "reload"],
+            capture_output=True, text=True, check=True
+        )
+        return True, "NGINX configuration validated and reloaded successfully in Docker."
+    except (subprocess.CalledProcessError, FileNotFoundError, PermissionError) as e:
+        # If the command succeeded but reported syntax error, we must abort! Do not fall through.
+        if isinstance(e, subprocess.CalledProcessError):
+            err_msg = e.stderr or e.stdout or str(e)
+            if "docker" not in err_msg.lower() and "cannot connect" not in err_msg.lower() and "no such container" not in err_msg.lower():
+                logger.error(f"NGINX validation failed inside Docker: {err_msg}")
+                return False, f"NGINX reload aborted: configuration validation failed: {err_msg}"
+        logger.debug(f"Docker reload not available or failed: {e}. Trying host reload...")
+
+    # 2. Host reload variants
     try:
         # Check config syntax
         subprocess.run(

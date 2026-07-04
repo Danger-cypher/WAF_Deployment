@@ -1,55 +1,102 @@
-version: "3.9"
-
 services:
-
   backend:
     build: ./backend
     container_name: waf-backend
-
     restart: unless-stopped
-
     volumes:
       - ./backend/app/config:/app/app/config
-      - /var/log/modsec:/var/log/modsec:ro
+      - ./backend/app/data:/app/app/data
+      - ./backend/app/data:/opt/ModSecurity/WAF_GUI/backend/app/data
+      - /var/log/modsecurity/audit:/var/log/modsecurity/audit:ro
       - /etc/nginx:/etc/nginx
-
-    ports:
-      - "8000:8000"
-
+      - /var/log/nginx:/var/log/nginx:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    # No host port mapping — only accessible internally via OpenResty WAF
+    expose:
+      - "8000"
     environment:
-      ML_API=http://ml-engine:9000
-
+      ML_API: http://ml-engine:9000
+      REDIS_HOST: redis
+      REDIS_PASSWORD: YourSecureRedisPassword123!
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - ml-engine
+      - redis
+    networks:
+      - waf-network
 
   ml-engine:
-
     build: ./ml-waf
-
     container_name: waf-ml
-
     restart: unless-stopped
-
-    ports:
-      - "9000:9000"
-
+    # No host port mapping — only accessible internally via waf-network
+    expose:
+      - "9000"
     volumes:
       - ./ml-waf/models:/app/models
+      - ./backend/app/data:/opt/ModSecurity/WAF_GUI/backend/app/data
+      - /etc/cybersentinel:/etc/cybersentinel:ro
+    environment:
+      REDIS_HOST: redis
+    depends_on:
+      - redis
+    networks:
+      - waf-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: waf-redis
+    restart: unless-stopped
+    # No host port mapping — only accessible internally via waf-network
+    expose:
+      - "6379"
+    command: redis-server --requirepass YourSecureRedisPassword123!
+    networks:
+      - waf-network
+
+  openresty:
+    build: ./openresty
+    container_name: waf-openresty
+    restart: unless-stopped
+    ports:
+      # Port 3001 is the ONLY entry point — all traffic goes through the WAF
+      - "3001:3001"
+    volumes:
+      - /usr/local/openresty:/usr/local/openresty
+      - /usr/local/modsecurity:/usr/local/modsecurity:ro
+      - /etc/nginx:/etc/nginx
+      - /var/log/modsecurity:/var/log/modsecurity
+      - /var/log/nginx:/var/log/nginx
+      - /etc/cybersentinel:/etc/cybersentinel:ro
+      - ./ml-waf:/opt/ml-waf:ro
+      - ./backend/app/data:/opt/ModSecurity/WAF_GUI/backend/app/data
+    environment:
+      REDIS_HOST: redis
+      ML_HOST: ml-engine
+      ML_PORT: 9000
+    depends_on:
+      - ml-engine
+      - redis
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - waf-network
 
   frontend:
-
     build: ./frontend
-
     container_name: waf-frontend
-
     restart: unless-stopped
-
     depends_on:
       - backend
-
-    ports:
-      - "3000:80"
+    # No host port mapping — only accessible internally via OpenResty WAF
+    expose:
+      - "80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    networks:
+      - waf-network
 
 networks:
-
-  default:
+  waf-network:
     driver: bridge

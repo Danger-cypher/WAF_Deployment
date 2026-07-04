@@ -1,4 +1,4 @@
-const BASE_URL = `http://${window.location.host}/api`;
+const BASE_URL = `${window.location.protocol}//${window.location.host}/api`;
 
 // Global fetch interceptor to automatically attach authorization header
 const originalFetch = window.fetch;

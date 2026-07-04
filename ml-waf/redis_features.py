@@ -28,7 +28,7 @@ _redis_password = _get_redis_password()
 
 # Standard Redis connection setup. Setting aggressive timeouts to prevent blocking FastAPI responses.
 r = redis.Redis(
-    host='localhost',
+    host=os.environ.get("REDIS_HOST", "localhost"),
     port=6379,
     db=0,
     password=_redis_password if _redis_password else None,

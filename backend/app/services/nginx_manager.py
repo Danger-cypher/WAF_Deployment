@@ -314,6 +314,9 @@ def reload_nginx() -> bool:
     Requires /etc/sudoers.d/cybersentinel-waf to grant NOPASSWD for these commands.
     """
     candidates = [
+        # Docker reload variants (first check if running in docker-compose environment)
+        ["docker", "exec", "waf-openresty", "openresty", "-s", "reload"],
+        ["docker", "exec", "waf-openresty", "nginx", "-s", "reload"],
         # sudo variants (for non-root service user via sudoers grant)
         ["sudo", "/usr/local/openresty/bin/openresty", "-s", "reload"],
         ["sudo", "/usr/local/openresty/nginx/sbin/nginx", "-s", "reload"],
@@ -363,13 +366,14 @@ def disable_ddos_mitigation() -> bool:
 
 
 def get_redis_client():
-    password = _get_redis_password()
+    password = os.environ.get("REDIS_PASSWORD") or _get_redis_password()
+    redis_host = os.environ.get("REDIS_HOST", "localhost")
     return redis.Redis(
-        host="localhost",
+        host=redis_host,
         port=6379,
         password=password if password else None,
-        socket_timeout=1.0,
-        socket_connect_timeout=1.0
+        socket_timeout=0.5,
+        socket_connect_timeout=0.5
     )
 
 

@@ -343,7 +343,44 @@ async def restart_system(current_user: TokenData = Depends(require_admin)):
     logger.info("Restart WAF Engine triggered.")
     import subprocess
     try:
-        # Restart openresty (which runs ModSecurity)
+        # Check if Docker is available in the environment
+        docker_available = False
+        try:
+            res = subprocess.run(["docker", "--version"], capture_output=True)
+            if res.returncode == 0:
+                docker_available = True
+        except Exception:
+            pass
+
+        if docker_available:
+            logger.info("Docker environment detected. Restarting WAF containers...")
+            # Restart openresty (runs ModSecurity)
+            result = subprocess.run(
+                ["docker", "restart", "waf-openresty"],
+                capture_output=True,
+                text=True,
+                timeout=20
+            )
+            if result.returncode != 0:
+                logger.error(f"Restart waf-openresty container failed: {result.stderr}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to restart waf-openresty container: {result.stderr.strip()}"
+                )
+            
+            # Restart ml container
+            result_ml = subprocess.run(
+                ["docker", "restart", "waf-ml"],
+                capture_output=True,
+                text=True,
+                timeout=20
+            )
+            if result_ml.returncode != 0:
+                logger.warning(f"Restart waf-ml container failed: {result_ml.stderr}")
+
+            return {"message": "WAF ModSecurity Engine and ML Daemon restarted successfully in Docker."}
+
+        # Fallback to systemctl (host deployments)
         result = subprocess.run(
             ["sudo", "/usr/bin/systemctl", "restart", "openresty"],
             capture_output=True,
@@ -357,7 +394,7 @@ async def restart_system(current_user: TokenData = Depends(require_admin)):
                 detail=f"Failed to restart OpenResty WAF Engine: {result.stderr.strip()}"
             )
         
-        # Also restart ml-waf service to ensure ML daemon models are cleanly loaded
+        # Also restart ml-waf service
         subprocess.run(
             ["sudo", "/usr/bin/systemctl", "restart", "ml-waf"],
             capture_output=True,

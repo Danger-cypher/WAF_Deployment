@@ -79,6 +79,8 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
   const [copied, setCopied] = useState(false);
   const [showReqHeaders, setShowReqHeaders] = useState(false);
   const [showResHeaders, setShowResHeaders] = useState(false);
+  const [showViolations, setShowViolations] = useState(true);
+  const [showRawJson, setShowRawJson] = useState(false);
 
   useEffect(() => {
     if (copied) {
@@ -92,12 +94,59 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
       const timer = setTimeout(() => {
         setShowReqHeaders(false);
         setShowResHeaders(false);
+        setShowViolations(true);
+        setShowRawJson(false);
       }, 0);
       return () => clearTimeout(timer);
     }
   }, [isOpen]);
 
   if (!isOpen || !log) return null;
+
+  // ── Derived fields ───────────────────────────────────────────────────────
+  const reqHeaders = log.request_headers || {};
+  const userAgent = reqHeaders['User-Agent'] || reqHeaders['user-agent'] || '';
+  const referer = reqHeaders['Referer'] || reqHeaders['referer'] || '';
+  const violations = log.violations || [];
+  const matchedPayloads = violations.map(v => v.data).filter(d => d && d.trim().length > 0);
+
+  // Determine target application from hostname + uri
+  const hostname = log.hostname || '';
+  let targetApp = 'Unknown Application';
+  if (log.uri && (log.uri.startsWith('/api/auth') || log.uri.startsWith('/api/logs') || log.uri.startsWith('/api/settings'))) {
+    targetApp = 'CyberSentinel WAF Dashboard';
+  } else if (hostname) {
+    targetApp = 'MSSP Application';
+  }
+  if (hostname) targetApp += ' · ' + hostname;
+
+  // Collect OWASP tags from raw_log
+  const owaspTags = [];
+  try {
+    const msgs = log.raw_log?.transaction?.messages || [];
+    msgs.forEach(m => {
+      (m.details?.tags || []).forEach(tag => {
+        if (!owaspTags.includes(tag) && tag !== 'OWASP_CRS') owaspTags.push(tag);
+      });
+    });
+  } catch (_) { }
+
+  const sectionStyle = { marginBottom: '14px' };
+  const collapsibleHeader = (label, count, open, toggle) => (
+    <div
+      onClick={toggle}
+      style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '10px 14px', background: 'rgba(255,255,255,0.03)',
+        border: '1px solid rgba(255,255,255,0.07)',
+        borderRadius: open ? '6px 6px 0 0' : '6px',
+        cursor: 'pointer', userSelect: 'none',
+      }}
+    >
+      <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>{label}{count !== undefined ? ` (${count})` : ''}</span>
+      <span style={{ color: '#a1a1aa', fontSize: '12px' }}>{open ? '▼' : '►'}</span>
+    </div>
+  );
 
   const handleCopy = () => {
     const raw = log.raw_log || log;
@@ -159,10 +208,6 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
               </div>
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Triggered Rule ID</div>
-              <div style={{ fontSize: '14px', fontFamily: 'monospace', marginTop: '4px' }}>{log.rule_id || 'N/A'}</div>
-            </div>
-            <div>
               <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Country</div>
               <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Globe size={14} color="#3b82f6" />
@@ -175,6 +220,14 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
                 {log.source_asn_org || 'Unknown'}
               </div>
             </div>
+            <div>
+              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>HTTP Response</div>
+              <div style={{ fontSize: '14px', fontFamily: 'monospace', fontWeight: 700, color: '#ef4444', marginTop: '4px' }}>{log.http_code || '403'}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Target Application</div>
+              <div style={{ fontSize: '13px', color: '#34d399', fontWeight: 500, marginTop: '4px' }}>{targetApp}</div>
+            </div>
             <div style={{ gridColumn: 'span 2' }}>
               <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Requested URI</div>
               <div style={{ fontSize: '13px', fontFamily: 'monospace', color: '#ef4444', wordBreak: 'break-all', marginTop: '4px' }}>
@@ -182,99 +235,163 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
                 {log.uri}
               </div>
             </div>
-            {log.message && (
-              <div style={{ gridColumn: 'span 2' }}>
-                <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Primary Rule Message</div>
-                <div style={{ fontSize: '13px', color: '#fde047', marginTop: '4px' }}>{log.message}</div>
-              </div>
-            )}
           </div>
 
-          {/* Request Headers */}
-          <div style={{ marginBottom: '16px' }}>
-            <button
-              type="button"
-              onClick={() => setShowReqHeaders(!showReqHeaders)}
-              className="pagination-btn"
-              style={{ width: '100%', display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.03)', margin: 0 }}
-            >
-              <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>Request Headers ({Object.keys(log.request_headers || {}).length})</span>
-              <span style={{ color: '#a1a1aa' }}>{showReqHeaders ? '▼' : '►'}</span>
-            </button>
+          {/* ── 🎯 Matched Attack Payload ── */}
+          {matchedPayloads.length > 0 && (
+            <div style={{ ...sectionStyle, border: '1px solid rgba(239,68,68,0.3)', borderRadius: '8px', overflow: 'hidden' }}>
+              <div style={{ background: 'rgba(239,68,68,0.1)', padding: '10px 14px', borderBottom: '1px solid rgba(239,68,68,0.2)' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.05em' }}>🎯 Matched Attack Payload</span>
+              </div>
+              <div style={{ padding: '10px 14px', background: 'rgba(0,0,0,0.2)' }}>
+                {matchedPayloads.map((payload, i) => (
+                  <code key={i} style={{ display: 'block', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', padding: '8px 10px', borderRadius: '4px', fontSize: '12px', color: '#fca5a5', fontFamily: 'monospace', wordBreak: 'break-all', whiteSpace: 'pre-wrap', marginBottom: i < matchedPayloads.length - 1 ? '6px' : 0 }}>{payload}</code>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── User-Agent ── */}
+          {userAgent && (
+            <div style={{ ...sectionStyle, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '12px 14px' }}>
+              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '6px' }}>🌐 User-Agent (Client Tool / Browser)</div>
+              <div style={{ fontSize: '12px', fontFamily: 'monospace', color: '#93c5fd', wordBreak: 'break-all' }}>{userAgent}</div>
+              {(userAgent.toLowerCase().includes('sqlmap') || userAgent.toLowerCase().includes('nikto') || userAgent.toLowerCase().includes('nmap') || userAgent.toLowerCase().includes('dirbuster') || userAgent.toLowerCase().includes('burp')) && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px', background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: '4px', padding: '2px 8px', fontSize: '11px', color: '#fb923c', fontWeight: 600 }}>⚠ Known Attack Tool Detected</span>
+              )}
+            </div>
+          )}
+
+          {/* ── Referer ── */}
+          {referer && (
+            <div style={{ ...sectionStyle, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '12px 14px' }}>
+              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '6px' }}>🔗 Referer (Attack Origin Page)</div>
+              <div style={{ fontSize: '12px', fontFamily: 'monospace', color: '#86efac', wordBreak: 'break-all' }}>{referer}</div>
+            </div>
+          )}
+
+          {/* ── OWASP CRS Tags ── */}
+          {owaspTags.length > 0 && (
+            <div style={{ ...sectionStyle, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '12px 14px' }}>
+              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '8px' }}>🏷 OWASP CRS Classification Tags</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {owaspTags.map((tag, i) => {
+                  const isSQLi = tag.includes('sqli'); const isXSS = tag.includes('xss'); const isRCE = tag.includes('rce');
+                  return (
+                    <span key={i} style={{ background: isSQLi ? 'rgba(239,68,68,0.12)' : isXSS ? 'rgba(251,146,60,0.12)' : isRCE ? 'rgba(168,85,247,0.12)' : 'rgba(59,130,246,0.1)', border: `1px solid ${isSQLi ? 'rgba(239,68,68,0.3)' : isXSS ? 'rgba(251,146,60,0.3)' : isRCE ? 'rgba(168,85,247,0.3)' : 'rgba(59,130,246,0.25)'}`, color: isSQLi ? '#fca5a5' : isXSS ? '#fdba74' : isRCE ? '#d8b4fe' : '#93c5fd', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontFamily: 'monospace', fontWeight: 500 }}>{tag}</span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── Violations Breakdown ── */}
+          {violations.length > 0 && (
+            <div style={sectionStyle}>
+              {collapsibleHeader(`⚡ Rule Violations Breakdown`, violations.length + ' rules fired', showViolations, () => setShowViolations(!showViolations))}
+              {showViolations && (
+                <div style={{ background: 'rgba(0,0,0,0.18)', border: '1px solid rgba(255,255,255,0.06)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', overflow: 'hidden' }}>
+                  {violations.map((v, i) => (
+                    <div key={i} style={{ padding: '12px 14px', borderBottom: i < violations.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: v.data ? '6px' : 0 }}>
+                        <span style={{ background: 'rgba(168,85,247,0.14)', border: '1px solid rgba(168,85,247,0.3)', color: '#d8b4fe', padding: '2px 7px', borderRadius: '4px', fontSize: '11px', fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap' }}>#{v.rule_id}</span>
+                        <span style={{ fontSize: '12px', color: '#fde047', lineHeight: '1.4' }}>{v.message}</span>
+                      </div>
+                      {v.file && <div style={{ marginTop: '3px', fontSize: '10px', color: '#3f3f46', fontFamily: 'monospace' }}>{v.file}{v.line_number ? `:${v.line_number}` : ''}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Request Headers ── */}
+          <div style={sectionStyle}>
+            {collapsibleHeader('Request Headers', Object.keys(reqHeaders).length, showReqHeaders, () => setShowReqHeaders(!showReqHeaders))}
             {showReqHeaders && (
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid rgba(255,255,255,0.05)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '220px', overflowY: 'auto' }}>
-                {Object.keys(log.request_headers || {}).length === 0 ? (
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid rgba(255,255,255,0.05)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+                {Object.keys(reqHeaders).length === 0 ? (
                   <div style={{ color: '#a1a1aa', fontSize: '12px', textAlign: 'center', padding: '10px' }}>No request headers recorded.</div>
                 ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                    <tbody>
-                      {Object.entries(log.request_headers || {}).map(([k, v]) => (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                    {Object.entries(reqHeaders)
+                      .filter(([k]) => !['user-agent', 'referer', 'host'].includes(k.toLowerCase()))
+                      .map(([k, v]) => (
                         <tr key={k} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                          <td style={{ color: '#a1a1aa', padding: '6px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
-                          <td style={{ color: '#e4e4e7', padding: '6px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
+                          <td style={{ color: '#a1a1aa', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
+                          <td style={{ color: '#e4e4e7', padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
                         </tr>
                       ))}
-                    </tbody>
-                  </table>
+                  </tbody></table>
                 )}
               </div>
             )}
           </div>
 
-          {/* Response Headers */}
-          <div style={{ marginBottom: '16px' }}>
-            <button
-              type="button"
-              onClick={() => setShowResHeaders(!showResHeaders)}
-              className="pagination-btn"
-              style={{ width: '100%', display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.03)', margin: 0 }}
-            >
-              <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>Response Headers ({Object.keys(log.response_headers || {}).length})</span>
-              <span style={{ color: '#a1a1aa' }}>{showResHeaders ? '▼' : '►'}</span>
-            </button>
+          {/* ── Response Headers ── */}
+          <div style={sectionStyle}>
+            {collapsibleHeader('Response Headers', Object.keys(log.response_headers || {}).length, showResHeaders, () => setShowResHeaders(!showResHeaders))}
             {showResHeaders && (
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid rgba(255,255,255,0.05)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '220px', overflowY: 'auto' }}>
+              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid rgba(255,255,255,0.05)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
                 {Object.keys(log.response_headers || {}).length === 0 ? (
                   <div style={{ color: '#a1a1aa', fontSize: '12px', textAlign: 'center', padding: '10px' }}>No response headers recorded.</div>
                 ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                    <tbody>
-                      {Object.entries(log.response_headers || {}).map(([k, v]) => (
-                        <tr key={k} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                          <td style={{ color: '#a1a1aa', padding: '6px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
-                          <td style={{ color: '#e4e4e7', padding: '6px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                    {Object.entries(log.response_headers || {}).map(([k, v]) => (
+                      <tr key={k} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                        <td style={{ color: '#a1a1aa', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
+                        <td style={{ color: '#e4e4e7', padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
+                      </tr>
+                    ))}
+                  </tbody></table>
                 )}
               </div>
             )}
           </div>
 
 
-          {/* Original Audit Log */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa', textTransform: 'uppercase' }}>Complete Original Audit Log</span>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {onMarkFalsePositive && (
+          {/* ── Raw JSON (collapsed by default) ── */}
+          <div style={{ marginBottom: '8px' }}>
+            <div
+              onClick={() => setShowRawJson(!showRawJson)}
+              style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '10px 14px',
+                background: 'rgba(255,255,255,0.02)',
+                border: '1px solid rgba(255,255,255,0.06)',
+                borderRadius: showRawJson ? '6px 6px 0 0' : '6px',
+                cursor: 'pointer', userSelect: 'none',
+              }}
+            >
+              <span style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Raw Audit Log (JSON)</span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {onMarkFalsePositive && (
+                  <button
+                    className="pagination-btn"
+                    onClick={(e) => { e.stopPropagation(); onMarkFalsePositive(log); }}
+                    style={{ padding: '3px 8px', fontSize: '11px', borderColor: 'rgba(16, 185, 129, 0.4)', background: 'rgba(16, 185, 129, 0.05)', color: '#a7f3d0' }}
+                  >
+                    <ShieldCheck size={13} color="#10b981" />
+                    <span>Mark as FP</span>
+                  </button>
+                )}
                 <button
                   className="pagination-btn"
-                  onClick={() => onMarkFalsePositive(log)}
-                  style={{ padding: '4px 10px', fontSize: '12px', borderColor: 'rgba(16, 185, 129, 0.4)', background: 'rgba(16, 185, 129, 0.05)', color: '#a7f3d0' }}
+                  onClick={(e) => { e.stopPropagation(); handleCopy(); }}
+                  style={{ padding: '3px 8px', fontSize: '11px' }}
                 >
-                  <ShieldCheck size={14} color="#10b981" />
-                  <span>Mark as FP</span>
+                  {copied ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
+                  <span>{copied ? 'Copied!' : 'Copy JSON'}</span>
                 </button>
-              )}
-              <button className="pagination-btn" onClick={handleCopy} style={{ padding: '4px 10px', fontSize: '12px' }}>
-                {copied ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
-                <span>{copied ? "Copied!" : "Copy JSON"}</span>
-              </button>
+                <span style={{ color: '#52525b', fontSize: '12px' }}>{showRawJson ? '▼' : '►'}</span>
+              </div>
             </div>
+            {showRawJson && (
+              <div style={{ border: '1px solid rgba(255,255,255,0.06)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', overflow: 'hidden' }}>
+                <HighlightedJson json={log.raw_log || log} />
+              </div>
+            )}
           </div>
-
-          <HighlightedJson json={log.raw_log || log} />
         </div>
         <div className="modal-footer">
           <button className="modal-btn secondary" onClick={onClose}>Close</button>
@@ -305,16 +422,16 @@ function Sidebar({ activeTab, setActiveTab, handleLogout, userRole, collapsed, s
     <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-brand">
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <img 
-            src="/WAFlogo.ico" 
-            alt="WAF Logo" 
-            style={{ 
-              height: collapsed ? '28px' : '46px', 
-              width: collapsed ? '28px' : '46px', 
+          <img
+            src="/WAFlogo.ico"
+            alt="WAF Logo"
+            style={{
+              height: collapsed ? '28px' : '46px',
+              width: collapsed ? '28px' : '46px',
               objectFit: 'contain',
               filter: 'drop-shadow(0 0 8px rgba(0, 212, 255, 0.4))'
-            }} 
-            className="brand-icon" 
+            }}
+            className="brand-icon"
           />
           {!collapsed && (
             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -327,15 +444,15 @@ function Sidebar({ activeTab, setActiveTab, handleLogout, userRole, collapsed, s
             </div>
           )}
         </div>
-        <div 
-          onClick={() => setCollapsed(!collapsed)} 
+        <div
+          onClick={() => setCollapsed(!collapsed)}
           className="sidebar-toggle"
           title={collapsed ? "Expand Sidebar" : "Collapse Sidebar"}
         >
           <ToggleIcon size={14} />
         </div>
       </div>
-      
+
       <div className="nav-menu">
         {navItems.map((item) => {
           const Icon = item.icon;
@@ -382,37 +499,37 @@ function Sidebar({ activeTab, setActiveTab, handleLogout, userRole, collapsed, s
 
 function AnimatedNumber({ value }) {
   const [displayValue, setDisplayValue] = React.useState(value);
-  
+
   React.useEffect(() => {
     let start = displayValue;
     const end = value;
     if (start === end) return;
-    
+
     const duration = 800; // ms
     const startTime = performance.now();
-    
+
     let animationFrame;
     const updateNumber = (now) => {
       const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
-      
+
       // easeOutQuad
       const easeProgress = progress * (2 - progress);
       const current = Math.floor(start + (end - start) * easeProgress);
-      
+
       setDisplayValue(current);
-      
+
       if (progress < 1) {
         animationFrame = requestAnimationFrame(updateNumber);
       } else {
         setDisplayValue(end);
       }
     };
-    
+
     animationFrame = requestAnimationFrame(updateNumber);
     return () => cancelAnimationFrame(animationFrame);
   }, [value]);
-  
+
   return <span>{displayValue.toLocaleString()}</span>;
 }
 
@@ -450,7 +567,7 @@ function ThreatAnalytics() {
 
   const fetchAnalytics = async () => {
     try {
-      const [statsRes, distRes, sevRes, timeRes, rulesRes, ipsRes] = await Promise.all([
+      const [statsRes, distRes, sevRes, timeRes, rulesRes, ipsRes] = await Promise.allSettled([
         getStats(),
         getAttackTypes(),
         getSeverityDistribution(),
@@ -459,39 +576,51 @@ function ThreatAnalytics() {
         getTopIPs()
       ]);
 
-      if (prevBlockedRef.current && statsRes.total_blocked > prevBlockedRef.current) {
-        setShowFlash(true);
-        setTimeout(() => setShowFlash(false), 800);
-      }
-      prevBlockedRef.current = statsRes.total_blocked;
-
-      setStats(statsRes);
-
-      const mappedDist = distRes
-        .filter(d => d.attack_type && d.attack_type !== 'Unknown')
-        .map(d => ({ name: d.attack_type, value: d.count }));
-      setAttackDistribution(mappedDist);
-
-      const mappedSev = sevRes.map(s => ({ name: s.severity, value: s.count }));
-      setSeverityDistributionData(mappedSev);
-
-      const mappedTime = timeRes.data.map(t => {
-        let displayTime = t.time;
-        if (displayTime.includes('T')) {
-          displayTime = displayTime.split('T')[1];
-        } else if (displayTime.includes(' ')) {
-          const parts = displayTime.split(' ');
-          displayTime = parts[parts.length - 1];
+      if (statsRes.status === 'fulfilled') {
+        if (prevBlockedRef.current && statsRes.value.total_blocked > prevBlockedRef.current) {
+          setShowFlash(true);
+          setTimeout(() => setShowFlash(false), 800);
         }
-        return {
-          time: displayTime,
-          attacks: t.count
-        };
-      });
-      setTimelineData(mappedTime);
+        prevBlockedRef.current = statsRes.value.total_blocked;
+        setStats(statsRes.value);
+      }
 
-      setTopRules(rulesRes.slice(0, 5));
-      setTopIPs(ipsRes.slice(0, 5));
+      if (distRes.status === 'fulfilled') {
+        const mappedDist = distRes.value
+          .filter(d => d.attack_type && d.attack_type !== 'Unknown')
+          .map(d => ({ name: d.attack_type, value: d.count }));
+        setAttackDistribution(mappedDist);
+      }
+
+      if (sevRes.status === 'fulfilled') {
+        const mappedSev = sevRes.value.map(s => ({ name: s.severity, value: s.count }));
+        setSeverityDistributionData(mappedSev);
+      }
+
+      if (timeRes.status === 'fulfilled') {
+        const mappedTime = timeRes.value.data.map(t => {
+          let displayTime = t.time;
+          if (displayTime.includes('T')) {
+            displayTime = displayTime.split('T')[1];
+          } else if (displayTime.includes(' ')) {
+            const parts = displayTime.split(' ');
+            displayTime = parts[parts.length - 1];
+          }
+          return { time: displayTime, attacks: t.count };
+        });
+        setTimelineData(mappedTime);
+      }
+
+      if (rulesRes.status === 'fulfilled') {
+        setTopRules(rulesRes.value.slice(0, 5));
+      }
+
+      if (ipsRes.status === 'fulfilled') {
+        setTopIPs(ipsRes.value.slice(0, 5));
+      } else {
+        console.warn('Top IPs unavailable (Redis may be unreachable):', ipsRes.reason);
+      }
+
     } catch (err) {
       console.error("Failed to fetch analytics data", err);
     } finally {
@@ -505,28 +634,28 @@ function ThreatAnalytics() {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    
-    fetch(`http://${window.location.host}/api/stats/export/csv`, {
+
+    fetch(`${window.location.protocol}//${window.location.host}/api/stats/export/csv`, {
       headers: headers
     })
-    .then(response => {
-      if (!response.ok) throw new Error("Export failed");
-      return response.blob();
-    })
-    .then(blob => {
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `waf_security_report_${new Date().toISOString().split('T')[0]}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    })
-    .catch(err => {
-      console.error("Export error:", err);
-      alert("Failed to export security logs: " + err.message);
-    });
+      .then(response => {
+        if (!response.ok) throw new Error("Export failed");
+        return response.blob();
+      })
+      .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `waf_security_report_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      })
+      .catch(err => {
+        console.error("Export error:", err);
+        alert("Failed to export security logs: " + err.message);
+      });
   };
 
   useEffect(() => {
@@ -649,19 +778,19 @@ function ThreatAnalytics() {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '4px 0' }}>
           <div className="metric-value" style={{ color: 'var(--danger-color)' }}><AnimatedNumber value={stats.total_blocked} /></div>
-          
+
           <div style={{ position: 'relative', width: '56px', height: '56px' }}>
             <svg width="56" height="56" viewBox="0 0 56 56" style={{ transform: 'rotate(-90deg)' }}>
               <circle cx="28" cy="28" r={radius} stroke="rgba(255, 255, 255, 0.05)" strokeWidth={4} fill="transparent" />
-              <circle 
-                cx="28" 
-                cy="28" 
-                r={radius} 
-                stroke="var(--danger-color)" 
-                strokeWidth={4} 
-                fill="transparent" 
-                strokeDasharray={circumference} 
-                strokeDashoffset={strokeDashoffset} 
+              <circle
+                cx="28"
+                cy="28"
+                r={radius}
+                stroke="var(--danger-color)"
+                strokeWidth={4}
+                fill="transparent"
+                strokeDasharray={circumference}
+                strokeDashoffset={strokeDashoffset}
                 strokeLinecap="round"
                 style={{ transition: 'stroke-dashoffset 0.8s ease' }}
               />
@@ -768,12 +897,12 @@ function ThreatAnalytics() {
           ) : (
             <>
               <ResponsiveContainer width="100%" height="70%">
-                <RadialBarChart 
-                  cx="50%" 
-                  cy="50%" 
-                  innerRadius="35%" 
-                  outerRadius="95%" 
-                  barSize={10} 
+                <RadialBarChart
+                  cx="50%"
+                  cy="50%"
+                  innerRadius="35%"
+                  outerRadius="95%"
+                  barSize={10}
                   data={radialData}
                   startAngle={180}
                   endAngle={-180}
@@ -1002,15 +1131,15 @@ function ThreatAnalytics() {
                 };
 
                 return (
-                  <div 
-                    key={ipObj.ip || index} 
+                  <div
+                    key={ipObj.ip || index}
                     className="ip-row-glow"
-                    style={{ 
-                      display: 'flex', 
-                      flexDirection: 'column', 
-                      gap: '6px', 
-                      padding: '8px 12px', 
-                      borderRadius: '8px', 
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
                       transition: 'all 0.2s ease-in-out',
                       background: 'rgba(255, 255, 255, 0.01)',
                       border: '1px solid rgba(255, 255, 255, 0.02)'
@@ -1024,13 +1153,13 @@ function ThreatAnalytics() {
                         </span>
                         <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 600 }}>{ipObj.ip}</span>
                         {ipObj.abuse_score > 0 && (
-                          <span style={{ 
-                            fontSize: '9px', 
-                            fontWeight: 'bold', 
-                            color: 'var(--danger-color)', 
-                            border: '1px solid rgba(255, 59, 92, 0.3)', 
-                            background: 'rgba(255, 59, 92, 0.1)', 
-                            padding: '1px 5px', 
+                          <span style={{
+                            fontSize: '9px',
+                            fontWeight: 'bold',
+                            color: 'var(--danger-color)',
+                            border: '1px solid rgba(255, 59, 92, 0.3)',
+                            background: 'rgba(255, 59, 92, 0.1)',
+                            padding: '1px 5px',
                             borderRadius: '3px',
                             fontFamily: 'var(--font-mono)'
                           }}>
@@ -1769,13 +1898,13 @@ function MLAnalytics() {
             </div>
 
             <div className="modal-tabs">
-              <button 
+              <button
                 className={`modal-tab ${modalActiveTab === 'scores' ? 'active' : ''}`}
                 onClick={() => setModalActiveTab('scores')}
               >
                 Threat Evaluation (Scores)
               </button>
-              <button 
+              <button
                 className={`modal-tab ${modalActiveTab === 'raw' ? 'active' : ''}`}
                 onClick={() => setModalActiveTab('raw')}
               >
@@ -1944,7 +2073,7 @@ function MLAnalytics() {
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 0', gap: '10px', color: 'var(--text-secondary)' }}>
                       <AlertTriangleIcon size={24} color="var(--warning-color)" />
-                      <span style={{ textAlign: 'center' }}>No matching ModSecurity audit logs found.<br/><span style={{ fontSize: '12px', opacity: 0.7 }}>(This clean request bypassed ModSecurity block/log thresholds).</span></span>
+                      <span style={{ textAlign: 'center' }}>No matching ModSecurity audit logs found.<br /><span style={{ fontSize: '12px', opacity: 0.7 }}>(This clean request bypassed ModSecurity block/log thresholds).</span></span>
                     </div>
                   )}
                 </>
@@ -1984,6 +2113,7 @@ function LiveLogs({ onMarkFalsePositive }) {
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
   const [attackFilter, setAttackFilter] = useState('');
+  const [trafficTab, setTrafficTab] = useState('web');
   const [focusMode, setFocusMode] = useState(false);
   const [sortField, setSortField] = useState('timestamp');
   const [sortOrder, setSortOrder] = useState('desc');
@@ -2031,26 +2161,26 @@ function LiveLogs({ onMarkFalsePositive }) {
       setPage(1);
     }, 0);
     return () => clearTimeout(timer);
-  }, [search, severityFilter, attackFilter, focusMode]);
+  }, [search, severityFilter, attackFilter, focusMode, trafficTab]);
 
   const fetchLogs = async () => {
     try {
       const filters = {};
       if (search.trim()) filters.search = search;
-      // Focus Mode: use min_severity threshold (Critical + High) via backend.
-      // Otherwise fall back to the exact severity dropdown filter.
       if (focusMode) {
         filters.min_severity = 'High';
       } else if (severityFilter) {
         filters.severity = severityFilter;
       }
       if (attackFilter) filters.attack_type = attackFilter;
+      if (trafficTab === 'web') filters.uri_type = 'web';
+      else if (trafficTab === 'api') filters.uri_type = 'api';
 
       const logsData = await getLogs(page, size, filters);
       setLogs(logsData.data);
       setTotal(logsData.total);
     } catch (err) {
-      console.error("Error fetching logs", err);
+      console.error('Error fetching logs', err);
     } finally {
       setLoading(false);
     }
@@ -2069,7 +2199,7 @@ function LiveLogs({ onMarkFalsePositive }) {
     }
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, size, search, severityFilter, attackFilter, focusMode, refreshInterval, liveUpdates]);
+  }, [page, size, search, severityFilter, attackFilter, focusMode, trafficTab, refreshInterval, liveUpdates]);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -2080,23 +2210,29 @@ function LiveLogs({ onMarkFalsePositive }) {
     }
   };
 
-  const sortedLogs = [...logs].sort((a, b) => {
-    let valA = a[sortField] || '';
-    let valB = b[sortField] || '';
+  const sortedLogs = [...logs]
+    .filter(log => {
+      if (trafficTab === 'web') return log.uri && !log.uri.startsWith('/api');
+      if (trafficTab === 'api') return log.uri && log.uri.startsWith('/api');
+      return true;
+    })
+    .sort((a, b) => {
+      let valA = a[sortField] || '';
+      let valB = b[sortField] || '';
 
-    if (sortField === 'timestamp') {
-      valA = Date.parse(valA) || 0;
-      valB = Date.parse(valB) || 0;
-    } else if (sortField === 'severity') {
-      const severityOrder = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
-      valA = severityOrder[valA] || 0;
-      valB = severityOrder[valB] || 0;
-    }
+      if (sortField === 'timestamp') {
+        valA = Date.parse(valA) || 0;
+        valB = Date.parse(valB) || 0;
+      } else if (sortField === 'severity') {
+        const severityOrder = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
+        valA = severityOrder[valA] || 0;
+        valB = severityOrder[valB] || 0;
+      }
 
-    if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
-    if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
-    return 0;
-  });
+      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
 
   const totalPages = Math.ceil(total / size);
 
@@ -2204,194 +2340,274 @@ function LiveLogs({ onMarkFalsePositive }) {
       </div>
 
       {/* WAF Stream Indicator — Fix 4: transparent banner explaining what this feed contains */}
+      {focusMode && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          marginTop: '12px',
+          padding: '8px 14px',
+          borderRadius: '8px',
+          background: 'rgba(239, 68, 68, 0.07)',
+          border: '1px solid rgba(239, 68, 68, 0.2)',
+          fontSize: '12px',
+          color: '#71717a',
+          transition: 'all 0.3s ease',
+        }}>
+          <ShieldCheck size={13} color="#f87171" style={{ flexShrink: 0 }} />
+          <span><strong style={{ color: '#fca5a5' }}>Focus Mode active</strong> · Showing Critical &amp; High severity events only · <span style={{ color: '#a1a1aa' }}>{total} event{total !== 1 ? 's' : ''} matched</span></span>
+        </div>
+      )}
+
+      {/* ── Traffic Source Tabs ── */}
       <div style={{
         display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        marginTop: '12px',
-        padding: '8px 14px',
-        borderRadius: '8px',
-        background: focusMode
-          ? 'rgba(239, 68, 68, 0.07)'
-          : 'rgba(59, 130, 246, 0.06)',
-        border: focusMode
-          ? '1px solid rgba(239, 68, 68, 0.2)'
-          : '1px solid rgba(59, 130, 246, 0.15)',
-        fontSize: '12px',
-        color: '#71717a',
-        transition: 'all 0.3s ease',
+        gap: '0',
+        marginTop: '16px',
+        marginBottom: '0',
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
       }}>
-        <ShieldCheck size={13} color={focusMode ? '#f87171' : '#60a5fa'} style={{ flexShrink: 0 }} />
-        {focusMode
-          ? <span><strong style={{ color: '#fca5a5' }}>Focus Mode active</strong> · Showing Critical &amp; High severity events only · <span style={{ color: '#a1a1aa' }}>{total} event{total !== 1 ? 's' : ''} matched</span></span>
-          : <span>WAF-intercepted events only &nbsp;·&nbsp; Normal traffic excluded &nbsp;·&nbsp; ModSecurity audit stream &nbsp;·&nbsp; <strong style={{ color: '#93c5fd' }}>{total} event{total !== 1 ? 's' : ''} total</strong></span>
-        }
+        {[
+          {
+            id: 'web',
+            label: 'Web Application',
+            icon: '🌐',
+            desc: 'MSSP / web UI requests',
+            color: '#3b82f6',
+            activeBg: 'rgba(59,130,246,0.1)',
+            activeBorder: '#3b82f6',
+          },
+          {
+            id: 'api',
+            label: 'API Traffic',
+            icon: '⚡',
+            desc: '/api/* endpoint calls',
+            color: '#f59e0b',
+            activeBg: 'rgba(245,158,11,0.1)',
+            activeBorder: '#f59e0b',
+          },
+          {
+            id: 'all',
+            label: 'All Traffic',
+            icon: '📡',
+            desc: 'Combined feed',
+            color: '#a1a1aa',
+            activeBg: 'rgba(161,161,170,0.08)',
+            activeBorder: '#a1a1aa',
+          },
+        ].map(tab => {
+          const isActive = trafficTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => { setTrafficTab(tab.id); setPage(1); }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 20px',
+                background: isActive ? tab.activeBg : 'transparent',
+                border: 'none',
+                borderBottom: isActive ? `2px solid ${tab.activeBorder}` : '2px solid transparent',
+                borderRadius: '0',
+                cursor: 'pointer',
+                color: isActive ? '#e4e4e7' : '#71717a',
+                fontSize: '13px',
+                fontWeight: isActive ? 700 : 500,
+                transition: 'all 0.2s ease',
+                whiteSpace: 'nowrap',
+                marginBottom: '-1px',
+              }}
+            >
+              <span style={{ fontSize: '15px' }}>{tab.icon}</span>
+              <span>{tab.label}</span>
+              {isActive && (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minWidth: '22px',
+                  padding: '1px 6px',
+                  borderRadius: '10px',
+                  background: `${tab.color}22`,
+                  border: `1px solid ${tab.color}44`,
+                  color: tab.color,
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  fontFamily: 'monospace',
+                }}>
+                  {total}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      <div className="logs-table-wrapper" style={{ marginTop: '16px' }}>
-        <table className="logs-table">
-          <thead>
-            <tr>
-              <th onClick={() => handleSort('timestamp')} style={{ cursor: 'pointer', userSelect: 'none' }}>Time {getSortIcon('timestamp')}</th>
-              <th onClick={() => handleSort('client_ip')} style={{ cursor: 'pointer', userSelect: 'none' }}>Source IP {getSortIcon('client_ip')}</th>
-              <th onClick={() => handleSort('severity')} style={{ cursor: 'pointer', userSelect: 'none' }}>Severity {getSortIcon('severity')}</th>
-              <th onClick={() => handleSort('attack_type')} style={{ cursor: 'pointer', userSelect: 'none' }}>Attack Type {getSortIcon('attack_type')}</th>
-              <th onClick={() => handleSort('rule_id')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rule ID {getSortIcon('rule_id')}</th>
-              <th onClick={() => handleSort('http_code')} style={{ cursor: 'pointer', userSelect: 'none' }}>Status {getSortIcon('http_code')}</th>
-              <th>Requested URI</th>
-              <th style={{ textAlign: 'right' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <AnimatePresence mode="popLayout">
-              {loading && sortedLogs.length === 0 ? (
-                <tr>
-                  <td colSpan="8" style={{ textAlign: 'center', padding: '60px', color: '#a1a1aa' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                      <Activity className="animate-spin" size={20} /> Loading live ModSecurity logs...
-                    </div>
-                  </td>
-                </tr>
-              ) : sortedLogs.length === 0 ? (
-                <tr>
-                  <td colSpan="8" style={{ textAlign: 'center', padding: '60px', color: '#a1a1aa' }}>
-                    No matching threat records discovered.
-                  </td>
-                </tr>
-              ) : (
-                sortedLogs.map((log, index) => {
-                  const rowId = log.id || index;
-                  const reconstructedCommand = getReconstructedCommand(log);
-                  const isNewLog = index === 0;
+        <div className="logs-table-wrapper" style={{ marginTop: '0', borderTopLeftRadius: '0', borderTopRightRadius: '0' }}>
+          <table className="logs-table">
+            <thead>
+              <tr>
+                <th onClick={() => handleSort('timestamp')} style={{ cursor: 'pointer', userSelect: 'none' }}>Time {getSortIcon('timestamp')}</th>
+                <th onClick={() => handleSort('client_ip')} style={{ cursor: 'pointer', userSelect: 'none' }}>Source IP {getSortIcon('client_ip')}</th>
+                <th onClick={() => handleSort('severity')} style={{ cursor: 'pointer', userSelect: 'none' }}>Severity {getSortIcon('severity')}</th>
+                <th onClick={() => handleSort('attack_type')} style={{ cursor: 'pointer', userSelect: 'none' }}>Attack Type {getSortIcon('attack_type')}</th>
+                <th onClick={() => handleSort('rule_id')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rule ID {getSortIcon('rule_id')}</th>
+                <th onClick={() => handleSort('http_code')} style={{ cursor: 'pointer', userSelect: 'none' }}>Status {getSortIcon('http_code')}</th>
+                <th>Requested URI</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <AnimatePresence mode="popLayout">
+                {loading && sortedLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan="8" style={{ textAlign: 'center', padding: '60px', color: '#a1a1aa' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+                        <Activity className="animate-spin" size={20} /> Loading live ModSecurity logs...
+                      </div>
+                    </td>
+                  </tr>
+                ) : sortedLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan="8" style={{ textAlign: 'center', padding: '60px', color: '#a1a1aa' }}>
+                      No matching threat records discovered.
+                    </td>
+                  </tr>
+                ) : (
+                  sortedLogs.map((log, index) => {
+                    const rowId = log.id || index;
+                    const reconstructedCommand = getReconstructedCommand(log);
+                    const isNewLog = index === 0;
 
-                  return (
-                    <React.Fragment key={rowId}>
-                      <motion.tr
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -4 }}
-                        transition={{ duration: 0.2 }}
-                        style={{
-                          background: isNewLog ? 'rgba(0, 212, 255, 0.03)' : 'transparent',
-                          borderLeft: isNewLog ? '3px solid var(--accent-color)' : 'none'
-                        }}
-                      >
-                        <td style={{ color: '#a1a1aa', whiteSpace: 'nowrap' }}>{log?.timestamp || '-'}</td>
-                        <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 600 }}>
-                          <span style={{ marginRight: '6px' }} title={log?.severity}>
-                            {log?.severity === 'Critical' ? '💀' : log?.severity === 'High' ? '🔥' : 'ℹ️'}
-                          </span>
-                          {log?.client_ip || '-'}
-                        </td>
-                        <td>
-                          <span className={`severity-badge severity-${(log?.severity || 'low').toLowerCase()}`}>
-                            {log?.severity || 'Low'}
-                          </span>
-                        </td>
-                        <td style={{ fontWeight: 500 }}>{log?.attack_type || '-'}</td>
-                        <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{log?.rule_id || '-'}</td>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div className="pulse-dot" style={{ 
-                              width: '6px',
-                              height: '6px',
-                              backgroundColor: log?.http_code?.startsWith('2') ? 'var(--success-color)' : log?.http_code?.startsWith('3') ? 'var(--accent-color)' : 'var(--danger-color)',
-                            }} />
-                            <span style={{
-                              color: log?.http_code?.startsWith('2') ? 'var(--success-color)' : log?.http_code?.startsWith('3') ? 'var(--accent-color)' : 'var(--danger-color)',
-                              fontWeight: 700,
-                              fontFamily: 'var(--font-mono)'
-                            }}>
-                              {log?.http_code || '-'}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="payload-cell"
-                          onClick={() => toggleExpand(rowId)}
-                          style={{ fontFamily: 'monospace', fontSize: '12px', color: '#e2e8f0', maxBreakWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}
-                          title={reconstructedCommand}
+                    return (
+                      <React.Fragment key={rowId}>
+                        <motion.tr
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={{ duration: 0.2 }}
+                          style={{
+                            background: isNewLog ? 'rgba(0, 212, 255, 0.03)' : 'transparent',
+                            borderLeft: isNewLog ? '3px solid var(--accent-color)' : 'none'
+                          }}
                         >
-                          {log?.uri || '-'}
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                            {onMarkFalsePositive && (
+                          <td style={{ color: '#a1a1aa', whiteSpace: 'nowrap' }}>{log?.timestamp || '-'}</td>
+                          <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 600 }}>
+                            <span style={{ marginRight: '6px' }} title={log?.severity}>
+                              {log?.severity === 'Critical' ? '💀' : log?.severity === 'High' ? '🔥' : 'ℹ️'}
+                            </span>
+                            {log?.client_ip || '-'}
+                          </td>
+                          <td>
+                            <span className={`severity-badge severity-${(log?.severity || 'low').toLowerCase()}`}>
+                              {log?.severity || 'Low'}
+                            </span>
+                          </td>
+                          <td style={{ fontWeight: 500 }}>{log?.attack_type || '-'}</td>
+                          <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{log?.rule_id || '-'}</td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div className="pulse-dot" style={{
+                                width: '6px',
+                                height: '6px',
+                                backgroundColor: log?.http_code?.startsWith('2') ? 'var(--success-color)' : log?.http_code?.startsWith('3') ? 'var(--accent-color)' : 'var(--danger-color)',
+                              }} />
+                              <span style={{
+                                color: log?.http_code?.startsWith('2') ? 'var(--success-color)' : log?.http_code?.startsWith('3') ? 'var(--accent-color)' : 'var(--danger-color)',
+                                fontWeight: 700,
+                                fontFamily: 'var(--font-mono)'
+                              }}>
+                                {log?.http_code || '-'}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="payload-cell"
+                            onClick={() => toggleExpand(rowId)}
+                            style={{ fontFamily: 'monospace', fontSize: '12px', color: '#e2e8f0', maxBreakWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}
+                            title={reconstructedCommand}
+                          >
+                            {log?.uri || '-'}
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                              {onMarkFalsePositive && (
+                                <button
+                                  className="action-btn-inspect"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onMarkFalsePositive(log);
+                                  }}
+                                  style={{ borderColor: 'rgba(16, 185, 129, 0.4)', color: '#a7f3d0' }}
+                                >
+                                  Mark as FP
+                                </button>
+                              )}
                               <button
                                 className="action-btn-inspect"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  onMarkFalsePositive(log);
+                                  setSelectedLog(log);
+                                  setIsModalOpen(true);
                                 }}
-                                style={{ borderColor: 'rgba(16, 185, 129, 0.4)', color: '#a7f3d0' }}
                               >
-                                Mark as FP
+                                Inspect Log
                               </button>
-                            )}
-                            <button
-                              className="action-btn-inspect"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedLog(log);
-                                setIsModalOpen(true);
-                              }}
-                            >
-                              Inspect Log
-                            </button>
-                          </div>
-                        </td>
-                      </motion.tr>
-                      {expandedLogs.has(rowId) && (
-                        <tr className="expanded-log-row">
-                          <td colSpan="8" style={{ padding: '16px 24px', background: 'rgba(59, 130, 246, 0.08)', borderBottom: '1px solid rgba(59, 130, 246, 0.2)' }}>
-                            <div style={{ fontFamily: 'monospace', fontSize: '13px', color: '#93c5fd', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
-                              <strong style={{ color: '#bfdbfe', marginRight: '8px' }}>RECONSTRUCTED COMMAND:</strong><br />
-                              <span style={{ marginTop: '8px', display: 'block', padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                {reconstructedCommand}
-                              </span>
                             </div>
                           </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })
-              )}
-            </AnimatePresence>
-          </tbody>
-        </table>
-      </div>
-
-      {totalPages > 1 && (
-        <div className="pagination-container">
-          <button
-            className="pagination-btn"
-            disabled={page === 1}
-            onClick={() => setPage(page - 1)}
-          >
-            <ChevronLeft size={16} /> Previous
-          </button>
-          <span className="pagination-info">
-            Page <strong style={{ color: '#fff' }}>{page}</strong> of <strong style={{ color: '#fff' }}>{totalPages}</strong> ({total} total logs)
-          </span>
-          <button
-            className="pagination-btn"
-            disabled={page >= totalPages}
-            onClick={() => setPage(page + 1)}
-          >
-            Next <ChevronRight size={16} />
-          </button>
+                        </motion.tr>
+                        {expandedLogs.has(rowId) && (
+                          <tr className="expanded-log-row">
+                            <td colSpan="8" style={{ padding: '16px 24px', background: 'rgba(59, 130, 246, 0.08)', borderBottom: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                              <div style={{ fontFamily: 'monospace', fontSize: '13px', color: '#93c5fd', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
+                                <strong style={{ color: '#bfdbfe', marginRight: '8px' }}>RECONSTRUCTED COMMAND:</strong><br />
+                                <span style={{ marginTop: '8px', display: 'block', padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                  {reconstructedCommand}
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                )}
+              </AnimatePresence>
+            </tbody>
+          </table>
         </div>
-      )}
 
-      <LogDetailsModal
-        isOpen={isModalOpen}
-        log={selectedLog}
-        onClose={() => {
-          setIsModalOpen(false);
-          setSelectedLog(null);
-        }}
-        onMarkFalsePositive={onMarkFalsePositive}
-      />
+        {totalPages > 1 && (
+          <div className="pagination-container">
+            <button
+              className="pagination-btn"
+              disabled={page === 1}
+              onClick={() => setPage(page - 1)}
+            >
+              <ChevronLeft size={16} /> Previous
+            </button>
+            <span className="pagination-info">
+              Page <strong style={{ color: '#fff' }}>{page}</strong> of <strong style={{ color: '#fff' }}>{totalPages}</strong> ({total} total logs)
+            </span>
+            <button
+              className="pagination-btn"
+              disabled={page >= totalPages}
+              onClick={() => setPage(page + 1)}
+            >
+              Next <ChevronRight size={16} />
+            </button>
+          </div>
+        )}
+
+        <LogDetailsModal
+          isOpen={isModalOpen}
+          log={selectedLog}
+          onClose={() => {
+            setIsModalOpen(false);
+            setSelectedLog(null);
+          }}
+          onMarkFalsePositive={onMarkFalsePositive}
+        />
     </motion.div>
   );
 }
@@ -5078,8 +5294,8 @@ function ApiProtection() {
                     switch (trafficSource) {
                       case 'External': return { color: '#60a5fa', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)' };
                       case 'Internal': return { color: '#34d399', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)' };
-                      case 'Mixed':    return { color: '#fbbf24', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)' };
-                      default:         return { color: '#71717a', background: 'rgba(113,113,122,0.12)', border: '1px solid rgba(113,113,122,0.3)' };
+                      case 'Mixed': return { color: '#fbbf24', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)' };
+                      default: return { color: '#71717a', background: 'rgba(113,113,122,0.12)', border: '1px solid rgba(113,113,122,0.3)' };
                     }
                   })();
                   const trafficIcon = { External: '🌐', Internal: '🏠', Mixed: '🔀', Unknown: '❓' }[trafficSource] || '❓';

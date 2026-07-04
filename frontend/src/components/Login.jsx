@@ -207,25 +207,14 @@ const Login = ({ setAuth }) => {
 
     try {
       const payload = { username, password };
-      if (showMfa) {
-        payload.otp_code = otpCode;
-      }
 
-      const response = await fetch(`http://${window.location.host}/api/auth/login`, {
+      const response = await fetch(`${window.location.protocol}//${window.location.host}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(payload),
       });
 
       if (!response.ok) {
-        if (response.status === 400) {
-          const errData = await response.json().catch(() => ({}));
-          if (errData.detail === "MFA_REQUIRED") {
-            setShowMfa(true);
-            setLoading(false);
-            return;
-          }
-        }
         throw new Error('Invalid credentials');
       }
 

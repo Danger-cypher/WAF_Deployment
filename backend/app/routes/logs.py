@@ -22,6 +22,7 @@ async def get_logs(
     attack_type: Optional[str] = None,
     status_code: Optional[str] = None,
     search: Optional[str] = None,
+    uri_type: Optional[str] = None,
     current_user: TokenData = Depends(require_any_role),
 ):
     """
@@ -62,6 +63,11 @@ async def get_logs(
             or (log.rule_id and s_lower in log.rule_id.lower())
             or (log.attack_type and s_lower in log.attack_type.lower())
         ]
+    # Traffic source tab: 'web' = non-API URIs, 'api' = /api/* URIs, anything else = all
+    if uri_type == 'web':
+        logs = [log for log in logs if log.uri and not log.uri.startswith('/api')]
+    elif uri_type == 'api':
+        logs = [log for log in logs if log.uri and log.uri.startswith('/api')]
 
     total = len(logs)
 
