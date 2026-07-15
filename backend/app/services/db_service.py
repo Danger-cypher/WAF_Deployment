@@ -109,6 +109,40 @@ def init_db():
                     )
                 except Exception:
                     pass  # Column already exists — expected on re-init
+
+            # 5. Protected Applications table for dynamic multi-app proxying
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS protected_apps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    domain TEXT NOT NULL UNIQUE,
+                    upstream_host TEXT NOT NULL,
+                    upstream_port INTEGER NOT NULL,
+                    protocol TEXT NOT NULL DEFAULT 'http',
+                    is_active INTEGER DEFAULT 1
+                )
+            """)
+
+            # Seed default application if table is empty
+            cursor.execute("SELECT COUNT(*) FROM protected_apps")
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("""
+                    INSERT INTO protected_apps (name, domain, upstream_host, upstream_port, protocol, is_active)
+                    VALUES ('Default MSSP App', '_', 'host.docker.internal', 7000, 'http', 1)
+                """)
+
+            # Run migrations for protected_apps schema changes
+            for col, default in [
+                ("rate_limit_rps", "50"),
+                ("burst_tolerance", "100"),
+            ]:
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE protected_apps ADD COLUMN {col} INTEGER DEFAULT {default}"
+                    )
+                except Exception:
+                    pass
+
             conn.commit()
             logger.info("Database schemas initialized successfully.")
     except Exception as e:
@@ -647,94 +681,6 @@ def get_recently_discovered_endpoints(hours: int = 48):
             return []
 
 
-def upsert_discovered_endpoint(
-    uri: str,
-    method: str,
-    response_time_ms: float,
-    is_error: bool,
-    is_malicious: bool,
-    is_suspicious: bool,
-    has_https: int,
-    has_versioning: int,
-    content_encoding: str,
-    timestamp: str,
-):
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute(
-                "SELECT * FROM discovered_endpoints WHERE uri = ? AND method = ?",
-                (uri, method),
-            )
-            row = cursor.fetchone()
-
-            if row:
-                row_dict = dict(row)
-                new_hit_count = row_dict["hit_count"] + 1
-                new_avg = (
-                    (row_dict["avg_response_time_ms"] * row_dict["hit_count"])
-                    + response_time_ms
-                ) / new_hit_count
-                new_error_count = row_dict["error_count"] + (1 if is_error else 0)
-                new_malicious_count = row_dict["malicious_count"] + (
-                    1 if is_malicious else 0
-                )
-                new_suspicious_count = row_dict["suspicious_count"] + (
-                    1 if is_suspicious else 0
-                )
-
-                cursor.execute(
-                    """
-                    UPDATE discovered_endpoints 
-                    SET last_seen = ?, 
-                        avg_response_time_ms = ?, 
-                        hit_count = ?, 
-                        error_count = ?, 
-                        malicious_count = ?, 
-                        suspicious_count = ?,
-                        content_encoding = ?
-                    WHERE uri = ? AND method = ?
-                """,
-                    (
-                        timestamp,
-                        new_avg,
-                        new_hit_count,
-                        new_error_count,
-                        new_malicious_count,
-                        new_suspicious_count,
-                        content_encoding or row_dict["content_encoding"],
-                        uri,
-                        method,
-                    ),
-                )
-            else:
-                cursor.execute(
-                    """
-                    INSERT INTO discovered_endpoints (
-                        uri, method, first_seen, last_seen, avg_response_time_ms, hit_count, 
-                        error_count, malicious_count, suspicious_count, has_https, has_versioning, content_encoding
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        uri,
-                        method,
-                        timestamp,
-                        timestamp,
-                        response_time_ms,
-                        1,
-                        1 if is_error else 0,
-                        1 if is_malicious else 0,
-                        1 if is_suspicious else 0,
-                        has_https,
-                        has_versioning,
-                        content_encoding or "",
-                    ),
-                )
-            conn.commit()
-    except Exception as e:
-        logger.error(f"Error upserting discovered endpoint {method} {uri}: {e}")
-
 def bulk_upsert_discovered_endpoints(endpoints_data: dict):
     """
     Upserts multiple endpoints in a single database transaction.
@@ -843,3 +789,71 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
             conn.commit()
     except Exception as e:
         logger.error(f"Error in bulk upserting discovered endpoints: {e}")
+
+
+def get_all_protected_apps():
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM protected_apps ORDER BY id ASC")
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"Error fetching all protected apps: {e}")
+        return []
+
+
+def get_protected_app_by_id(app_id: int):
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM protected_apps WHERE id = ?", (app_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error fetching protected app by id {app_id}: {e}")
+        return None
+
+
+def create_protected_app(name: str, domain: str, upstream_host: str, upstream_port: int, protocol: str = "http", is_active: int = 1, rate_limit_rps: int = 50, burst_tolerance: int = 100):
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO protected_apps (name, domain, upstream_host, upstream_port, protocol, is_active, rate_limit_rps, burst_tolerance)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (name, domain.strip().lower(), upstream_host.strip(), upstream_port, protocol.strip().lower(), is_active, rate_limit_rps, burst_tolerance))
+            conn.commit()
+            new_id = cursor.lastrowid
+            return get_protected_app_by_id(new_id)
+    except Exception as e:
+        logger.error(f"Error creating protected app: {e}")
+        return None
+
+
+def update_protected_app(app_id: int, name: str, domain: str, upstream_host: str, upstream_port: int, protocol: str = "http", is_active: int = 1, rate_limit_rps: int = 50, burst_tolerance: int = 100):
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE protected_apps
+                SET name = ?, domain = ?, upstream_host = ?, upstream_port = ?, protocol = ?, is_active = ?, rate_limit_rps = ?, burst_tolerance = ?
+                WHERE id = ?
+            """, (name, domain.strip().lower(), upstream_host.strip(), upstream_port, protocol.strip().lower(), is_active, rate_limit_rps, burst_tolerance, app_id))
+            conn.commit()
+            return get_protected_app_by_id(app_id)
+    except Exception as e:
+        logger.error(f"Error updating protected app: {e}")
+        return None
+
+
+def delete_protected_app(app_id: int):
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM protected_apps WHERE id = ?", (app_id,))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Error deleting protected app {app_id}: {e}")
+        return False

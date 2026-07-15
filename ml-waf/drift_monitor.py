@@ -24,7 +24,11 @@ def monitor_drift():
     # 0. Try to fetch from SQLite first (primary database)
     import sqlite3
     import os
-    DB_PATH = "/opt/ModSecurity/WAF_GUI/backend/app/data/ml_events.db"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DB_PATH = os.environ.get(
+        "ML_DB_PATH",
+        os.path.abspath(os.path.join(BASE_DIR, "..", "backend", "app", "data", "ml_events.db"))
+    )
     events = []
     
     if os.path.exists(DB_PATH):
@@ -157,8 +161,9 @@ def _trigger_retrain(reasons: list):
     Runs the script as a blocking subprocess so results are fully captured
     in the drift monitor log before this process exits.
     """
-    RETRAIN_SCRIPT = "/opt/ModSecurity/WAF_GUI/ml-waf/retrain.sh"
-    LOG_FILE       = "/opt/ModSecurity/WAF_GUI/ml-waf/logs/retrain.log"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    RETRAIN_SCRIPT = os.path.abspath(os.path.join(BASE_DIR, "retrain.sh"))
+    LOG_FILE       = os.path.abspath(os.path.join(BASE_DIR, "logs", "retrain.log"))
 
     if not os.path.exists(RETRAIN_SCRIPT):
         logger.error(f"Retrain script not found: {RETRAIN_SCRIPT}. Cannot auto-retrain.")

@@ -212,14 +212,15 @@ const Login = ({ setAuth }) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(payload),
+        credentials: 'include'
       });
 
       if (!response.ok) {
         throw new Error('Invalid credentials');
       }
 
-      const data = await response.json();
-      localStorage.setItem('waf_token', data.access_token);
+      await response.json();
+      // Auth token is now set securely via HttpOnly cookies
       setAuth(true);
     } catch (err) {
       setError(err.message || 'Authentication failed. Please try again.');
@@ -229,252 +230,261 @@ const Login = ({ setAuth }) => {
   };
 
   const features = [
-    { icon: Activity,       color: 'blue',   title: 'Real-Time Monitoring',    desc: 'Live attack detection & tracking' },
-    { icon: Brain,          color: 'purple', title: 'ML Threat Engine',         desc: 'XGBoost + Isolation Forest' },
-    { icon: ShieldCheck,    color: 'green',  title: 'OWASP CRS v4',             desc: 'Industry-standard rule set' },
-    { icon: Globe,          color: 'orange', title: 'AbuseIPDB Intelligence',   desc: 'Global IP reputation feed' },
+    { icon: Activity, color: 'blue', title: 'Real-Time Monitoring', desc: 'Live attack detection & tracking' },
+    { icon: Brain, color: 'purple', title: 'ML Threat Engine', desc: 'XGBoost + Isolation Forest' },
+    { icon: ShieldCheck, color: 'green', title: 'OWASP CRS v4', desc: 'Industry-standard rule set' },
+    { icon: Globe, color: 'orange', title: 'AbuseIPDB Intelligence', desc: 'Global IP reputation feed' },
   ];
 
   const systemStatus = [
-    { label: 'WAF Engine',     color: 'var(--success-color)' },
-    { label: 'ModSecurity',    color: 'var(--success-color)' },
-    { label: 'ML Inference',   color: 'var(--accent-color)'  },
+    { label: 'WAF Engine', color: 'var(--success-color)' },
+    { label: 'CyberSentinel Engine', color: 'var(--success-color)' },
+    { label: 'ML Inference', color: 'var(--accent-color)' },
   ];
 
   return (
     <div className="login-container">
 
-      {/* ── Left Showcase Panel ─────────────────────────── */}
-      <div className="login-showcase">
-        {/* Animated backgrounds */}
-        <div className="cyber-grid" />
-        <div className="glow-sphere sphere-1" />
-        <div className="glow-sphere sphere-2" />
-        <div className="glow-sphere sphere-3" />
-        <ParticleCanvas />
+      <div className="login-panels">
+        {/* ── Left Showcase Panel ─────────────────────────── */}
+        <div className="login-showcase">
+          {/* Animated backgrounds */}
+          <div className="cyber-grid" />
+          <div className="glow-sphere sphere-1" />
+          <div className="glow-sphere sphere-2" />
+          <div className="glow-sphere sphere-3" />
+          <ParticleCanvas />
 
-        <div className="showcase-content">
-          <motion.div
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.7 }}
-          >
-            {/* Logo */}
-            <div className="login-brand">
-              <motion.img
-                src="/Cybersentinel.png"
-                alt="CyberSentinel"
-                className="brand-icon-large"
-                style={{ maxHeight: '80px', objectFit: 'contain' }}
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ duration: 0.6, delay: 0.1 }}
-              />
-            </div>
-
-            <h1 className="brand-title" style={{ marginBottom: '8px' }}>
-              CyberSentinel
-            </h1>
-            <p className="brand-subtitle">
-              Enterprise WAF & Threat Intelligence Platform
-            </p>
-            <p className="brand-description">
-              Military-grade web application firewall powered by ML inference,
-              OWASP CRS 4, and real-time threat intelligence. Protecting against
-              SQL Injection, XSS, RCE, protocol violations, and OWASP Top 10.
-            </p>
-          </motion.div>
-
-          {/* Live counter */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.3 }}
-          >
-            <ThreatCounter />
-          </motion.div>
-
-          {/* Feature Grid */}
-          <div className="feature-grid">
-            {features.map((f, i) => {
-              const Icon = f.icon;
-              return (
-                <motion.div
-                  key={f.title}
-                  className="feature-card"
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.35 + i * 0.08 }}
-                >
-                  <Icon size={22} className={`feature-icon ${f.color}`} />
-                  <div>
-                    <h3>{f.title}</h3>
-                    <p>{f.desc}</p>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </div>
-
-          {/* System Status */}
-          <motion.div
-            className="system-status-panel"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.7 }}
-          >
-            {systemStatus.map(s => (
-              <div key={s.label} className="status-item">
-                <div style={{
-                  width: '8px', height: '8px',
-                  borderRadius: '50%',
-                  backgroundColor: s.color,
-                  boxShadow: `0 0 8px ${s.color}`,
-                  animation: 'pulseGlow 1.8s ease-in-out infinite',
-                }} />
-                {s.label}
-              </div>
-            ))}
-          </motion.div>
-        </div>
-      </div>
-
-      {/* ── Right Login Panel ────────────────────────────── */}
-      <div className="login-form-wrapper">
-        <motion.div
-          className="login-card"
-          initial={{ opacity: 0, scale: 0.94, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{ duration: 0.45, delay: 0.2 }}
-        >
-          <div className="login-card-header">
-            <div className="auth-icon">
-              <Lock size={26} />
-            </div>
-            <h2>
-              <TypingText text="Secure Access" speed={65} />
-            </h2>
-            <p>Authenticate to access the SOC dashboard</p>
-          </div>
-
-          <AnimatePresence>
-            {error && (
-              <motion.div
-                className="login-error"
-                initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-                animate={{ opacity: 1, height: 'auto', marginBottom: 20 }}
-                exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-              >
-                ⚠ {error}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <form onSubmit={handleLogin} className="login-form">
-            {!showMfa ? (
-              <>
-                <div className="form-group">
-                  <label htmlFor="username">Admin Identity</label>
-                  <div className="input-with-icon">
-                    <Server size={16} className="input-icon" />
-                    <input
-                      id="username"
-                      type="text"
-                      placeholder="Enter username"
-                      value={username}
-                      onChange={e => setUsername(e.target.value)}
-                      autoComplete="username"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="password">Authentication Key</label>
-                  <div className="input-with-icon">
-                    <Lock size={16} className="input-icon" />
-                    <input
-                      id="password"
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="Enter password"
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      autoComplete="current-password"
-                      required
-                    />
-                    <button
-                      type="button"
-                      className="password-toggle"
-                      onClick={() => setShowPassword(s => !s)}
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="form-group">
-                <label htmlFor="otpCode">Google Authenticator OTP Code</label>
-                <div className="input-with-icon">
-                  <ShieldCheck size={16} className="input-icon" color="var(--accent-color)" />
-                  <input
-                    id="otpCode"
-                    type="text"
-                    maxLength={6}
-                    placeholder="Enter 6-digit OTP code"
-                    value={otpCode}
-                    onChange={e => setOtpCode(e.target.value)}
-                    autoComplete="one-time-code"
-                    required
-                    autoFocus
-                  />
-                </div>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className={`login-btn ${loading ? 'loading' : ''}`}
-              disabled={loading}
-              id="login-submit-btn"
+          <div className="showcase-content">
+            <motion.div
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.7 }}
             >
-              {loading ? (
+              {/* Logo */}
+              <div className="login-brand" style={{ marginBottom: '16px', display: 'flex', justifyContent: 'center' }}>
+                <motion.img
+                  src="/Cybersentinel.png"
+                  alt="CyberSentinel"
+                  className="brand-icon-large"
+                  style={{ maxHeight: '120px', maxWidth: '400px', objectFit: 'contain' }}
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ duration: 0.6, delay: 0.1 }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'center', margin: '0 auto 32px' }}>
+                <div style={{ 
+                  display: 'inline-flex', 
+                  alignItems: 'center', 
+                  gap: '10px',
+                  padding: '8px 18px', 
+                  background: 'rgba(0, 212, 255, 0.06)', 
+                  border: '1px solid rgba(0, 212, 255, 0.15)', 
+                  borderRadius: '30px',
+                  boxShadow: '0 4px 20px rgba(0, 212, 255, 0.1)',
+                  color: 'var(--accent-color)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '1.5px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  fontFamily: 'var(--font-mono)'
+                }}>
+                  <ShieldCheck size={16} />
+                  <span>Web Application Firewall</span>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Live counter */}
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.3 }}
+            >
+              <ThreatCounter />
+            </motion.div>
+
+            {/* Feature Grid */}
+            <div className="feature-grid">
+              {features.map((f, i) => {
+                const Icon = f.icon;
+                return (
+                  <motion.div
+                    key={f.title}
+                    className="feature-card"
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.35 + i * 0.08 }}
+                  >
+                    <Icon size={22} className={`feature-icon ${f.color}`} />
+                    <div>
+                      <h3>{f.title}</h3>
+                      <p>{f.desc}</p>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            {/* System Status */}
+            <motion.div
+              className="system-status-panel"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.7 }}
+            >
+              {systemStatus.map(s => (
+                <div key={s.label} className="status-item">
+                  <div style={{
+                    width: '8px', height: '8px',
+                    borderRadius: '50%',
+                    backgroundColor: s.color,
+                    boxShadow: `0 0 8px ${s.color}`,
+                    animation: 'pulseGlow 1.8s ease-in-out infinite',
+                  }} />
+                  {s.label}
+                </div>
+              ))}
+            </motion.div>
+          </div>
+        </div>
+
+        {/* ── Right Login Panel ────────────────────────────── */}
+        <div className="login-form-wrapper">
+          <motion.div
+            className="login-card"
+            initial={{ opacity: 0, scale: 0.94, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.45, delay: 0.2 }}
+          >
+            <div className="login-card-header">
+              <div className="auth-icon">
+                <Lock size={26} />
+              </div>
+              <h2>
+                <TypingText text="Secure Access" speed={65} />
+              </h2>
+              <p>Authenticate to access the SOC dashboard</p>
+            </div>
+
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  className="login-error"
+                  initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                  animate={{ opacity: 1, height: 'auto', marginBottom: 20 }}
+                  exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                >
+                  ⚠ {error}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <form onSubmit={handleLogin} className="login-form">
+              {!showMfa ? (
                 <>
-                  <Activity className="animate-spin" size={17} />
-                  Authenticating...
+                  <div className="form-group">
+                    <label htmlFor="username">Admin Identity</label>
+                    <div className="input-with-icon">
+                      <Server size={16} className="input-icon" />
+                      <input
+                        id="username"
+                        type="text"
+                        placeholder="Enter username"
+                        value={username}
+                        onChange={e => setUsername(e.target.value)}
+                        autoComplete="username"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="password">Authentication Key</label>
+                    <div className="input-with-icon">
+                      <Lock size={16} className="input-icon" />
+                      <input
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        placeholder="Enter password"
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        autoComplete="current-password"
+                        required
+                      />
+                      <button
+                        type="button"
+                        className="password-toggle"
+                        onClick={() => setShowPassword(s => !s)}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
                 </>
               ) : (
-                <>
-                  <Zap size={17} />
-                  {showMfa ? "Verify OTP & Access" : "Initialize Session"}
-                </>
+                <div className="form-group">
+                  <label htmlFor="otpCode">Google Authenticator OTP Code</label>
+                  <div className="input-with-icon">
+                    <ShieldCheck size={16} className="input-icon" color="var(--accent-color)" />
+                    <input
+                      id="otpCode"
+                      type="text"
+                      maxLength={6}
+                      placeholder="Enter 6-digit OTP code"
+                      value={otpCode}
+                      onChange={e => setOtpCode(e.target.value)}
+                      autoComplete="one-time-code"
+                      required
+                      autoFocus
+                    />
+                  </div>
+                </div>
               )}
-            </button>
-            {showMfa && (
-              <button
-                type="button"
-                className="login-btn"
-                style={{ background: 'rgba(255,255,255,0.05)', marginTop: '8px', border: '1px solid rgba(255,255,255,0.1)' }}
-                onClick={() => {
-                  setShowMfa(false);
-                  setOtpCode('');
-                  setError('');
-                }}
-              >
-                Cancel MFA Check
-              </button>
-            )}
-          </form>
 
-          <div className="login-footer">
-            <p>Unauthorized access is strictly prohibited and monitored.</p>
-            <p style={{ color: 'rgba(0,212,255,0.4)', marginTop: '6px' }}>
-              Demo: admin / admin123
-            </p>
-          </div>
-        </motion.div>
-      </div>
+              <button
+                type="submit"
+                className={`login-btn ${loading ? 'loading' : ''}`}
+                disabled={loading}
+                id="login-submit-btn"
+              >
+                {loading ? (
+                  <>
+                    <Activity className="animate-spin" size={17} />
+                    Authenticating...
+                  </>
+                ) : (
+                  <>
+                    <Zap size={17} />
+                    {showMfa ? "Verify OTP & Access" : "Initialize Session"}
+                  </>
+                )}
+              </button>
+              {showMfa && (
+                <button
+                  type="button"
+                  className="login-btn"
+                  style={{ background: 'rgba(255,255,255,0.05)', marginTop: '8px', border: '1px solid rgba(255,255,255,0.1)' }}
+                  onClick={() => {
+                    setShowMfa(false);
+                    setOtpCode('');
+                    setError('');
+                  }}
+                >
+                  Cancel MFA Check
+                </button>
+              )}
+            </form>
+
+            <div className="login-footer">
+              <p>Unauthorized access is strictly prohibited and monitored.</p>
+            </div>
+          </motion.div>
+        </div>
+      </div> {/* end .login-panels */}
 
       {/* Footer Bar */}
       <div className="login-footer-bar">

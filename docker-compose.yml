@@ -1,28 +1,56 @@
+# =============================================================================
+# CyberSentinel WAF — Core Services Orchestration (Self-Contained)
+# =============================================================================
 services:
   backend:
     build: ./backend
     container_name: waf-backend
     restart: unless-stopped
     volumes:
+      # Local configs & dynamic database mapping
       - ./backend/app/config:/app/app/config
       - ./backend/app/data:/app/app/data
       - ./backend/app/data:/opt/ModSecurity/WAF_GUI/backend/app/data
-      - /var/log/modsecurity/audit:/var/log/modsecurity/audit:ro
-      - /etc/nginx:/etc/nginx
-      - /var/log/nginx:/var/log/nginx:ro
+      # Relocated log dirs for full portability
+      - ./logs/modsecurity/audit:/var/log/modsecurity/audit:ro
+      - ./configs/nginx:/etc/nginx
+      - ./logs/nginx:/var/log/nginx:ro
+      # GeoIP2 Databases folder mapping
+      - ./backend/app/data:/etc/nginx/geoip:ro
+      # Docker control interface (for service state discovery)
       - /var/run/docker.sock:/var/run/docker.sock
-    # No host port mapping — only accessible internally via OpenResty WAF
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     expose:
       - "8000"
     environment:
       ML_API: http://ml-engine:9000
       REDIS_HOST: redis
-      REDIS_PASSWORD: YourSecureRedisPassword123!
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      GEOIP_DATA_DIR: /etc/nginx/geoip
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - ml-engine
-      - redis
+      ml-engine:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
     networks:
       - waf-network
 
@@ -30,17 +58,33 @@ services:
     build: ./ml-waf
     container_name: waf-ml
     restart: unless-stopped
-    # No host port mapping — only accessible internally via waf-network
     expose:
       - "9000"
     volumes:
       - ./ml-waf/models:/app/models
       - ./backend/app/data:/opt/ModSecurity/WAF_GUI/backend/app/data
-      - /etc/cybersentinel:/etc/cybersentinel:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 512M
     networks:
       - waf-network
 
@@ -48,10 +92,26 @@ services:
     image: redis:7-alpine
     container_name: waf-redis
     restart: unless-stopped
-    # No host port mapping — only accessible internally via waf-network
     expose:
       - "6379"
-    command: redis-server --requirepass YourSecureRedisPassword123!
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
     networks:
       - waf-network
 
@@ -60,24 +120,50 @@ services:
     container_name: waf-openresty
     restart: unless-stopped
     ports:
-      # Port 3001 is the ONLY entry point — all traffic goes through the WAF
+      # Port 3001 — direct WAF Dashboard access (HTTP, WAF-inspected)
       - "3001:3001"
+      # Port 80 — intercepts all plain HTTP, redirects to HTTPS 443
+      - "80:80"
+      # Port 443 — HTTPS WAF gateway (TLS + ModSecurity + ML-WAF)
+      - "443:443"
     volumes:
-      - /usr/local/openresty:/usr/local/openresty
-      - /usr/local/modsecurity:/usr/local/modsecurity:ro
-      - /etc/nginx:/etc/nginx
-      - /var/log/modsecurity:/var/log/modsecurity
-      - /var/log/nginx:/var/log/nginx
-      - /etc/cybersentinel:/etc/cybersentinel:ro
+      # Custom Nginx configurations mapped to internal config paths
+      - ./configs/nginx:/etc/nginx
+      - ./logs/modsecurity:/var/log/modsecurity
+      - ./logs/nginx:/var/log/nginx
       - ./ml-waf:/opt/ml-waf:ro
-      - ./backend/app/data:/opt/ModSecurity/WAF_GUI/backend/app/data
+      # GeoIP2 databases folder mapped inside OpenResty
+      - ./backend/app/data:/etc/nginx/geoip:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
       ML_HOST: ml-engine
       ML_PORT: 9000
     depends_on:
-      - ml-engine
-      - redis
+      backend:
+        condition: service_healthy
+      ml-engine:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -89,11 +175,25 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
-    # No host port mapping — only accessible internally via OpenResty WAF
     expose:
       - "80"
     volumes:
-      - ./frontend/dist:/usr/share/nginx/html:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     networks:
       - waf-network
 

@@ -34,6 +34,9 @@ def classify_attack(rule_id: str) -> Tuple[str, str]:
     # 921xxx - HTTP request smuggling
     elif 921000 <= rule_num <= 921999:
         return "HTTP Smuggling", "High"
+    # 922xxx - Multipart validation
+    elif 922000 <= rule_num <= 922999:
+        return "Multipart Violation", "Medium"
     # 930xxx - LFI/path traversal
     elif 930000 <= rule_num <= 930999:
         return "LFI/RFI", "High"
@@ -46,8 +49,12 @@ def classify_attack(rule_id: str) -> Tuple[str, str]:
     # 933xxx - PHP injection
     elif 933000 <= rule_num <= 933999:
         return "PHP Injection", "High"
-    # 934xxx - Node.js injection
+    # 934xxx - Generic Attacks: SSRF (934100-934101), Node.js injection, XXE (934102)
     elif 934000 <= rule_num <= 934999:
+        if 934100 <= rule_num <= 934101:
+            return "SSRF", "Critical"
+        elif rule_num == 934102:
+            return "XXE Injection", "Critical"
         return "Code Injection", "High"
     # 941xxx - XSS
     elif 941000 <= rule_num <= 941999:

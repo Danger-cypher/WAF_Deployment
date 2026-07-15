@@ -1,17 +1,48 @@
 import os
 from typing import List, Dict, Any
-from app.services.log_reader import get_all_logs
+from app.services.log_reader import get_all_logs, get_total_blocked_count
 from collections import Counter
 
+
+def _get_total_nginx_requests() -> int:
+    """
+    Count total lines in nginx access.log and its most recent rotated copy (.1).
+    Nginx logrotate runs at midnight — immediately after rotation the current
+    access.log is empty and all lines are in access.log.1.  Reading both files
+    ensures the counter never drops to zero after a rotation.
+    Compressed archives (.2.gz and older) are intentionally skipped to keep
+    the response fast.
+    """
+    import gzip
+    count = 0
+    candidates = [
+        '/var/log/nginx/access.log',
+        '/var/log/nginx/access.log.1',
+    ]
+    try:
+        for path in candidates:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'rb') as f:
+                        count += sum(1 for _ in f)
+                except Exception:
+                    pass
+        return count
+    except Exception:
+        return 0
 
 def calculate_stats() -> Dict[str, Any]:
     logs = get_all_logs()
 
-    total_requests = len(logs)
+    # Total requests is all traffic processed by the proxy (read from NGINX access log)
+    nginx_reqs = _get_total_nginx_requests()
 
-    # In ModSecurity context, if we have an audit log it usually means it was flagged/blocked depending on SecRuleEngine.
-    # We will assume all parsed logs here are 'blocked' or flagged for this MVP.
-    total_blocked = total_requests
+    # Blocked count: read ALL "Access denied" lines directly from both error logs
+    # (not capped at 5000 like get_all_logs). This is the true cumulative block count.
+    total_blocked = get_total_blocked_count()
+
+    # If WAF logs exceed access logs (due to log rotation sync issues), fallback gracefully
+    total_requests = max(nginx_reqs, total_blocked)
 
     sqli_count = sum(1 for log in logs if log.attack_type == "SQL Injection")
     xss_count = sum(1 for log in logs if log.attack_type == "XSS")
@@ -23,6 +54,23 @@ def calculate_stats() -> Dict[str, Any]:
 
     unique_ips = len(set(log.client_ip for log in logs if log.client_ip))
 
+    import time
+    from datetime import datetime
+    current_time = time.time()
+    
+    recent_threats = 0
+    for log in logs:
+        if log.timestamp:
+            try:
+                # ModSecurity time format or ISO
+                # log.timestamp is usually YYYY-MM-DD HH:MM:SS from parser
+                dt = datetime.strptime(log.timestamp, "%Y-%m-%d %H:%M:%S")
+                log_time = dt.timestamp()
+                if current_time - log_time < 60:  # within last 60 seconds
+                    recent_threats += 1
+            except Exception:
+                pass
+
     return {
         "total_requests": total_requests,
         "total_blocked": total_blocked,
@@ -30,6 +78,7 @@ def calculate_stats() -> Dict[str, Any]:
         "xss_count": xss_count,
         "top_attack_type": top_attack_type,
         "total_unique_ips": unique_ips,
+        "recent_threats": recent_threats,
     }
 
 
@@ -44,30 +93,23 @@ def get_top_ips(limit: int = 10) -> List[Dict[str, Any]]:
         if log.client_ip and log.country:
             ip_to_country[log.client_ip] = log.country
             
-    # Connect to Redis to fetch AbuseIPDB scores.
+    # Connect to Redis using centralized client to fetch AbuseIPDB scores.
     # Uses REDIS_HOST env var so Docker containers can point to the host Redis
     # instead of hanging on localhost (which doesn't exist inside the container).
-    import redis
-    redis_host     = os.environ.get("REDIS_HOST", "localhost")
-    redis_password = os.environ.get("REDIS_PASSWORD", "YourSecureRedisPassword123!")
-    r = redis.Redis(
-        host=redis_host,
-        port=6379,
-        password=redis_password if redis_password else None,
-        socket_timeout=0.5,          # fail fast — 500 ms max
-        socket_connect_timeout=0.5,
-    )
+    from app.utils.redis_client import get_redis_client
+    r = get_redis_client()
 
     result = []
     for ip, count in most_common:
         country = ip_to_country.get(ip, "Unknown")
         abuse_score = 0.0
-        try:
-            val = r.get(f"abuse:{ip}")
-            if val is not None:
-                abuse_score = float(val)
-        except Exception:
-            pass  # Redis unavailable — skip abuse scores gracefully
+        if r:
+            try:
+                val = r.get(f"abuse:{ip}")
+                if val is not None:
+                    abuse_score = float(val)
+            except Exception:
+                pass  # Redis unavailable — skip abuse scores gracefully
 
         result.append({
             "ip": ip,
@@ -95,12 +137,10 @@ def get_timeline() -> List[Dict[str, Any]]:
     for log in reversed(logs):
         if log.timestamp:
             try:
-                # log.timestamp format: 'Fri Jun 19 15:44:29 2026'
-                # log.timestamp[:13] is 'Fri Jun 19 15'
-                # log.timestamp[14:16] is the minute '44'
-                minute = int(log.timestamp[14:16])
+                parts = log.timestamp.split(':')
+                minute = int(parts[1])
                 rounded_minute = (minute // 15) * 15
-                time_bucket = f"{log.timestamp[:13]}:{rounded_minute:02d}"
+                time_bucket = f"{parts[0]}:{rounded_minute:02d}"
                 timeline_counter[time_bucket] = timeline_counter.get(time_bucket, 0) + 1
             except Exception:
                 pass

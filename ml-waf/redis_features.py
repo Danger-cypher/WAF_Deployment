@@ -9,7 +9,10 @@ _REDIS_SECRET_FILE = "/etc/cybersentinel/redis.secret"
 
 
 def _get_redis_password() -> str:
-    """Reads the Redis password from a protected secret file."""
+    """Reads the Redis password from environment variable or falls back to a secret file."""
+    env_password = os.environ.get("REDIS_PASSWORD")
+    if env_password:
+        return env_password.strip()
     try:
         with open(_REDIS_SECRET_FILE, "r") as f:
             return f.read().strip()

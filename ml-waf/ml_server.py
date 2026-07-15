@@ -5,6 +5,8 @@ import sqlite3
 import json
 import threading
 import requests
+from datetime import datetime
+import pytz
 from fastapi import FastAPI, BackgroundTasks, Response, status
 from pydantic import BaseModel, Field
 
@@ -81,8 +83,12 @@ if not _try_load_models():
 else:
     logger.info("ML-WAF service started in ACTIVE MODE — scoring is enabled.")
 
-# 2. SQLite client configuration
-DB_PATH = "/opt/ModSecurity/WAF_GUI/backend/app/data/ml_events.db"
+DB_PATH = os.environ.get(
+    "ML_DB_PATH",
+    os.path.abspath(
+        os.path.join(BASE_DIR, "..", "backend", "app", "data", "ml_events.db")
+    )
+)
 
 def init_sqlite_db():
     try:
@@ -92,7 +98,7 @@ def init_sqlite_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ml_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                timestamp DATETIME,
                 unique_id TEXT,
                 crs_score REAL,
                 matched_vars TEXT,
@@ -161,10 +167,11 @@ def write_to_sqlite(event: dict):
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("""
             INSERT INTO ml_events (
-                unique_id, crs_score, matched_vars, uri, args, method, body_len, ct, ua, remote_addr,
+                timestamp, unique_id, crs_score, matched_vars, uri, args, method, body_len, ct, ua, remote_addr,
                 redis_rpm, redis_rep, xgb_prob, iso_score, threat_score, decision, abuse_score
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
+            event.get("timestamp", ""),
             event.get("unique_id", ""),
             event.get("crs_score", 0.0),
             event.get("matched_vars", ""),
@@ -207,7 +214,23 @@ def health_check():
         "model_metadata": model_meta
     }
 
-SETTINGS_PATH = "/opt/ModSecurity/WAF_GUI/backend/app/config/settings.json"
+@app.post("/reload")
+def reload_models():
+    """Dynamically reloads model binaries from disk into memory."""
+    global PASSIVE_MODE
+    if _try_load_models():
+        PASSIVE_MODE = False
+        logger.info("Models reloaded dynamically via API call.")
+        return {"status": "success", "message": "Models reloaded successfully"}
+    else:
+        return {"status": "error", "message": "Failed to load model binaries"}
+
+SETTINGS_PATH = os.environ.get(
+    "SETTINGS_FILE",
+    os.path.abspath(
+        os.path.join(BASE_DIR, "..", "backend", "app", "config", "settings.json")
+    )
+)
 
 def fetch_abuseipdb_score(ip: str):
     """
@@ -231,9 +254,11 @@ def fetch_abuseipdb_score(ip: str):
         if not abuse_cfg.get("enabled", False):
             return
             
-        api_key = abuse_cfg.get("api_key", "")
+        api_key = os.environ.get("ABUSEIPDB_API_KEY", "")
         if not api_key:
-            logger.warning("AbuseIPDB API key missing in settings configuration.")
+            api_key = abuse_cfg.get("api_key", "")
+        if not api_key:
+            logger.warning("AbuseIPDB API key missing in environment and settings configuration.")
             return
 
         url = "https://api.abuseipdb.com/api/v2/check"
@@ -334,7 +359,10 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
         response.status_code = status.HTTP_200_OK
 
     # 7. Schedule asynchronous event logging to SQLite
+    # Add UTC timestamp to event data
+    utc_now = datetime.now(pytz.UTC)
     event_data = {
+        "timestamp": utc_now.strftime("%Y-%m-%d %H:%M:%S"),
         **payload.model_dump(),
         "redis_rpm": redis_rpm,
         "redis_rep": redis_rep,

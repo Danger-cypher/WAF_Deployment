@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +19,8 @@ DEFAULT_SETTINGS = {
         "retention": "30 Days",
     },
     "auth": {
-        "password_hash": "",
-        "analyst_password_hash": ""
+        "password_hash": "",  # nosec B105
+        "analyst_password_hash": ""  # nosec B105
     },
     "auto_learning": {
         "enabled": False,
@@ -54,10 +54,11 @@ DEFAULT_SETTINGS = {
         "ip_whitelist": [],
     },
     "anti_defacement": {
-        "enabled": True,
-        "monitored_files": [
-            "/opt/cybersentinel/SECURITY-LOG-MANAGER/frontend/public/index.html"
-        ],
+        "enabled": False,
+        # Default is empty — client configures their own files via the dashboard UI.
+        # The demo server's actual monitored files are stored in settings.json and
+        # take precedence over this default via _deep_merge on load.
+        "monitored_files": [],
         "check_interval_seconds": 5,
     },
 }
@@ -67,6 +68,9 @@ class SettingsManager:
     def __init__(self):
         # We will load dynamically. We do not call auth.get_password_hash at root to prevent circular import.
         self._settings = None
+        # Cache password hashes to avoid file I/O on login
+        self._cached_admin_hash: Optional[str] = None
+        self._cached_analyst_hash: Optional[str] = None
 
     @property
     def settings(self) -> Dict[str, Any]:
@@ -162,6 +166,11 @@ class SettingsManager:
         return self.settings["logs"]
 
     def get_password_hash(self) -> str:
+        # Return cached hash if available (no file I/O)
+        if self._cached_admin_hash:
+            return self._cached_admin_hash
+        
+        # Otherwise load from settings file
         hash_val = self.settings.get("auth", {}).get("password_hash")
         if not hash_val:
             from app.services.auth import get_password_hash
@@ -169,9 +178,17 @@ class SettingsManager:
             hash_val = get_password_hash("admin123")
             self.settings.setdefault("auth", {})["password_hash"] = hash_val
             self.save_settings(self.settings)
+        
+        # Cache for future calls
+        self._cached_admin_hash = hash_val
         return hash_val
 
     def get_analyst_password_hash(self) -> str:
+        # Return cached hash if available (no file I/O)
+        if self._cached_analyst_hash:
+            return self._cached_analyst_hash
+        
+        # Otherwise load from settings file
         hash_val = self.settings.get("auth", {}).get("analyst_password_hash")
         if not hash_val:
             from app.services.auth import get_password_hash
@@ -179,6 +196,9 @@ class SettingsManager:
             hash_val = get_password_hash("analyst123")
             self.settings.setdefault("auth", {})["analyst_password_hash"] = hash_val
             self.save_settings(self.settings)
+        
+        # Cache for future calls
+        self._cached_analyst_hash = hash_val
         return hash_val
 
     def update_password(self, new_password: str) -> None:
@@ -188,6 +208,8 @@ class SettingsManager:
             new_password
         )
         self.save_settings(self.settings)
+        # Clear cache on password change
+        self._cached_admin_hash = None
 
 
 

@@ -1,172 +1,147 @@
-# =============================================================================
-# CyberSentinel WAF — .gitignore
-# =============================================================================
+# ============================================================================
+# CyberSentinel WAF - Git Ignore Configuration
+# ============================================================================
 
-# =============================================================================
-# SECRETS & CREDENTIALS  ← NEVER commit these
-# =============================================================================
+# ──────────────────────────────────────────────────────────────────────────
+# SECURITY-SENSITIVE FILES (NEVER COMMIT)
+# ──────────────────────────────────────────────────────────────────────────
 .env
-.env.*
-*.env
-jwt_secret.txt
-*.pem
+.env.local
+.env.production
+*.secret
 *.key
+*.pem
 *.crt
-*.p12
-*.pfx
-secrets/
-credentials/
-
-# =============================================================================
-# SENSITIVE RUNTIME CONFIG  ← Contains bcrypt password hashes + live WAF rules
-# =============================================================================
+*.der
 backend/app/config/settings.json
-backend/app/config/rule_states.json
-backend/app/config/false_positives.db
+/etc/cybersentinel/redis.secret
 
-# =============================================================================
-# DATABASES  ← Live traffic data, ML events, user data — never commit
-# =============================================================================
+# ──────────────────────────────────────────────────────────────────────────
+# Python
+# ──────────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.log
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ──────────────────────────────────────────────────────────────────────────
+# Node.js / Frontend
+# ──────────────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.pnp/
+.pnp.js
+
+# Production build
+frontend/dist/
+frontend/build/
+
+# ──────────────────────────────────────────────────────────────────────────
+# Databases
+# ──────────────────────────────────────────────────────────────────────────
 *.db
 *.sqlite
 *.sqlite3
-backend/app.db
-backend/waf_dashboard.db
-backend/waf_gui.db
-backend/app/data/ml_events.db
+*.db-journal
+*.db-shm
+*.db-wal
+backend/app/config/false_positives.db
 ml-waf/ml_events.db
+backend/app/data/*.db
 
-# =============================================================================
-# GEOLOCATION DATABASE  ← Large binary, licensed — download separately
-# =============================================================================
-backend/app/data/GeoLite2-Country.mmdb
-*.mmdb
-
-# =============================================================================
-# ML MODEL BINARIES  ← Large binary blobs, retrained automatically
-# =============================================================================
-ml-waf/models/backups/
-*.pkl
-!ml-waf/models/*.pkl
-*.joblib
-*.h5
-*.onnx
-*.pt
-*.pth
-
-# =============================================================================
-# PYTHON VIRTUAL ENVIRONMENTS
-# =============================================================================
-venv/
-.venv/
-env/
-.env/
-backend/venv/
-ml-waf/venv/
-*.egg-info/
-dist/
-build/
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-pip-log.txt
-pip-delete-this-directory.txt
-
-# =============================================================================
-# NODE / FRONTEND BUILD ARTIFACTS
-# =============================================================================
-node_modules/
-dist/
-dist-ssr/
-*.local
-.cache/
-.parcel-cache/
-.next/
-out/
-
-# =============================================================================
-# LOGS  ← Runtime log files, never commit
-# =============================================================================
-*.log
+# ──────────────────────────────────────────────────────────────────────────
+# Logs
+# ──────────────────────────────────────────────────────────────────────────
 logs/
-ml-waf/logs/
-backend/test_logs/
-vite.log
-waf_ddos.txt
+*.log
+*.log.*
+/var/log/nginx/
+/var/log/modsecurity/
+backend/backend.log
+ml-waf/ml.log
 
-# =============================================================================
-# TEST / DEBUG / SCRATCH SCRIPTS  ← One-off dev scripts
-# =============================================================================
-read_db.py
-rewrite_settings.py
-dummy_app.py
-test_analytics.py
-test_ddos_parser.py
-backend/test_discovery.py
-backend/test_put.py
-backend/test_update.py
-ml-waf/generate_dummy_models.py
-ml-waf/test_pipeline.py
+# ──────────────────────────────────────────────────────────────────────────
+# ML Models (optional - commit if part of distribution)
+# ──────────────────────────────────────────────────────────────────────────
+ml-waf/models/*.pkl
+ml-waf/models/*.joblib
+ml-waf/models/*.h5
+ml-waf/training_data/
 
-# =============================================================================
-# DOCUMENTATION DRAFTS / BLUEPRINTS (internal notes)
-# =============================================================================
-ml_waf_blueprint.md
+# ──────────────────────────────────────────────────────────────────────────
+# Docker
+# ──────────────────────────────────────────────────────────────────────────
+.dockerignore
 
-# =============================================================================
-# OS / EDITOR NOISE
-# =============================================================================
+# ──────────────────────────────────────────────────────────────────────────
+# GeoIP Databases (large binary files)
+# ──────────────────────────────────────────────────────────────────────────
+*.mmdb
+backend/app/data/*.mmdb
+
+# ──────────────────────────────────────────────────────────────────────────
+# OS
+# ──────────────────────────────────────────────────────────────────────────
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
-desktop.ini
-
-# IDE
-.vscode/*
-!.vscode/extensions.json
-.idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+*~
 *.swp
 *.swo
-*~
 
-# =============================================================================
-# COMPILED / BINARY ARTIFACTS
-# =============================================================================
-*.so
-*.dylib
-*.dll
-*.class
-*.o
-*.a
+# ──────────────────────────────────────────────────────────────────────────
+# Backup files
+# ──────────────────────────────────────────────────────────────────────────
+*.bak
+*.backup
+*.old
+*.orig
 
-# =============================================================================
-# PACKAGE MANAGER LOCKS (optional — keep package-lock.json for reproducibility)
-# =============================================================================
-# package-lock.json   ← intentionally NOT ignored (good for reproducibility)
-# requirements.txt    ← intentionally NOT ignored
+# ──────────────────────────────────────────────────────────────────────────
+# Temporary files
+# ──────────────────────────────────────────────────────────────────────────
+tmp/
+temp/
+*.tmp
 
-# =============================================================================
-# WHAT IS INTENTIONALLY TRACKED (DO NOT ADD THESE ABOVE)
-# =============================================================================
-# src/                   ← all React frontend source
-# backend/app/           ← all Python backend source (except config/settings.json)
-# backend/requirements.txt
-# ml-waf/*.py            ← all ML training + inference code
-# ml-waf/requirements.txt
-# scripts/               ← all deployment and automation shell scripts
-# public/                ← static frontend assets
-# package.json
-# vite.config.js
-# README.md
-# backend/app/config/settings.py  ← code only, no secrets
+# ──────────────────────────────────────────────────────────────────────────
+# Security Audit Reports (optional - remove if you want to commit them)
+# ──────────────────────────────────────────────────────────────────────────
+# SECURITY_AUDIT_REPORT.md

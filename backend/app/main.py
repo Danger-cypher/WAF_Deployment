@@ -1,7 +1,8 @@
 import asyncio
 import logging
+import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config.settings import settings
@@ -17,9 +18,12 @@ from app.routes import (
     api_protection,
     ddos,
     ml,
+    security_audit,
+    apps,
 )
 from app.services.log_reader import scan_log_directory
 from app.websocket.connection_manager import start_log_watcher
+from app.services.log_retention_service import start_log_retention_service
 
 # Configure logging
 logging.basicConfig(
@@ -40,6 +44,13 @@ async def lifespan(app: FastAPI):
 
     init_db()
 
+    # Sync protected apps to Nginx configuration on startup
+    try:
+        from app.services.nginx_manager import sync_protected_apps_to_nginx
+        sync_protected_apps_to_nginx()
+    except Exception as e:
+        logger.error(f"Failed to sync protected apps to NGINX on startup: {e}")
+
     # Initial scan of the log directory
     scan_log_directory()
 
@@ -52,6 +63,9 @@ async def lifespan(app: FastAPI):
     from app.services.anti_defacement import start_defacement_monitor
 
     defacement_task = asyncio.create_task(start_defacement_monitor())
+
+    # Start the log retention enforcement background task
+    retention_task = asyncio.create_task(start_log_retention_service())
 
     yield
 
@@ -68,12 +82,18 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    # Cancel the log retention task
+    retention_task.cancel()
+    try:
+        await retention_task
+    except asyncio.CancelledError:
+        pass
+
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
 from fastapi.responses import HTMLResponse
 from app.services.settings_manager import settings_manager
-import uuid
 
 
 @app.get("/")
@@ -93,14 +113,30 @@ async def test_block_page():
     return HTMLResponse(content=html_content, status_code=403)
 
 
+from fastapi import Depends
+from app.utils.csrf import verify_csrf_token
+
 # Set up CORS with secure defaults
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# CSP Nonce middleware
+@app.middleware("http")
+async def add_csp_nonce(request: Request, call_next):
+    nonce = request.headers.get("X-Nonce")
+    
+    response = await call_next(request)
+    
+    # Store nonce in response headers for frontend access
+    response.headers["X-Nonce"] = nonce or "none"
+    
+    return response
 
 
 # Add security headers middleware
@@ -109,7 +145,8 @@ async def add_security_headers(request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    # Basic CSP - restrict as needed in frontend, but good to have in backend if serving HTML
+    
+    # Basic CSP - will be enhanced by CSP nonce middleware
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; frame-ancestors 'none';"
     )
@@ -139,18 +176,37 @@ async def add_security_headers(request, call_next):
     return response
 
 
+# Request ID middleware for log correlation
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    # Generate unique request ID
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    
+    response = await call_next(request)
+    
+    # Add X-Request-Id header to response
+    response.headers["X-Request-Id"] = request_id
+    
+    return response
+
+
 # Include routers without global prefixes to match exactly: /logs, /stats, /health, /top-ips, etc.
-app.include_router(logs.router, tags=["Logs"])
-app.include_router(stats.router, tags=["Stats"])
-app.include_router(health.router, tags=["Health"])
-app.include_router(rules.router, tags=["Rules"])
-app.include_router(auth.router, prefix="/auth", tags=["Auth"])
-app.include_router(settings_route.router, tags=["Settings"])
-app.include_router(false_positives.router, tags=["False Positives"])
-app.include_router(exclusions.router, tags=["Exclusions"])
-app.include_router(api_protection.router, tags=["API Protection"])
-app.include_router(ddos.router, tags=["DDoS Protection"])
-app.include_router(ml.router, tags=["ML Engine"])
+csrf_deps = [Depends(verify_csrf_token)]
+
+app.include_router(logs.router, tags=["Logs"], dependencies=csrf_deps)
+app.include_router(stats.router, tags=["Stats"], dependencies=csrf_deps)
+app.include_router(health.router, tags=["Health"])  # Health is usually open/GET only
+app.include_router(rules.router, tags=["Rules"], dependencies=csrf_deps)
+app.include_router(auth.router, prefix="/auth", tags=["Auth"]) # Logout is protected inside auth.py
+app.include_router(settings_route.router, tags=["Settings"], dependencies=csrf_deps)
+app.include_router(false_positives.router, tags=["False Positives"], dependencies=csrf_deps)
+app.include_router(exclusions.router, tags=["Exclusions"], dependencies=csrf_deps)
+app.include_router(api_protection.router, tags=["API Protection"], dependencies=csrf_deps)
+app.include_router(ddos.router, tags=["DDoS Protection"], dependencies=csrf_deps)
+app.include_router(ml.router, tags=["ML Engine"], dependencies=csrf_deps)
+app.include_router(security_audit.router, prefix="/security", tags=["Security Audit"])
+app.include_router(apps.router, tags=["Protected Apps"], dependencies=csrf_deps)
 
 if __name__ == "__main__":
     import uvicorn

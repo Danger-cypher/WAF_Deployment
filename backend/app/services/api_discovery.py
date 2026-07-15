@@ -1,6 +1,5 @@
 import os
 import re
-import random
 import logging
 import ipaddress
 from datetime import datetime
@@ -10,11 +9,11 @@ from app.services import db_service
 logger = logging.getLogger(__name__)
 
 # Private/internal address ranges to exclude from API discovery metrics.
-# These correspond to loopback, RFC1918, and link-local addresses.
+# These correspond to loopback, RFC1918, link-local, and Docker bridge subnets.
 _INTERNAL_NETWORKS = [
     ipaddress.ip_network("127.0.0.0/8"),     # Loopback
-    ipaddress.ip_network("10.0.0.0/8"),      # RFC1918 Class A
-    ipaddress.ip_network("172.16.0.0/12"),   # RFC1918 Class B
+    ipaddress.ip_network("10.0.0.0/8"),      # RFC1918 Class A (includes Docker 10.x.x.x bridges)
+    ipaddress.ip_network("172.16.0.0/12"),   # RFC1918 Class B (Docker default bridge 172.17.x.x)
     ipaddress.ip_network("192.168.0.0/16"),  # RFC1918 Class C
     ipaddress.ip_network("169.254.0.0/16"),  # Link-local
     ipaddress.ip_network("::1/128"),          # IPv6 loopback
@@ -35,9 +34,18 @@ def is_internal_ip(ip_str: str) -> bool:
 
 _discovery_lock = threading.Lock()
 
-# NGINX combined log format regex
-# e.g., 10.200.11.33 - - [08/Jun/2026:10:35:51 +0530] "GET /src/main.jsx HTTP/1.1" 200 1602 "http://192.168.1.70:5555/" "Mozilla/5.0..."
+# NGINX waf_extended log format regex (new format with real timing)
+# e.g., 10.200.11.33 - - [08/Jun/2026:10:35:51 +0530] "GET /api/stats HTTP/1.1" 200 154 "-" "Mozilla/5.0" 0.012 0.010
 ACCESS_LINE_RE = re.compile(
+    r"^(?P<ip>[\d\.:a-fA-F]+) - (?P<user>[^ ]+) \[(?P<time>[^\]]+)\] "
+    r'"(?P<method>[A-Z]+) (?P<uri>[^ ]+) (?P<proto>[^"]+)" '
+    r"(?P<status>\d+) (?P<bytes>\d+) "
+    r'"(?P<referer>[^"]*)" "(?P<agent>[^"]*)" '
+    r'(?P<request_time>[\d\.\-]+) (?P<upstream_time>[\d\.\-]+)'
+)
+
+# Fallback: legacy combined format without timing fields (used during log rotation transition)
+ACCESS_LINE_RE_LEGACY = re.compile(
     r"^(?P<ip>[\d\.:a-fA-F]+) - (?P<user>[^ ]+) \[(?P<time>[^\]]+)\] "
     r'"(?P<method>[A-Z]+) (?P<uri>[^ ]+) (?P<proto>[^"]+)" '
     r"(?P<status>\d+) (?P<bytes>\d+) "
@@ -74,19 +82,20 @@ def parse_nginx_timestamp(ts_str: str) -> str:
         dt = datetime.strptime(base_time, "%d/%b/%Y:%H:%M:%S")
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
-        return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def get_simulated_response_time(uri: str, status_code: int) -> float:
-    """Simulates realistic response times since standard combined log doesn't log it."""
-    if status_code in (502, 504):
-        return round(
-            random.uniform(5000.0, 10000.0), 2
-        )  # Gateway Timeout / Bad Gateway
-    elif "/api/" in uri or "/login" in uri:
-        return round(random.uniform(45.0, 280.0), 2)  # API routes
-    else:
-        return round(random.uniform(5.0, 35.0), 2)  # Static/Root pages
+def parse_request_time(raw: str) -> float:
+    """
+    Convert the nginx $request_time string to milliseconds.
+    nginx logs request_time in seconds (e.g. '0.043').
+    Returns 0.0 if the field is missing or '-' (no upstream).
+    """
+    try:
+        val = float(raw)
+        return round(val * 1000, 2)  # convert seconds → milliseconds
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def run_api_discovery():
@@ -136,7 +145,13 @@ def run_api_discovery():
             skipped_internal = 0
 
             for line in lines:
+                # Try new waf_extended format first (has real timing fields)
                 match = ACCESS_LINE_RE.match(line.strip())
+                is_legacy = False
+                if not match:
+                    # Fall back to old combined format (lines logged before the format change)
+                    match = ACCESS_LINE_RE_LEGACY.match(line.strip())
+                    is_legacy = True
                 if not match:
                     continue
 
@@ -159,11 +174,31 @@ def run_api_discovery():
                 if clean_uri.lower().endswith(STATIC_EXTENSIONS):
                     continue
 
+                # Skip WebSocket upgrade paths
                 if "ws" in clean_uri or "socket" in clean_uri:
                     continue
 
+                # Skip WAF dashboard's own internal API polling paths.
+                # These are requests from the dashboard browser polling /api/stats,
+                # /api/logs, etc. — they must never appear as "discovered" customer endpoints.
+                WAF_INTERNAL_PREFIXES = (
+                    "/api/stats", "/api/logs", "/api/timeline", "/api/top-",
+                    "/api/attack-types", "/api/severity", "/api/health",
+                    "/api/rules", "/api/auth", "/api/ddos", "/api/ml",
+                    "/api/settings", "/api/false-positives", "/api/exclusions",
+                    "/api/api-protection", "/api/hardening", "/api/anti-defacement",
+                )
+                if any(clean_uri.startswith(p) for p in WAF_INTERNAL_PREFIXES):
+                    continue
+
                 timestamp = parse_nginx_timestamp(data["time"])
-                response_time_ms = get_simulated_response_time(uri, status_code)
+
+                # Use real request_time from log if available (new waf_extended format);
+                # fall back to 0.0 for legacy lines written before the format change.
+                if is_legacy:
+                    response_time_ms = 0.0
+                else:
+                    response_time_ms = parse_request_time(data.get("request_time", "-"))
 
                 is_error = status_code >= 400
                 is_malicious = status_code == 403

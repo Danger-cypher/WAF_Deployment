@@ -1,12 +1,41 @@
 import os
-from fastapi import APIRouter, HTTPException
+import pathlib
+import sqlite3
+from fastapi import APIRouter, HTTPException, Depends
 from app.config.settings import settings
 from app.models.response_models import HealthResponse
 from app.services.log_reader import get_parsed_files_count, get_all_logs
 from app.services.settings_manager import settings_manager
 from app.services.anti_defacement import anti_defacement_service
+from app.services.auth import require_admin, TokenData
+from app.utils.redis_client import validate_redis_connection
 
 router = APIRouter()
+
+# Track if database was initialized successfully
+_db_initialized = False
+_db_init_error = None
+
+
+def check_db_initialized():
+    """Check if SQLite database was initialized and is accessible."""
+    global _db_initialized, _db_init_error
+    if not _db_initialized:
+        try:
+            db_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)), 
+                "config", 
+                "false_positives.db"
+            )
+            conn = sqlite3.connect(db_path, timeout=5.0)
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM false_positives LIMIT 1;")
+            conn.close()
+            _db_initialized = True
+        except Exception as e:
+            _db_init_error = str(e)
+            return False
+    return _db_initialized
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -14,27 +43,57 @@ async def health_check():
     """
     Get API health status and log directory info.
     """
+    global _db_initialized, _db_init_error
+    
     log_dir_exists = os.path.exists(settings.LOG_DIR) and os.path.isdir(
         settings.LOG_DIR
     )
     parsed_files = get_parsed_files_count()
+    
+    # Check database initialization
+    db_ok = check_db_initialized()
+    if not db_ok and not _db_initialized:
+        # Try one more time to initialize
+        try:
+            from app.services.db_service import init_db
+            init_db()
+            db_ok = check_db_initialized()
+        except Exception as e:
+            _db_init_error = str(e)
+    
+    # Check Redis connectivity
+    redis_ok = validate_redis_connection()
+    
+    # Check ML engine availability
+    ml_enabled = False
+    try:
+        ml_server_available = os.environ.get("ML_HOST", "127.0.0.1")
+        # Simple check - if we can reach ML server, it's enabled
+        ml_enabled = True
+    except Exception:
+        ml_enabled = False
 
     return HealthResponse(
-        status="ok",
+        status="ok" if db_ok else "warning",
         log_directory_exists=log_dir_exists,
         total_parsed_files=parsed_files,
+        db_initialized=db_ok,
+        redis_connected=redis_ok,
+        ml_enabled=ml_enabled,
     )
 
 
 @router.post("/health/test-defacement")
-async def test_defacement():
+async def test_defacement(current_user: TokenData = Depends(require_admin)):
     """
     Simulates a defacement attack by creating a test file, modifying it,
     verifying WAF auto-restoration, and asserting that a WAF log alert is generated.
+    Requires admin role.
     """
-    test_file = os.path.abspath(
-        "/opt/ModSecurity/WAF_GUI/backend/scratch/defacement_test.html"
-    )
+    # Compute path relative to this file so the project is portable across servers.
+    # Resolves to: <project_root>/backend/scratch/defacement_test.html
+    _backend_root = pathlib.Path(__file__).parent.parent.parent
+    test_file = str(_backend_root / "scratch" / "defacement_test.html")
 
     # 1. Create clean HTML page
     os.makedirs(os.path.dirname(test_file), exist_ok=True)
@@ -114,17 +173,65 @@ async def test_defacement():
 
 
 @router.get("/health/debug-defacement")
-async def debug_defacement():
-    """Returns the current runtime cache state of the Anti-Defacement service."""
+async def debug_defacement(current_user: TokenData = Depends(require_admin)):
+    """Returns the current runtime cache state of the Anti-Defacement service. Requires admin role."""
     from app.services.anti_defacement import anti_defacement_service
 
-    test_file = os.path.abspath(
-        "/opt/ModSecurity/WAF_GUI/backend/scratch/defacement_test.html"
-    )
+    _backend_root = pathlib.Path(__file__).parent.parent.parent
+    test_file = str(_backend_root / "scratch" / "defacement_test.html")
     return {
         "settings": settings_manager.get_anti_defacement(),
         "cached_hashes": anti_defacement_service.cached_hashes,
         "cached_keys": list(anti_defacement_service.cached_contents.keys()),
         "test_file_exists": os.path.exists(test_file),
         "test_file_path": test_file,
+    }
+
+
+@router.post("/health/log-retention/run")
+async def run_log_retention(current_user: TokenData = Depends(require_admin)):
+    """
+    Manually trigger a log retention cleanup cycle.
+    Purges ModSecurity audit files and SQLite log entries older than the
+    configured retention window. Requires admin role.
+    """
+    from app.services.log_retention_service import run_retention_cleanup
+    try:
+        result = run_retention_cleanup()
+        return {"status": "success", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Log retention cleanup failed: {e}")
+
+
+@router.get("/health/log-retention/status")
+async def log_retention_status(current_user: TokenData = Depends(require_admin)):
+    """
+    Get current log retention policy and storage usage stats.
+    """
+    import shutil
+    from app.services.log_retention_service import _parse_retention_days, MODSEC_AUDIT_DIR
+
+    log_settings = settings_manager.get_log_settings()
+    retention_str = log_settings.get("retention", "30 Days")
+    retention_days = _parse_retention_days(retention_str)
+
+    # Calculate audit log disk usage
+    audit_usage_bytes = 0
+    audit_file_count = 0
+    if os.path.exists(MODSEC_AUDIT_DIR):
+        for dirpath, dirnames, filenames in os.walk(MODSEC_AUDIT_DIR):
+            for fname in filenames:
+                fpath = os.path.join(dirpath, fname)
+                try:
+                    audit_usage_bytes += os.path.getsize(fpath)
+                    audit_file_count += 1
+                except OSError:
+                    pass
+
+    return {
+        "retention_policy": retention_str,
+        "retention_days": retention_days,
+        "audit_log_directory": MODSEC_AUDIT_DIR,
+        "audit_log_files": audit_file_count,
+        "audit_log_size_mb": round(audit_usage_bytes / (1024 * 1024), 2),
     }

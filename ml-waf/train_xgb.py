@@ -6,7 +6,7 @@ import datetime
 import numpy as np
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, balanced_accuracy_score
 
 import collect_data
 import feature_pipeline
@@ -143,16 +143,18 @@ def train():
 
         # Bump version if a previous entry exists
         prev_version = meta.get("xgboost", {}).get("version", 0)
-        val_accuracy = float(accuracy_score(y_val, preds))
+        val_accuracy          = float(accuracy_score(y_val, preds))
+        val_balanced_accuracy = float(balanced_accuracy_score(y_val, preds))
 
         meta.setdefault("schema_version", 1)
         meta["xgboost"] = {
-            "version":       prev_version + 1,
-            "type":          "production",
-            "training_date": datetime.datetime.utcnow().isoformat() + "Z",
-            "sample_count":  int(len(X_train)),
-            "accuracy":      round(val_accuracy, 4),
-            "notes":         f"{num_benign} benign + {num_attack} attack samples used for training."
+            "version":           prev_version + 1,
+            "type":              "production",
+            "training_date":     datetime.datetime.utcnow().isoformat() + "Z",
+            "sample_count":      int(len(X_train)),
+            "accuracy":          round(val_accuracy, 4),
+            "balanced_accuracy": round(val_balanced_accuracy, 4),
+            "notes":             f"{num_benign} benign + {num_attack} attack samples used for training."
         }
 
         with open(META_PATH, "w") as mf:

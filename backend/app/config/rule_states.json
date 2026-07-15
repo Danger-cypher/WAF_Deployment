@@ -1,0 +1,550 @@
+{
+  "disabled_rule_ids": [],
+  "paranoia_level": 1,
+  "audit_history": [
+    {
+      "timestamp": "2026-07-13 14:41:14",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-07-10 17:49:38",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-07-04 07:09:58",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "920350",
+      "rule_name": "Host header is a numeric IP address",
+      "details": "Rule state toggled to ENABLE. Reason: Testing endpoint functionality"
+    },
+    {
+      "timestamp": "2026-07-04 07:09:57",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "920350",
+      "rule_name": "Host header is a numeric IP address",
+      "details": "Rule state toggled to DISABLE. Reason: Testing endpoint functionality"
+    },
+    {
+      "timestamp": "2026-06-29 12:33:14",
+      "username": "admin",
+      "action": "sync_signatures",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Successfully downloaded and synchronized latest OWASP Core Rule Set signatures."
+    },
+    {
+      "timestamp": "2026-06-22 12:32:17",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-06-22 12:32:14",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-06-15 16:48:55",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-06-15 12:17:53",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-06-11 16:27:31",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-06-11 16:27:29",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-06-09 14:20:09",
+      "username": "admin",
+      "action": "sync_signatures",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Successfully downloaded and synchronized latest OWASP Core Rule Set signatures."
+    },
+    {
+      "timestamp": "2026-06-04 15:07:03",
+      "username": "admin",
+      "action": "sync_signatures",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Successfully downloaded and synchronized latest OWASP Core Rule Set signatures."
+    },
+    {
+      "timestamp": "2026-06-04 12:41:32",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "920350",
+      "rule_name": "Host header is a numeric IP address",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-06-04 12:10:08",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "920350",
+      "rule_name": "Host header is a numeric IP address",
+      "details": "Rule state toggled to DISABLE. Reason: Legit"
+    },
+    {
+      "timestamp": "2026-06-01 12:22:36",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-06-01 12:22:32",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-27 16:36:22",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-27 16:36:12",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-25 10:53:35",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-25 10:53:22",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-25 10:53:08",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-25 10:52:56",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-25 10:51:01",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-25 10:50:59",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-22 13:14:38",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-05-22 13:14:20",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to DISABLE. Reason: sdfdesf"
+    },
+    {
+      "timestamp": "2026-05-22 13:11:21",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-22 13:11:20",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-22 12:48:50",
+      "username": "admin",
+      "action": "reset",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Restored all OWASP CRS rules to system default enabled state and reset paranoia level to PL1."
+    },
+    {
+      "timestamp": "2026-05-22 12:48:46",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-22 12:48:45",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-22 11:17:04",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-05-22 11:16:44",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to DISABLE. Reason: zszfgr"
+    },
+    {
+      "timestamp": "2026-05-22 11:15:00",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-05-22 11:09:35",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to DISABLE. Reason: naffjk"
+    },
+    {
+      "timestamp": "2026-05-22 11:09:04",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-05-22 11:04:36",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to DISABLE. Reason: Many False Positive"
+    },
+    {
+      "timestamp": "2026-05-22 11:04:08",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-05-22 10:58:16",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "941390",
+      "rule_name": "Javascript method detected",
+      "details": "Rule state toggled to DISABLE. Reason: False positive"
+    },
+    {
+      "timestamp": "2026-05-22 10:55:03",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-22 10:54:58",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-21 18:12:01",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL3 to PL1."
+    },
+    {
+      "timestamp": "2026-05-21 18:11:58",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL3."
+    },
+    {
+      "timestamp": "2026-05-21 18:11:53",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-21 16:23:47",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "941100",
+      "rule_name": "XSS Attack Detected via libinjection",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-05-21 16:23:05",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "941100",
+      "rule_name": "XSS Attack Detected via libinjection",
+      "details": "Rule state toggled to DISABLE. Reason: i dont like it..."
+    },
+    {
+      "timestamp": "2026-05-21 15:16:30",
+      "username": "admin",
+      "action": "reset",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Restored all OWASP CRS rules to system default enabled state and reset paranoia level to PL1."
+    },
+    {
+      "timestamp": "2026-05-21 15:16:26",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-21 15:16:24",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-21 12:28:31",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "901110",
+      "rule_name": "OWASP CRS Rule 901110",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-05-21 12:28:10",
+      "username": "admin",
+      "action": "enable",
+      "rule_id": "920350",
+      "rule_name": "Host header is a numeric IP address",
+      "details": "Rule state toggled to ENABLE. Reason: Enabled from CyberSentinel SOC portal."
+    },
+    {
+      "timestamp": "2026-05-21 12:26:21",
+      "username": "admin",
+      "action": "disable",
+      "rule_id": "901110",
+      "rule_name": "OWASP CRS Rule 901110",
+      "details": "Rule state toggled to DISABLE. Reason: sffwf"
+    },
+    {
+      "timestamp": "2026-05-21 12:23:27",
+      "username": "admin",
+      "action": "reset",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Restored all OWASP CRS rules to system default enabled state and reset paranoia level to PL1."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:13",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL1."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:11",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:11",
+      "username": "admin",
+      "action": "reset",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Restored all OWASP CRS rules to system default enabled state and reset paranoia level to PL1."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:10",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL4."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:09",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL3 to PL2."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:09",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL3."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:08",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:08",
+      "username": "admin",
+      "action": "reset",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Restored all OWASP CRS rules to system default enabled state and reset paranoia level to PL1."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:07",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL3."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:06",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL4 to PL2."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:06",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL3 to PL4."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:06",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL2 to PL3."
+    },
+    {
+      "timestamp": "2026-05-21 12:23:05",
+      "username": "admin",
+      "action": "paranoia_change",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Global OWASP CRS Paranoia Level updated from PL1 to PL2."
+    },
+    {
+      "timestamp": "2026-05-21 12:13:50",
+      "username": "system",
+      "action": "reset",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "WAF Rule Management initialized with OWASP CRS defaults."
+    }
+  ]
+}

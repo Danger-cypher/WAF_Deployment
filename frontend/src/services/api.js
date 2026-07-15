@@ -1,24 +1,48 @@
 const BASE_URL = `${window.location.protocol}//${window.location.host}/api`;
 
+function getCookie(name) {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+  return null;
+}
+
 // Global fetch interceptor to automatically attach authorization header
 const originalFetch = window.fetch;
 window.fetch = async function (url, options = {}) {
   if (url && (url.toString().startsWith(BASE_URL) || url.toString().startsWith('/api'))) {
-    const token = localStorage.getItem('waf_token');
-    if (token) {
+    // 1. Send cookies with the request
+    options.credentials = 'include';
+    
+    // 2. Attach CSRF token if present (for state-changing methods)
+    const csrfToken = getCookie('XSRF-TOKEN-V3');
+    if (csrfToken) {
       options.headers = {
         ...options.headers,
-        'Authorization': `Bearer ${token}`
+        'X-XSRF-TOKEN': csrfToken
       };
     }
   }
   const response = await originalFetch(url, options);
   if (response.status === 401) {
-    localStorage.removeItem('waf_token');
     window.dispatchEvent(new Event('waf-unauthorized'));
   }
   return response;
 };
+
+export async function getCurrentUser() {
+  const response = await fetch(`${BASE_URL}/auth/me`, { credentials: 'include' });
+  if (!response.ok) throw new Error("Not authenticated");
+  return response.json();
+}
+
+export async function logoutUser() {
+  const response = await fetch(`${BASE_URL}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include'
+  });
+  return response.json();
+}
 
 /**
  * Handle API response parsing and errors
@@ -386,7 +410,7 @@ export async function getCustomResponse() {
  */
 export async function saveCustomResponse(settings) {
   try {
-    // WAFs (like ModSecurity CRS) decode Base64 and still detect HTML tags!
+    // WAFs (like CyberSentinel Engine CRS) decode Base64 and still detect HTML tags!
     // To safely bypass the WAF for this admin config, we use placeholder substitution.
     const safeHtml = settings.html_content
       .replace(/</g, '__LT__')
@@ -938,15 +962,89 @@ export async function getMLLogs(page = 1, size = 50, filters = {}) {
   }
 }
 
-/**
- * Fetch ML engine timeline stats
- */
 export async function getMLTimeline() {
   try {
     const response = await fetch(`${BASE_URL}/ml/timeline`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch ML timeline:", error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch all registered protected applications
+ */
+export async function getProtectedApps() {
+  try {
+    const response = await fetch(`${BASE_URL}/apps`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch protected applications:", error);
+    throw error;
+  }
+}
+
+/**
+ * Create a new protected application configuration
+ */
+export async function createProtectedApp(appData) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(appData)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to create protected application:", error);
+    throw error;
+  }
+}
+
+/**
+ * Update details of an existing protected application
+ */
+export async function updateProtectedApp(appId, appData) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(appData)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to update protected application ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Delete a protected application configuration
+ */
+export async function deleteProtectedApp(appId) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}`, {
+      method: 'DELETE'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to delete protected application ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Toggle the active state of a protected application
+ */
+export async function toggleProtectedApp(appId) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}/toggle`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to toggle active status for protected application ${appId}:`, error);
     throw error;
   }
 }

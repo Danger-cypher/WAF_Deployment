@@ -341,12 +341,12 @@ def _run_nginx_reload() -> Tuple[bool, str]:
         subprocess.run(
             ["docker", "exec", "waf-openresty", "nginx", "-t"],
             capture_output=True, text=True, check=True
-        )
+        ) # nosec B603 B607
         # Reload openresty inside Docker container
         subprocess.run(
             ["docker", "exec", "waf-openresty", "openresty", "-s", "reload"],
             capture_output=True, text=True, check=True
-        )
+        ) # nosec B603 B607
         return True, "NGINX configuration validated and reloaded successfully in Docker."
     except (subprocess.CalledProcessError, FileNotFoundError, PermissionError) as e:
         # If the command succeeded but reported syntax error, we must abort! Do not fall through.
@@ -362,14 +362,14 @@ def _run_nginx_reload() -> Tuple[bool, str]:
         # Check config syntax
         subprocess.run(
             ["sudo", "-n", "nginx", "-t"], capture_output=True, text=True, check=True
-        )
+        ) # nosec B603 B607
         # Reload NGINX
         subprocess.run(
             ["sudo", "-n", "systemctl", "reload", "openresty"],
             capture_output=True,
             text=True,
             check=True,
-        )
+        ) # nosec B603 B607
         return True, "NGINX configuration validated and reloaded successfully."
     except PermissionError as e:
         logger.warning(f"Reload permission denied: {e}. Running in simulation mode.")
@@ -395,7 +395,10 @@ def _run_nginx_reload() -> Tuple[bool, str]:
 
 
 def _update_modsecurity_override_file(
-    disabled_ids: List[str], paranoia_level: int
+    disabled_ids: List[str],
+    paranoia_level: int,
+    inbound_anomaly_threshold: int = 5,
+    outbound_anomaly_threshold: int = 4,
 ) -> Tuple[bool, str]:
     """
     Safely writes override directives into /etc/nginx/modsec/rules-override.conf.
@@ -413,6 +416,18 @@ def _update_modsecurity_override_file(
         "",
         "# --- Paranoia Level Configuration ---",
         f'SecAction "id:999999,phase:1,nolog,pass,t:none,setvar:tx.detection_paranoia_level={paranoia_level}"',
+        "",
+        "# --- Anomaly Score Thresholds ---",
+        "# Inbound: block when accumulated CRS score reaches this value.",
+        "# Outbound: block when response leakage score reaches this value.",
+        'SecAction \\',
+        f'    "id:900110,\\',
+        '    phase:1,\\',
+        '    nolog,\\',
+        '    pass,\\',
+        '    t:none,\\',
+        f'    setvar:tx.inbound_anomaly_score_threshold={inbound_anomaly_threshold},\\',
+        f'    setvar:tx.outbound_anomaly_score_threshold={outbound_anomaly_threshold}"',
         "",
         "# --- Disabled WAF Rules ---",
     ]
@@ -838,9 +853,18 @@ def sync_rules_and_exclusions() -> Tuple[bool, str]:
     disabled_ids = state.get("disabled_rule_ids", [])
     paranoia_level = state.get("paranoia_level", 1)
 
+    # Load anomaly thresholds from settings.json (with safe defaults)
+    try:
+        from app.services.settings_manager import settings_manager
+        waf_cfg = settings_manager.get("waf", {})
+        inbound_threshold  = int(waf_cfg.get("inbound_anomaly_score_threshold", 5))
+        outbound_threshold = int(waf_cfg.get("outbound_anomaly_score_threshold", 4))
+    except Exception:
+        inbound_threshold, outbound_threshold = 5, 4
+
     # Write overrides configuration
     write_ok, write_msg = _update_modsecurity_override_file(
-        disabled_ids, paranoia_level
+        disabled_ids, paranoia_level, inbound_threshold, outbound_threshold
     )
     if not write_ok:
         return False, f"Failed to modify override configuration: {write_msg}"

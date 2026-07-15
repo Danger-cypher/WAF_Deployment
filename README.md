@@ -222,26 +222,48 @@ All backend and caching engines run within an isolated virtual network (`waf-net
 * **`waf-ml`** (ML Prediction Engine): Port `9000` (internal only).
 * **`waf-redis`** (Telemetry Store): Port `6379` (secured with internal credentials).
 
-### 2. Quickstart Deployment Commands
+### 2. Quickstart Deployment (Automated Setup)
 
-To compile, link, and launch the WAF and all subsystems:
+To build, configure, and launch the WAF and all subsystems automatically:
 
 ```bash
-# Clone the repository
-cd /opt/ModSecurity/WAF_GUI
-
-# Compile the production React build (from host)
-cd frontend && npm install && npm run build && cd ..
-
-# Build and start all Docker services in detached mode
-sudo docker compose up -d --build
+# Run the automated interactive installer wizard
+./setup.sh
 ```
+
+*This script verifies system prerequisites, creates environment keys, configures SSL/TLS certificates, acquires the GeoIP database, hashes administrative accounts, builds the container services, and validates health checks.*
+
+#### 🚀 **Production Deployment**
+
+For production environments, the setup script now includes:
+- **SSL Certificate Options**: Self-signed (dev), existing certificates (production), or Let's Encrypt
+- **CORS Configuration**: Automatic production domain setup
+- **Security Hardening**: Prompts for secure passwords and secrets
+
+**For detailed production deployment instructions**, including:
+- Valid SSL certificate installation
+- CORS configuration for production domains
+- Security hardening checklist
+- Load testing and troubleshooting
+
+Please refer to: **[Production Deployment Guide](PRODUCTION_GUIDE.md)**
+
+#### 🔧 **Update Existing Deployment**
+
+If you need to update SSL certificates or CORS settings on an already-running system:
+
+```bash
+# Run the production configuration tool
+sudo ./scripts/configure-production.sh
+```
+
+For manual step-by-step custom deployment instructions, please refer to the comprehensive [Client Deployment & Operations Guide](CLIENT_GUIDE.md).
 
 ### 3. Management & Maintenance
 
 * **Reload Nginx / Apply Rules**:
   ```bash
-  sudo docker exec waf-openresty nginx -s reload
+  sudo docker exec waf-openresty openresty -s reload
   ```
 * **Verify System Health**:
   ```bash
@@ -251,8 +273,7 @@ sudo docker compose up -d --build
   ```bash
   sudo docker compose ps
   ```
-* **Rebuild Backend Routes after changes**:
+* **Inspect Live logs**:
   ```bash
-  sudo docker compose up -d --build backend
+  tail -f logs/nginx/error.log
   ```
-

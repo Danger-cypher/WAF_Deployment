@@ -3,8 +3,8 @@ import stat
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends
 from typing import Optional
 from app.models.response_models import PaginatedLogs
-from app.services.auth import require_any_role, TokenData
-from app.services.log_reader import get_all_logs, list_newest_log_files
+from app.services.auth import require_any_role, require_admin, TokenData
+from app.services.log_reader import get_all_logs, get_blocked_logs_only, list_newest_log_files
 from app.config.settings import settings
 from app.websocket.connection_manager import manager
 
@@ -26,7 +26,7 @@ async def get_logs(
     current_user: TokenData = Depends(require_any_role),
 ):
     """
-    Fetch paginated, filtered logs.
+    Fetch paginated, filtered logs showing ONLY blocked threats (not all analyzed traffic).
 
     - severity: exact match (e.g. 'High')
     - min_severity: threshold match — returns events at or above this level.
@@ -36,7 +36,8 @@ async def get_logs(
     # Severity ordering used for min_severity threshold filtering
     SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
-    logs = get_all_logs()
+    # Get ONLY blocked logs (4xx/5xx status codes)
+    logs = get_blocked_logs_only()
 
     # Apply filters
     if severity:
@@ -86,8 +87,9 @@ from app.models.log_model import LogEntry
 async def get_log_by_id(log_id: str, current_user: TokenData = Depends(require_any_role)):
     """
     Fetch a single WAF log entry by its unique transaction ID.
+    Searches in blocked logs only (threats that were actually blocked).
     """
-    logs = get_all_logs()
+    logs = get_blocked_logs_only()
     for log in logs:
         if log.id == log_id:
             return log
@@ -109,10 +111,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 @router.get("/debug/logs")
-async def debug_logs(current_user: TokenData = Depends(require_any_role)):
+async def debug_logs(current_user: TokenData = Depends(require_admin)):
     """
     Debug endpoint: lists all discovered log files, their permissions, and readability.
-    Use this to diagnose why logs may not be appearing.
+    Use this to diagnose why logs may not be appearing. Requires admin role.
     """
     files = list_newest_log_files(limit=50)
 

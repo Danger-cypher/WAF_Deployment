@@ -49,7 +49,11 @@ def get_training_datasets() -> tuple[list, list]:
     """
     # 0. Try to fetch from SQLite first (primary data source)
     import sqlite3
-    DB_PATH = "/opt/ModSecurity/WAF_GUI/backend/app/data/ml_events.db"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DB_PATH = os.environ.get(
+        "ML_DB_PATH",
+        os.path.abspath(os.path.join(BASE_DIR, "..", "backend", "app", "data", "ml_events.db"))
+    )
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)

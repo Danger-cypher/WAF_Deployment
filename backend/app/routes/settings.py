@@ -346,7 +346,7 @@ async def restart_system(current_user: TokenData = Depends(require_admin)):
         # Check if Docker is available in the environment
         docker_available = False
         try:
-            res = subprocess.run(["docker", "--version"], capture_output=True)
+            res = subprocess.run(["docker", "--version"], capture_output=True)  # nosec B603 B607
             if res.returncode == 0:
                 docker_available = True
         except Exception:
@@ -360,7 +360,7 @@ async def restart_system(current_user: TokenData = Depends(require_admin)):
                 capture_output=True,
                 text=True,
                 timeout=20
-            )
+            )  # nosec B603 B607
             if result.returncode != 0:
                 logger.error(f"Restart waf-openresty container failed: {result.stderr}")
                 raise HTTPException(
@@ -374,7 +374,7 @@ async def restart_system(current_user: TokenData = Depends(require_admin)):
                 capture_output=True,
                 text=True,
                 timeout=20
-            )
+            )  # nosec B603 B607
             if result_ml.returncode != 0:
                 logger.warning(f"Restart waf-ml container failed: {result_ml.stderr}")
 
@@ -386,7 +386,7 @@ async def restart_system(current_user: TokenData = Depends(require_admin)):
             capture_output=True,
             text=True,
             timeout=15
-        )
+        )  # nosec B603 B607
         if result.returncode != 0:
             logger.error(f"Restart openresty failed: {result.stderr}")
             raise HTTPException(
@@ -400,7 +400,7 @@ async def restart_system(current_user: TokenData = Depends(require_admin)):
             capture_output=True,
             text=True,
             timeout=15
-        )
+        )  # nosec B603 B607
         
         return {"message": "WAF ModSecurity Engine and ML Daemon restarted successfully."}
     except subprocess.TimeoutExpired:

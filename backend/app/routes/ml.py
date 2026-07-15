@@ -6,7 +6,16 @@ from app.services.auth import require_any_role, TokenData
 
 router = APIRouter()
 
-DB_PATH = "/opt/ModSecurity/WAF_GUI/backend/app/data/ml_events.db"
+DB_PATH = os.environ.get(
+    "ML_DB_PATH",
+    os.path.abspath(
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "data",
+            "ml_events.db"
+        )
+    )
+)
 
 
 def get_db_connection():
@@ -113,7 +122,7 @@ async def get_ml_logs(
             params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
         # Get count
-        count_query = f"SELECT COUNT(*) FROM ({query})"
+        count_query = f"SELECT COUNT(*) FROM ({query})"  # nosec B608
         cursor.execute(count_query, params)
         total = cursor.fetchone()[0]
 
@@ -124,7 +133,11 @@ async def get_ml_logs(
 
         cursor.execute(query, params)
         rows = cursor.fetchall()
-        data = [dict(r) for r in rows]
+        
+        data = []
+        for r in rows:
+            d = dict(r)
+            data.append(d)
 
         conn.close()
         return {"data": data, "total": total, "page": page, "size": size}
@@ -141,7 +154,7 @@ async def get_ml_timeline(current_user: TokenData = Depends(require_any_role)):
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Group by 15 minute intervals, limit to last 100 buckets
+        # Group by 15 minute intervals in UTC, limit to last 100 buckets
         cursor.execute("""
             SELECT 
                 strftime('%Y-%m-%d %H:', timestamp) || 

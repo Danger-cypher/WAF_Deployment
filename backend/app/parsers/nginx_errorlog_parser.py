@@ -3,6 +3,7 @@ import os
 import logging
 from typing import List, Optional
 from datetime import datetime
+import pytz
 from app.models.log_model import LogEntry
 from app.utils.attack_classifier import classify_attack
 from app.utils.geoip_manager import geoip_manager
@@ -62,10 +63,10 @@ def parse_nginx_error_log(log_path: str = "/var/log/nginx/error.log") -> List[Lo
                 if entry:
                     entries.append(entry)
 
-        # Sort by timestamp, newest first
+        # Sort by timestamp, newest first (ISO 8601 format: "2026-07-09 07:22:53")
         def parse_time(e):
             try:
-                return datetime.strptime(e.timestamp, "%a %b %d %H:%M:%S %Y")
+                return datetime.fromisoformat(e.timestamp)
             except Exception:
                 return datetime.min
 
@@ -120,7 +121,7 @@ def _parse_modsec_line(line: str) -> Optional[LogEntry]:
             # Generate a deterministic ID from the line content if no unique_id
             import hashlib
 
-            unique_id = hashlib.md5(line.encode()).hexdigest()[:16]
+            unique_id = hashlib.sha256(line.encode()).hexdigest()[:16]
 
         # For anomaly scoring rule (949110/980130), infer attack from message content
         if rule_id in ("949110", "980130"):
@@ -128,11 +129,15 @@ def _parse_modsec_line(line: str) -> Optional[LogEntry]:
         else:
             attack_type, severity = classify_attack(rule_id)
 
-        # Parse timestamp
+        # Parse timestamp — store as ISO 8601 UTC so the frontend can parse/sort it reliably
         timestamp_str = date_str
         try:
             dt = datetime.strptime(date_str, "%Y/%m/%d %H:%M:%S")
-            timestamp_str = dt.strftime("%a %b %d %H:%M:%S %Y")
+            # Convert to UTC since nginx error logs are in server local time (IST)
+            local_tz = pytz.timezone('Asia/Kolkata')
+            dt_local = local_tz.localize(dt)
+            dt_utc = dt_local.astimezone(pytz.UTC)
+            timestamp_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, AttributeError):
             pass
 
@@ -219,7 +224,8 @@ def _classify_from_message(message: str, uri: str, full_line: str) -> tuple:
         severity = "Low"
 
     # Try to infer attack type from URI and request content
-    uri.lower()
+    import urllib.parse
+    uri_lower = urllib.parse.unquote(uri).lower()
     line_lower = full_line.lower()
 
     if any(
@@ -233,7 +239,7 @@ def _classify_from_message(message: str, uri: str, full_line: str) -> tuple:
             "xss",
             "%3cscript",
         ]
-    ):
+    ) or any(x in uri_lower for x in ["<script", "xss", "alert(", "javascript:"]):
         return "XSS", severity
     elif any(
         x in line_lower
@@ -247,12 +253,12 @@ def _classify_from_message(message: str, uri: str, full_line: str) -> tuple:
             "'or'",
             "sql",
         ]
-    ):
+    ) or any(x in uri_lower for x in ["select ", "union ", "or 1=1", "sql"]):
         return "SQL Injection", severity
     elif any(
         x in line_lower
-        for x in ["../", "..\\", "/etc/passwd", "directory traversal", "lfi", "rfi"]
-    ):
+        for x in ["../", "..%2f", "/etc/passwd", "directory traversal", "lfi", "rfi"]
+    ) or any(x in uri_lower for x in ["../", "..%2f", "/etc/passwd"]):
         return "LFI/RFI", severity
     elif any(
         x in line_lower

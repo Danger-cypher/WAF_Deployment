@@ -2,6 +2,8 @@ import json
 import logging
 import os
 from typing import Optional
+from datetime import datetime
+import pytz
 from app.models.log_model import LogEntry
 from app.utils.attack_classifier import classify_attack
 from app.utils.geoip_manager import geoip_manager
@@ -43,7 +45,21 @@ def parse_modsec_audit_json(file_path: str, log_dir: str) -> Optional[LogEntry]:
             messages = transaction.get("messages", [])
 
             client_ip = transaction.get("client_ip", "")
-            timestamp = transaction.get("time_stamp", transaction.get("time", ""))
+            raw_timestamp = transaction.get("time_stamp", transaction.get("time", ""))
+            timestamp = raw_timestamp
+            if raw_timestamp:
+                try:
+                    import re
+                    # Parse ModSecurity timestamp: "Mon Jul 13 12:38:54 2026" (server local time)
+                    clean_ts = re.sub(r"\s+", " ", raw_timestamp.strip())
+                    dt = datetime.strptime(clean_ts, "%a %b %d %H:%M:%S %Y")
+                    # Convert to UTC since the server runs in IST (UTC+5:30)
+                    local_tz = pytz.timezone('Asia/Kolkata')
+                    dt_local = local_tz.localize(dt)
+                    dt_utc = dt_local.astimezone(pytz.UTC)
+                    timestamp = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    pass
             transaction_id = transaction.get(
                 "unique_id", transaction.get("transaction_id", "")
             )
@@ -78,11 +94,15 @@ def parse_modsec_audit_json(file_path: str, log_dir: str) -> Optional[LogEntry]:
                             message_text = current_m_txt
                             attack_type = current_a_type
                             severity = current_sev
-                    # If they are equal severity, prefer specific attacks over generic protocol violations
                     elif severity_weights.get(current_sev, 0) == severity_weights.get(
                         severity, 0
                     ):
-                        if current_a_type not in [
+                        # Only overwrite if the existing attack type is generic/unknown
+                        if attack_type in [
+                            "Protocol Violation",
+                            "Anomaly Threshold Exceeded",
+                            "Unknown",
+                        ] and current_a_type not in [
                             "Protocol Violation",
                             "Anomaly Threshold Exceeded",
                             "Unknown",

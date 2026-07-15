@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from app.models.log_model import LogEntry
 
 
@@ -17,6 +17,7 @@ class StatsResponse(BaseModel):
     xss_count: int
     top_attack_type: str
     total_unique_ips: int
+    recent_threats: int = 0
 
 
 class TimelineEntry(BaseModel):
@@ -32,3 +33,6 @@ class HealthResponse(BaseModel):
     status: str
     log_directory_exists: bool
     total_parsed_files: int
+    db_initialized: Optional[bool] = None
+    redis_connected: Optional[bool] = None
+    ml_enabled: Optional[bool] = None

@@ -15,6 +15,9 @@ parsed_entries: Dict[str, LogEntry] = {}
 
 # Path to nginx error log (readable by soc user via adm group)
 NGINX_ERROR_LOG = "/var/log/nginx/error.log"
+# Rotated copy written by logrotate at midnight — always include both
+# Note: error.log.1 is the most recent rotated file (current night's logs)
+NGINX_ERROR_LOG_ROTATED = "/var/log/nginx/error.log.1"
 
 # Cache state to optimize redundant disk polling and JSON parsing
 cached_logs: List[LogEntry] = []
@@ -26,6 +29,7 @@ def list_newest_log_files(limit: int = 5000) -> List[str]:
     """
     Chronologically traverses day-level and minute-level subdirectories of settings.LOG_DIR
     to retrieve the newest audit files, bypassing full directory globbing.
+    Only returns files with .json extension.
     """
     import re
 
@@ -138,8 +142,13 @@ def get_all_logs() -> List[LogEntry]:
     # Rescan JSON audit directory
     scan_log_directory()
 
-    # Always read from nginx error log (readable via adm group)
-    nginx_entries = parse_nginx_error_log(NGINX_ERROR_LOG)
+    # Read from nginx error log AND its rotated copy to survive nightly logrotate.
+    # After midnight logrotate runs: error.log is empty, all entries are in error.log.1.
+    # Merging both ensures the blocked count never drops to 0 after rotation.
+    nginx_entries: List[LogEntry] = []
+    for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
+        if os.path.isfile(log_path):
+            nginx_entries.extend(parse_nginx_error_log(log_path))
 
     # Build a merged map: unique_id -> LogEntry, preferring JSON audit log data
     # (more detailed) over error log data
@@ -153,12 +162,14 @@ def get_all_logs() -> List[LogEntry]:
     for entry in parsed_entries.values():
         merged[entry.id] = entry
 
-    # Sort by timestamp (newest first)
+    # Return ALL merged logs (no filtering by HTTP code)
+    # This is used for stats, timeline, and analytics
     result = list(merged.values())
 
+    # Sort by timestamp (newest first)
     def parse_time(e):
         try:
-            return datetime.strptime(e.timestamp, "%a %b %d %H:%M:%S %Y")
+            return datetime.fromisoformat(e.timestamp)
         except Exception:
             return datetime.min
 
@@ -173,5 +184,51 @@ def get_all_logs() -> List[LogEntry]:
     return result
 
 
+def get_total_blocked_count() -> int:
+    """
+    Returns an accurate total count of ALL ModSecurity blocks across both the
+    current and most recent rotated error log — without the 5000-entry cap
+    that get_all_logs() imposes for dashboard display performance.
+    This is the authoritative number for the 'Blocked WAF Threats' card.
+    """
+    import re
+    MODSEC_BLOCK_RE = re.compile(r"ModSecurity: Access denied")
+    count = 0
+    for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
+        if not os.path.isfile(log_path):
+            continue
+        try:
+            with open(log_path, 'rb') as f:
+                for raw_line in f:
+                    try:
+                        line = raw_line.decode('utf-8', errors='replace')
+                        if MODSEC_BLOCK_RE.search(line):
+                            count += 1
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"Could not read {log_path} for block count: {e}")
+    return count
+
+
 def get_parsed_files_count() -> int:
     return len(parsed_entries)
+
+
+def get_blocked_logs_only() -> List[LogEntry]:
+    """
+    Get only BLOCKED logs (HTTP 4xx/5xx status codes).
+    Used for the dashboard logs page to show only threats, not all analyzed traffic.
+    """
+    all_logs = get_all_logs()
+    
+    blocked_logs = []
+    for entry in all_logs:
+        # Include entries with error status codes (blocked/denied)
+        if entry.http_code and entry.http_code.startswith(('4', '5')):
+            blocked_logs.append(entry)
+        # Also include entries from error log (always blocks) even if http_code is missing
+        elif entry.violations and len(entry.violations) > 0 and not entry.http_code:
+            blocked_logs.append(entry)
+    
+    return blocked_logs

@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-ML_DIR="/opt/ModSecurity/WAF_GUI/ml-waf"
+ML_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 VENV_PYTHON="${ML_DIR}/venv/bin/python3"
 MODELS_DIR="${ML_DIR}/models"
 BACKUP_DIR="${ML_DIR}/models/backups"
@@ -114,8 +114,7 @@ log "Validating new XGBoost model accuracy against threshold (>= ${MIN_ACCURACY}
 
 NEW_ACCURACY=$("$VENV_PYTHON" - <<'PYEOF'
 import json, sys, os
-meta_path = os.path.join(os.path.dirname(os.path.abspath("$0")),
-    "/opt/ModSecurity/WAF_GUI/ml-waf/models/model_metadata.json")
+meta_path = os.path.join("${MODELS_DIR}", "model_metadata.json")
 try:
     with open(meta_path) as f:
         meta = json.load(f)
@@ -173,20 +172,33 @@ for MODEL_FILE in xgboost.pkl isolation_forest.pkl; do
 done
 
 # --- Step 7: Restart the ml-waf FastAPI daemon to load new models ---
-log "Restarting ${SERVICE_NAME} service to load new model binaries..."
+log "Triggering model reload in running FastAPI instances..."
 
-# Try systemctl first (if registered as a service)
-if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-    systemctl restart "$SERVICE_NAME"
-    success "${SERVICE_NAME} systemctl service restarted."
-else
-    # Fallback: restart via the uvicorn process directly
-    log "systemctl service not found. Restarting via uvicorn process signal..."
-    UVICORN_PID=$(pgrep -f "uvicorn ml_server:app" | head -n 1)
-    if [ -n "$UVICORN_PID" ]; then
-        kill -HUP "$UVICORN_PID" 2>/dev/null && success "Sent SIGHUP to uvicorn process (PID ${UVICORN_PID})."
+RELOAD_OK=false
+for PORT in 9000 8003; do
+    HTTP_STATUS=$(curl -s -o /tmp/reload_response.json -X POST "http://localhost:${PORT}/reload" -w "%{http_code}" --max-time 5 2>/dev/null || echo "000")
+    if [ "$HTTP_STATUS" = "200" ]; then
+        success "  Successfully triggered dynamic model reload on port ${PORT}."
+        RELOAD_OK=true
+        break
+    fi
+done
+
+if [ "$RELOAD_OK" = "false" ]; then
+    warn "API reload failed or service not running. Attempting service restarts..."
+    # Try systemctl first (if registered as a service)
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        systemctl restart "$SERVICE_NAME"
+        success "  ${SERVICE_NAME} systemctl service restarted."
     else
-        warn "Could not find a running ml-waf uvicorn process to restart. New models will load on next service start."
+        # Fallback: restart via the uvicorn process directly
+        log "  systemctl service not found. Restarting via uvicorn process signal..."
+        UVICORN_PID=$(pgrep -f "uvicorn ml_server:app" | head -n 1)
+        if [ -n "$UVICORN_PID" ]; then
+            kill -HUP "$UVICORN_PID" 2>/dev/null && success "  Sent SIGHUP to uvicorn process (PID ${UVICORN_PID})."
+        else
+            warn "  Could not find a running ml-waf uvicorn process to restart. New models will load on next service start."
+        fi
     fi
 fi
 
@@ -194,15 +206,31 @@ fi
 log "Waiting 5 seconds for service to initialize..."
 sleep 5
 
-log "Checking health endpoint over socket: ${UDS_SOCKET}"
-HTTP_STATUS=$(curl -s -o /tmp/health_response.json --unix-socket "$UDS_SOCKET" -w "%{http_code}" --max-time 10 "http://localhost/health" 2>/dev/null || echo "000")
+log "Checking health endpoint..."
+HTTP_STATUS="000"
+
+# 1. Try UDS socket first if it exists
+if [ -S "$UDS_SOCKET" ]; then
+    log "  Checking over UDS socket: ${UDS_SOCKET}"
+    HTTP_STATUS=$(curl -s -o /tmp/health_response.json --unix-socket "$UDS_SOCKET" -w "%{http_code}" --max-time 10 "http://localhost/health" 2>/dev/null || echo "000")
+fi
+
+# 2. Fallback to TCP ports if UDS check failed
+if [ "$HTTP_STATUS" != "200" ]; then
+    for PORT in 9000 8003; do
+        log "  Checking health on port: ${PORT}"
+        HTTP_STATUS=$(curl -s -o /tmp/health_response.json -w "%{http_code}" --max-time 5 "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
+        if [ "$HTTP_STATUS" = "200" ]; then
+            break
+        fi
+    done
+fi
 
 if [ "$HTTP_STATUS" = "200" ]; then
     HEALTH_BODY=$(cat /tmp/health_response.json 2>/dev/null || echo "{}")
     success "Health check passed (HTTP ${HTTP_STATUS}): ${HEALTH_BODY}"
 else
     warn "Health check returned HTTP ${HTTP_STATUS}. Service may still be starting."
-    warn "Check manually: curl --unix-socket ${UDS_SOCKET} http://localhost/health"
 fi
 
 # --- Done ---

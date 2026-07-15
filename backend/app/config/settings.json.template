@@ -1,0 +1,110 @@
+{
+  "_comment": "CyberSentinel WAF Configuration Template - SECURITY SENSITIVE FILE",
+  "_warning": "DO NOT commit this file with real credentials to version control!",
+  "_instructions": "Replace placeholder password hashes with bcrypt-hashed passwords",
+  
+  "general": {
+    "refreshInterval": "3s",
+    "logsPerPage": "50",
+    "liveUpdates": true
+  },
+  
+  "waf": {
+    "secRuleEngine": "On",
+    "detectionMode": "Blocking",
+    "paranoiaLevel": 2,
+    "inbound_anomaly_score_threshold": 5,
+    "outbound_anomaly_score_threshold": 4
+  },
+  
+  "logs": {
+    "auditEnabled": true,
+    "logFormat": "JSON",
+    "concurrentLogging": true,
+    "retention": "30 Days"
+  },
+  
+  "auth": {
+    "_comment": "SECURITY: Generate password hashes using: python3 -c 'import bcrypt; print(bcrypt.hashpw(b\"YourPassword\", bcrypt.gensalt()).decode())'",
+    "password_hash": "$2b$12$REPLACE_WITH_BCRYPT_HASH_FOR_ADMIN_PASSWORD",
+    "analyst_password_hash": "$2b$12$REPLACE_WITH_BCRYPT_HASH_FOR_ANALYST_PASSWORD",
+    "mfa_enabled": false,
+    "mfa_secret": "",
+    "analyst_mfa_enabled": false,
+    "analyst_mfa_secret": ""
+  },
+  
+  "auto_learning": {
+    "enabled": false,
+    "learning_period": "7 Days",
+    "confidence_threshold": 90
+  },
+  
+  "custom_response": {
+    "html_content": "<!DOCTYPE html>\n<html>\n<head>\n<title>403 Forbidden</title>\n<style>\nbody { font-family: sans-serif; text-align: center; padding: 50px; background-color: #f4f4f5; }\nh1 { color: #ef4444; }\n.incident-id { font-family: monospace; background: #e4e4e7; padding: 5px; border-radius: 4px; }\n</style>\n</head>\n<body>\n<h1>Access Denied</h1>\n<p>Your request was blocked by the Web Application Firewall due to security policies.</p>\n<p>If you believe this is an error, please contact support and provide the following transaction ID:</p>\n<p>Transaction ID: <span class=\"incident-id\">{{transaction_id}}</span></p>\n</body>\n</html>"
+  },
+  
+  "positive_security": {
+    "allowed_methods": [
+      "GET",
+      "POST",
+      "HEAD"
+    ],
+    "allowed_content_types": [
+      "application/json",
+      "application/x-www-form-urlencoded",
+      "multipart/form-data"
+    ],
+    "restricted_extensions": [
+      ".bak",
+      ".config",
+      ".env",
+      ".log",
+      ".sql",
+      ".ini"
+    ]
+  },
+  
+  "ddos_bot_mitigation": {
+    "rate_limit_rps": 99,
+    "burst_tolerance": 204,
+    "trusted_ips": [
+      "10.0.0.1",
+      "192.168.1.0/24"
+    ],
+    "bot_mitigation_action": "Silent Drop",
+    "advanced_rules": [
+      {
+        "id": "rule_test_api_123",
+        "name": "Limit per Session Cookie",
+        "parameter_type": "Session",
+        "parameter_value": "sessionid",
+        "rate_limit_rps": 10,
+        "burst_tolerance": 20,
+        "enabled": true
+      }
+    ]
+  },
+  
+  "hardening": {
+    "hsts_enabled": true,
+    "hsts_max_age": 31536000,
+    "server_cloaking": true,
+    "ip_blacklist": [],
+    "ip_whitelist": []
+  },
+  
+  "anti_defacement": {
+    "enabled": true,
+    "monitored_files": [
+      "/opt/cybersentinel/example/public/index.html"
+    ],
+    "check_interval_seconds": 5
+  },
+  
+  "abuseipdb": {
+    "_comment": "SECURITY: Move this to environment variable ABUSEIPDB_API_KEY",
+    "enabled": false,
+    "api_key": "REPLACE_WITH_YOUR_ABUSEIPDB_API_KEY_OR_USE_ENV_VAR"
+  }
+}
