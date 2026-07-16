@@ -439,6 +439,39 @@ if [ -z "$ANALYST_PASS" ]; then
     ANALYST_PASS="analyst123"
 fi
 
+# ── Step 5b: Initialize OWASP Core Rule Set on Host ────────────────────────
+CRS_DIR="configs/nginx/modsec/coreruleset"
+if [ ! -f "$CRS_DIR/crs-setup.conf" ]; then
+    log "OWASP Core Rule Set not found on host. Downloading and extracting latest release..."
+    mkdir -p "$CRS_DIR"
+    
+    # Fetch latest release tag from GitHub API
+    CRS_LATEST=$(curl -sf https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+        | grep '"tag_name"' | sed 's/.*"tag_name": "\(.*\)".*/\1/' || echo "v4.0.0")
+    log "  Latest Core Rule Set release detected: ${CRS_LATEST}"
+    
+    # Download and extract to temporary directory
+    curl -sL "https://github.com/coreruleset/coreruleset/archive/refs/tags/${CRS_LATEST}.tar.gz" -o /tmp/crs.tar.gz
+    tar -xzf /tmp/crs.tar.gz -C /tmp
+    
+    # Move files to config directory
+    CRS_TEMP_DIR=$(ls /tmp | grep coreruleset- | head -1)
+    if [ -n "$CRS_TEMP_DIR" ]; then
+        # Copy contents of extracted folder to coreruleset directory
+        cp -r /tmp/${CRS_TEMP_DIR}/* "$CRS_DIR/"
+        # Copy example configuration if crs-setup.conf doesn't exist
+        if [ ! -f "$CRS_DIR/crs-setup.conf" ]; then
+            cp "$CRS_DIR/crs-setup.conf.example" "$CRS_DIR/crs-setup.conf" 2>/dev/null || true
+        fi
+        success "OWASP Core Rule Set successfully installed to $CRS_DIR"
+    else
+        error "Failed to extract OWASP Core Rule Set. Check internet connection."
+    fi
+    
+    # Clean up temp files
+    rm -rf /tmp/crs.tar.gz /tmp/coreruleset-*
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 6: Docker Compose Build & Deploy
 # ─────────────────────────────────────────────────────────────────────────────
