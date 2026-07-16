@@ -123,13 +123,7 @@ def init_db():
                 )
             """)
 
-            # Seed default application if table is empty
-            cursor.execute("SELECT COUNT(*) FROM protected_apps")
-            if cursor.fetchone()[0] == 0:
-                cursor.execute("""
-                    INSERT INTO protected_apps (name, domain, upstream_host, upstream_port, protocol, is_active)
-                    VALUES ('Default MSSP App', '_', 'host.docker.internal', 7000, 'http', 1)
-                """)
+
 
             # Run migrations for protected_apps schema changes
             for col, default in [
