@@ -224,14 +224,24 @@ All backend and caching engines run within an isolated virtual network (`waf-net
 
 ### 2. Quickstart Deployment (Automated Setup)
 
-To build, configure, and launch the WAF and all subsystems automatically:
+To build, configure, and launch the WAF and all subsystems automatically, you can run the zero-dependency installer. If Docker or Docker Compose is missing on your server, the script will automatically install it:
 
+**Option A: One-Command Installation (Direct from GitHub)**
 ```bash
-# Run the automated interactive installer wizard
-./setup.sh
+curl -fsSL https://raw.githubusercontent.com/Danger-cypher/WAF_Deployment/main/setup.sh -o setup.sh && chmod +x setup.sh && sudo ./setup.sh
 ```
 
-*This script verifies system prerequisites, creates environment keys, configures SSL/TLS certificates, acquires the GeoIP database, hashes administrative accounts, builds the container services, and validates health checks.*
+**Option B: Standard Clone & Install**
+```bash
+# Clone the repository
+git clone https://github.com/Danger-cypher/WAF_Deployment.git
+cd WAF_Deployment
+
+# Run the automated installer wizard
+sudo ./setup.sh
+```
+
+*This script automatically installs system dependencies (Docker & Compose), adds the user to the docker group, generates secure environment keys, configures SSL/TLS certificates, acquires the GeoIP database, hashes administrative accounts, pre-creates configuration files to avoid startup parsing errors, builds the container services, and validates health checks.*
 
 #### 🚀 **Production Deployment**
 
