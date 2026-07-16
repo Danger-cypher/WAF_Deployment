@@ -233,11 +233,13 @@ curl -fsSL https://raw.githubusercontent.com/Danger-cypher/WAF_Deployment/main/s
 
 **Option B: Standard Clone & Install**
 ```bash
-# Clone the repository
-git clone https://github.com/Danger-cypher/WAF_Deployment.git
-cd WAF_Deployment
+# 1. Clone the deployment repository
+sudo git clone https://github.com/Danger-cypher/WAF_Deployment.git /opt/cybersentinel
 
-# Run the automated installer wizard
+# 2. Navigate to the folder
+cd /opt/cybersentinel
+
+# 3. Run the setup script
 sudo ./setup.sh
 ```
 
