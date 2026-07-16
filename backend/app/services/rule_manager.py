@@ -431,8 +431,14 @@ def _update_modsecurity_override_file(
         "",
         "# --- Disabled WAF Rules ---",
     ]
+    lines.append("# --- Always allow REST HTTP methods (DELETE, PUT, PATCH) ---")
+    lines.append("SecRuleRemoveById 911100")
+    lines.append("")
+
     for rid in disabled_ids:
-        lines.append(f"SecRuleRemoveById {rid}")
+        # Prevent duplicate rules
+        if str(rid) != "911100":
+            lines.append(f"SecRuleRemoveById {rid}")
 
     lines.append("")
     lines.append("# --- Active Custom Exclusions & Exceptions ---")
