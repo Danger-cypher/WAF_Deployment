@@ -41,9 +41,9 @@ class Settings(BaseSettings):
     LOG_DIR: str = "/var/log/modsecurity/audit"
 
     # Security
-    JWT_SECRET_KEY: str
-    JWT_ALGORITHM: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int
+    JWT_SECRET_KEY: str = ""
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
     class Config:
         case_sensitive = True

@@ -1,0 +1,12 @@
+grep-module: rc=1
+stdout=
+stderr=
+
+grep-geoip: rc=1
+stdout=
+stderr=
+
+grep-compat: rc=1
+stdout=
+stderr=
+

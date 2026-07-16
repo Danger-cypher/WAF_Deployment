@@ -20,6 +20,7 @@ from app.routes import (
     ml,
     security_audit,
     apps,
+    alerts,
 )
 from app.services.log_reader import scan_log_directory
 from app.websocket.connection_manager import start_log_watcher
@@ -207,6 +208,8 @@ app.include_router(ddos.router, tags=["DDoS Protection"], dependencies=csrf_deps
 app.include_router(ml.router, tags=["ML Engine"], dependencies=csrf_deps)
 app.include_router(security_audit.router, prefix="/security", tags=["Security Audit"])
 app.include_router(apps.router, tags=["Protected Apps"], dependencies=csrf_deps)
+app.include_router(alerts.router, tags=["Alerts"], dependencies=csrf_deps)
+app.include_router(alerts.trigger_router, tags=["Alerts"])
 
 if __name__ == "__main__":
     import uvicorn

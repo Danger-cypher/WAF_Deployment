@@ -972,6 +972,73 @@ export async function getMLTimeline() {
   }
 }
 
+export async function getMLModelInfo() {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/model-info`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch ML model info:", error);
+    throw error;
+  }
+}
+
+export async function triggerMLRetrain() {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/retrain`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to trigger ML retraining:", error);
+    throw error;
+  }
+}
+
+export async function getMLRetrainStatus() {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/retrain/status`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch ML retraining status:", error);
+    throw error;
+  }
+}
+
+export async function getMLBackups() {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/backups`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch ML backups:", error);
+    throw error;
+  }
+}
+
+export async function rollbackMLModel(timestamp) {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/rollback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timestamp })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to rollback ML model:", error);
+    throw error;
+  }
+}
+
+export async function getMLFeatureImportance() {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/feature-importance`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch ML feature importance:", error);
+    throw error;
+  }
+}
+
 /**
  * Fetch all registered protected applications
  */
@@ -1048,3 +1115,161 @@ export async function toggleProtectedApp(appId) {
     throw error;
   }
 }
+
+// ============================================================================
+// Alert Configuration API
+// ============================================================================
+
+export async function getAlertChannels() {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/channels`);
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch alert channels:", error);
+    throw error;
+  }
+}
+
+export async function createAlertChannel(channelData) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/channels`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(channelData)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to create alert channel:", error);
+    throw error;
+  }
+}
+
+export async function updateAlertChannel(channelId, channelData) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/channels/${channelId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(channelData)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to update alert channel ${channelId}:`, error);
+    throw error;
+  }
+}
+
+export async function deleteAlertChannel(channelId) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/channels/${channelId}`, {
+      method: 'DELETE'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to delete alert channel ${channelId}:`, error);
+    throw error;
+  }
+}
+
+export async function testAlertChannel(channelId, payload) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/channels/${channelId}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to test alert channel ${channelId}:`, error);
+    throw error;
+  }
+}
+
+export async function getAlertRules() {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/rules`);
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch alert rules:", error);
+    throw error;
+  }
+}
+
+export async function createAlertRule(ruleData) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/rules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ruleData)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to create alert rule:", error);
+    throw error;
+  }
+}
+
+export async function updateAlertRule(ruleId, ruleData) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/rules/${ruleId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ruleData)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to update alert rule ${ruleId}:`, error);
+    throw error;
+  }
+}
+
+export async function deleteAlertRule(ruleId) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/rules/${ruleId}`, {
+      method: 'DELETE'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to delete alert rule ${ruleId}:`, error);
+    throw error;
+  }
+}
+
+export async function getAlertHistory(limit = 100, offset = 0, filters = {}) {
+  try {
+    const query = new URLSearchParams({
+      limit,
+      offset,
+      ...filters
+    }).toString();
+    const response = await fetch(`${BASE_URL}/alerts/history?${query}`);
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch alert history:", error);
+    throw error;
+  }
+}
+
+export async function acknowledgeAlert(alertId, username) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/history/${alertId}/acknowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ acknowledged_by: username })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to acknowledge alert ${alertId}:`, error);
+    throw error;
+  }
+}
+
+export async function getAlertStats(days = 30) {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/stats?days=${days}`);
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch alert stats:", error);
+    throw error;
+  }
+}
+

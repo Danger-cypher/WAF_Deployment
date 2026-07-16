@@ -173,14 +173,7 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_admi
             detail=f"Protected application with ID {app_id} not found"
         )
 
-    # Prevent deleting the last active app to avoid empty Nginx config
-    all_apps = db_service.get_all_protected_apps()
-    active_apps = [app for app in all_apps if app.get("is_active", 1) == 1]
-    if len(active_apps) <= 1 and existing_app.get("is_active", 1) == 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete the last active protected application. At least one application must remain active."
-        )
+    # Validation removed to support fallback server configuration
 
     success_db = db_service.delete_protected_app(app_id)
     if not success_db:
@@ -223,15 +216,7 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
 
     new_status = 0 if app.get("is_active", 1) == 1 else 1
 
-    # Validation: Do not allow disabling the last active application
-    if new_status == 0:
-        all_apps = db_service.get_all_protected_apps()
-        active_apps = [a for a in all_apps if a.get("is_active", 1) == 1]
-        if len(active_apps) <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot disable the last active protected application. At least one application must remain active."
-            )
+    # Validation removed to support fallback server configuration
 
     updated_app = db_service.update_protected_app(
         app_id=app_id,

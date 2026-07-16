@@ -13,12 +13,12 @@ server {
     return 301 https://$host$request_uri;
 }
 
-# --- Upstream App 1: Default MSSP App (_) ---
-upstream upstream_app_1 {
+# --- Upstream App 2: MSSP App (_) ---
+upstream upstream_app_2 {
     server host.docker.internal:7000 max_fails=3 fail_timeout=10s;
 }
 
-# --- App 1: Default MSSP App (_) ---
+# --- App 2: MSSP App (_) ---
 server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
@@ -37,8 +37,8 @@ server {
     }
 
     location / {
-        limit_req zone=zone_app_1 burst=100;
-        proxy_pass http://upstream_app_1;
+        limit_req zone=zone_app_2 burst=100;
+        proxy_pass http://upstream_app_2;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -53,9 +53,9 @@ server {
 
     location /api {
         error_page 403 = @json_forbidden;
-        limit_req zone=zone_app_1 burst=33 nodelay;
+        limit_req zone=zone_app_2 burst=33 nodelay;
 
-        proxy_pass http://upstream_app_1;
+        proxy_pass http://upstream_app_2;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';

@@ -73,6 +73,12 @@ class NewLogHandler(FileSystemEventHandler):
                 manager.broadcast_log(entry.model_dump()), self.loop
             )
 
+            # Trigger real-time alert rule evaluation
+            from app.services.alert_manager import alert_manager
+            asyncio.run_coroutine_threadsafe(
+                alert_manager.trigger_event("attack_detected", entry.model_dump()), self.loop
+            )
+
     def on_created(self, event):
         if not event.is_directory:
             self.process_file(event.src_path)

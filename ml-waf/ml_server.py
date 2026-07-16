@@ -225,6 +225,194 @@ def reload_models():
     else:
         return {"status": "error", "message": "Failed to load model binaries"}
 
+# ──────────────────────────────────────────────────────────────
+#  Model Management & Retraining Endpoints
+# ──────────────────────────────────────────────────────────────
+FEATURE_NAMES = [
+    "OWASP CRS Score",
+    "OWASP CRS Score (Scaled)",
+    "Matched Variables Count",
+    "URI Length",
+    "URI Slash Count",
+    "URI Question Mark Count",
+    "URI Equal Sign Count",
+    "URI Percent Symbol Count",
+    "URI Directory Traversal (..)",
+    "Query Args Length",
+    "Query Args Entropy",
+    "Query Args Uppercase %",
+    "Query Args Digits %",
+    "Query Args Special Char %",
+    "Query Args Signature Keywords",
+    "Query Args Quote Count",
+    "Query Args Tag Angle Brackets",
+    "Query Args SQL Comment (--) Count",
+    "Is POST Method",
+    "Is PUT Method",
+    "Is DELETE Method",
+    "Request Content Length",
+    "Is JSON Content Type",
+    "Is Multipart Content Type",
+    "User-Agent Header Length",
+    "Empty User-Agent",
+    "User-Agent Match Security Scanner",
+    "Redis RPM Rate",
+    "Redis Reputation Score",
+    "URI Entropy"
+]
+
+retrain_state = {
+    "status": "idle",
+    "start_time": None,
+    "end_time": None,
+    "error": None
+}
+
+def run_retrain_subprocess():
+    global retrain_state
+    import subprocess
+    retrain_state["status"] = "running"
+    retrain_state["error"] = None
+    retrain_state["start_time"] = datetime.now().isoformat()
+    try:
+        process = subprocess.Popen(
+            ["bash", "retrain.sh"],
+            cwd=BASE_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        process.wait()
+        if process.returncode == 0:
+            retrain_state["status"] = "success"
+        else:
+            retrain_state["status"] = "failed"
+            retrain_state["error"] = f"Retraining script failed with exit code {process.returncode}"
+    except Exception as e:
+        logger.error(f"Retraining process execution error: {e}")
+        retrain_state["status"] = "failed"
+        retrain_state["error"] = str(e)
+    finally:
+        retrain_state["end_time"] = datetime.now().isoformat()
+
+@app.post("/retrain")
+def trigger_retrain(background_tasks: BackgroundTasks):
+    """Triggers the model retraining pipeline asynchronously."""
+    if retrain_state["status"] == "running":
+        return {"status": "running", "message": "Retraining is already in progress"}
+    
+    background_tasks.add_task(run_retrain_subprocess)
+    return {"status": "success", "message": "Retraining triggered successfully"}
+
+@app.get("/retrain/status")
+def get_retrain_status():
+    """Returns the current retraining pipeline status and tail of training log file."""
+    log_path = os.path.join(BASE_DIR, "logs/retrain.log")
+    logs = ""
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r") as f:
+                logs = f.read()
+        except Exception as e:
+            logs = f"Error reading logs: {e}"
+            
+    return {
+        "status": retrain_state["status"],
+        "start_time": retrain_state["start_time"],
+        "end_time": retrain_state["end_time"],
+        "error": retrain_state["error"],
+        "logs": logs[-20000:]
+    }
+
+@app.get("/models/backups")
+def get_model_backups():
+    """Lists available historical model weight backups on disk."""
+    backup_dir = os.path.join(BASE_DIR, "models/backups")
+    if not os.path.exists(backup_dir):
+        return {"data": []}
+        
+    try:
+        files = os.listdir(backup_dir)
+        timestamps = set()
+        for f in files:
+            parts = f.split(".")
+            if len(parts) >= 3 and parts[-1] == "bak":
+                timestamps.add(parts[-2])
+                
+        backups = []
+        for ts in sorted(list(timestamps), reverse=True):
+            xgb_exists = os.path.exists(os.path.join(backup_dir, f"xgboost.pkl.{ts}.bak"))
+            iso_exists = os.path.exists(os.path.join(backup_dir, f"isolation_forest.pkl.{ts}.bak"))
+            backups.append({
+                "timestamp": ts,
+                "xgboost": xgb_exists,
+                "isolation_forest": iso_exists,
+                "formatted_date": f"{ts[:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}:{ts[13:15]}"
+            })
+        return {"data": backups}
+    except Exception as e:
+        logger.error(f"Failed to list backups: {e}")
+        return {"error": str(e)}
+
+class RollbackPayload(BaseModel):
+    timestamp: str
+
+@app.post("/models/rollback")
+def rollback_models(payload: RollbackPayload):
+    """Restores pickeled models from backup and dynamically updates active references."""
+    global PASSIVE_MODE
+    ts = payload.timestamp
+    backup_dir = os.path.join(BASE_DIR, "models/backups")
+    models_dir = os.path.join(BASE_DIR, "models")
+    
+    xgb_bak = os.path.join(backup_dir, f"xgboost.pkl.{ts}.bak")
+    iso_bak = os.path.join(backup_dir, f"isolation_forest.pkl.{ts}.bak")
+    
+    if not os.path.exists(xgb_bak) or not os.path.exists(iso_bak):
+        return {"status": "error", "message": f"Backup binaries for timestamp {ts} not found"}
+        
+    try:
+        import shutil
+        shutil.copy(xgb_bak, os.path.join(models_dir, "xgboost.pkl"))
+        shutil.copy(iso_bak, os.path.join(models_dir, "isolation_forest.pkl"))
+        
+        if _try_load_models():
+            PASSIVE_MODE = False
+            
+            meta_path = os.path.join(models_dir, "model_metadata.json")
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, "r") as f:
+                        meta = json.load(f)
+                    meta["xgboost"]["notes"] = f"Rolled back to backup timestamp {ts}."
+                    meta["xgboost"]["training_date"] = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T{ts[9:11]}:{ts[11:13]}:{ts[13:15]}Z"
+                    with open(meta_path, "w") as f:
+                        json.dump(meta, f, indent=2)
+                except Exception:
+                    pass
+            return {"status": "success", "message": f"Model rolled back to backup {ts} successfully"}
+        else:
+            return {"status": "error", "message": "Failed to load backup binaries into memory"}
+    except Exception as e:
+        logger.error(f"Failed to execute rollback: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/models/feature-importance")
+def get_feature_importance():
+    """Extracts features score coefficients from currently loaded XGBoost model."""
+    if xgb_model is None:
+        return {"error": "XGBoost model is not loaded"}
+    try:
+        importance_scores = xgb_model.feature_importances_
+        data = []
+        for name, score in zip(FEATURE_NAMES, importance_scores):
+            data.append({"feature": name, "importance": float(score)})
+        data = sorted(data, key=lambda x: x["importance"], reverse=True)
+        return {"data": data}
+    except Exception as e:
+        logger.error(f"Failed to load feature importance: {e}")
+        return {"error": str(e)}
+
 SETTINGS_PATH = os.environ.get(
     "SETTINGS_FILE",
     os.path.abspath(
@@ -282,6 +470,27 @@ def fetch_abuseipdb_score(ip: str):
             logger.warning(f"AbuseIPDB request failed for IP {ip}: HTTP {response.status_code}")
     except Exception as e:
         logger.error(f"Error querying AbuseIPDB for IP {ip}: {e}")
+
+
+def send_backend_alert(event_type: str, event_data: dict, message: str = None):
+    """
+    Sends alert to the WAF backend alert trigger API.
+    Runs as a background task.
+    """
+    try:
+        url = "http://waf-backend:8000/alerts/trigger"
+        payload = {
+            "event_type": event_type,
+            "event_data": event_data,
+            "message": message
+        }
+        res = requests.post(url, json=payload, timeout=5)
+        if res.status_code != 200:
+            logger.warning(f"Backend alerts trigger failed: HTTP {res.status_code} - {res.text}")
+        else:
+            logger.info(f"Successfully posted alert of type '{event_type}' to backend")
+    except Exception as e:
+        logger.error(f"Failed to send alert to backend: {e}")
 
 @app.post("/predict")
 def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, response: Response):
@@ -373,5 +582,14 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
         "abuse_score": abuse_score
     }
     background_tasks.add_task(write_to_sqlite, event_data)
+
+    # 8. Trigger WAF Alerting Engine for high threat or anomaly detected
+    if decision == "block":
+        background_tasks.add_task(send_backend_alert, "high_threat_score", event_data)
+    elif decision == "rate_limit":
+        background_tasks.add_task(send_backend_alert, "rate_limit_exceeded", event_data)
+    
+    if iso_score < -0.35:
+        background_tasks.add_task(send_backend_alert, "ml_anomaly", event_data)
 
     return {"decision": decision, "threat_score": score}

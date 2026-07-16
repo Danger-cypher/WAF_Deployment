@@ -300,12 +300,26 @@ sudo $COMPOSE_CMD up -d
 # ─────────────────────────────────────────────────────────────────────────────
 log "Applying credentials to the WAF database..."
 
-# Wait 5 seconds for backend python service to spin up
-sleep 5
+# Wait for backend to become healthy (up to 60 seconds)
+log "Waiting for backend container to become healthy..."
+BACKEND_READY=false
+for i in $(seq 1 20); do
+    BACKEND_STATUS=$(sudo docker inspect --format='{{.State.Health.Status}}' waf-backend 2>/dev/null || echo "unknown")
+    if [ "$BACKEND_STATUS" = "healthy" ]; then
+        BACKEND_READY=true
+        break
+    fi
+    log "  Backend not ready yet (status: $BACKEND_STATUS)... attempt $i/20"
+    sleep 3
+done
+
+if [ "$BACKEND_READY" = "false" ]; then
+    warn "Backend did not become healthy within 60 seconds. Attempting credential seeding anyway..."
+fi
 
 # Set passwords inside settings.json by executing an inline python command inside the running backend container
 # This completely avoids installing bcrypt or other libraries on the host system
-docker exec -t waf-backend python3 -c "
+sudo docker exec -t waf-backend python3 -c "
 import json
 import bcrypt
 
@@ -313,15 +327,15 @@ path = '/app/app/config/settings.json'
 try:
     with open(path, 'r') as f:
         data = json.load(f)
-    
+
     # Hash admin password
     admin_hash = bcrypt.hashpw(b'${ADMIN_PASS}', bcrypt.gensalt()).decode('utf-8')
     data['auth']['password_hash'] = admin_hash
-    
+
     # Hash analyst password
     analyst_hash = bcrypt.hashpw(b'${ANALYST_PASS}', bcrypt.gensalt()).decode('utf-8')
     data['auth']['analyst_password_hash'] = analyst_hash
-    
+
     with open(path, 'w') as f:
         json.dump(data, f, indent=2)
     print('SUCCESS')

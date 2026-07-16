@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -18,9 +18,11 @@ import {
   markFalsePositive, getFalsePositives, updateFalsePositiveStatus, updateFalsePositiveNote, deleteFalsePositive,
   getExclusions, createExclusion, updateExclusionStatus, updateExclusionNote, deleteExclusion, getExclusionsAnalytics, getExclusionsHistory, previewExclusionRule,
   getCurrentUser, logoutUser,
-  getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getApiProtectionAnalytics, getHardeningSettings, saveHardeningSettings, getAntiDefacementSettings, saveAntiDefacementSettings, getMLStats, getMLLogs, getMLTimeline
+  getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getApiProtectionAnalytics, getHardeningSettings, saveHardeningSettings, getAntiDefacementSettings, saveAntiDefacementSettings, getMLStats, getMLLogs, getMLTimeline,
+  getMLModelInfo, triggerMLRetrain, getMLRetrainStatus, getMLBackups, rollbackMLModel, getMLFeatureImportance,
+  getAlertChannels, createAlertChannel, updateAlertChannel, deleteAlertChannel, testAlertChannel, getAlertRules, createAlertRule, updateAlertRule, deleteAlertRule, getAlertHistory, acknowledgeAlert, getAlertStats
 } from './services/api';
-import { Copy, Check, ChevronLeft, ChevronRight, X, Clock, Database, Code, ShieldAlert as AlertIcon, AlertTriangle as AlertTriangleIcon, LogOut, Brain } from 'lucide-react';
+import { Copy, Check, ChevronLeft, ChevronRight, X, Clock, Database, Code, ShieldAlert as AlertIcon, AlertTriangle as AlertTriangleIcon, LogOut, Brain, Bell } from 'lucide-react';
 import Login from './components/Login';
 import DdosBotMitigation from './components/DdosBotMitigation';
 import ProtectedApps from './components/ProtectedApps';
@@ -1205,6 +1207,103 @@ function MLAnalytics() {
   const [loadingCorrelated, setLoadingCorrelated] = useState(false);
   const [modalActiveTab, setModalActiveTab] = useState('scores');
 
+  // Model Management & Retraining States
+  const [activeSubTab, setActiveSubTab] = useState('analytics'); // 'analytics', 'management'
+  const [modelInfo, setModelInfo] = useState(null);
+  const [retrainStatus, setRetrainStatus] = useState({ status: 'idle', logs: '' });
+  const [backups, setBackups] = useState([]);
+  const [featureImportance, setFeatureImportance] = useState([]);
+  const [loadingManagement, setLoadingManagement] = useState(false);
+  const [triggeringRetrain, setTriggeringRetrain] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
+
+  const fetchManagementData = async () => {
+    setLoadingManagement(true);
+    try {
+      const info = await getMLModelInfo();
+      if (info && !info.error) setModelInfo(info);
+
+      const status = await getMLRetrainStatus();
+      if (status && !status.error) setRetrainStatus(status);
+
+      const bks = await getMLBackups();
+      if (bks && !bks.error) setBackups(bks.data || []);
+
+      const imp = await getMLFeatureImportance();
+      if (imp && !imp.error) setFeatureImportance(imp.data || []);
+    } catch (err) {
+      console.error("Failed to load ML management data:", err);
+    } finally {
+      setLoadingManagement(false);
+    }
+  };
+
+  useEffect(() => {
+    let interval;
+    if (activeSubTab === 'management') {
+      fetchManagementData();
+      interval = setInterval(async () => {
+        try {
+          const status = await getMLRetrainStatus();
+          if (status && !status.error) {
+            setRetrainStatus(status);
+            if (status.status !== 'running') {
+              const info = await getMLModelInfo();
+              if (info && !info.error) setModelInfo(info);
+              const bks = await getMLBackups();
+              if (bks && !bks.error) setBackups(bks.data || []);
+              const imp = await getMLFeatureImportance();
+              if (imp && !imp.error) setFeatureImportance(imp.data || []);
+            }
+          }
+        } catch (err) {
+          console.warn("Error polling retrain status:", err);
+        }
+      }, 3000);
+    }
+    return () => clearInterval(interval);
+  }, [activeSubTab]);
+
+  const handleTriggerRetrain = async () => {
+    if (window.confirm("Are you sure you want to trigger ML model retraining? This will run collect_data and rebuild XGBoost and Isolation Forest classifiers using active traffic db records.")) {
+      setTriggeringRetrain(true);
+      try {
+        const res = await triggerMLRetrain();
+        if (res.status === 'success') {
+          setRetrainStatus(prev => ({ ...prev, status: 'running' }));
+        } else {
+          alert("Failed to start retraining: " + res.message);
+        }
+      } catch (err) {
+        alert("Retrain error: " + err.message);
+      } finally {
+        setTriggeringRetrain(false);
+      }
+    }
+  };
+
+  const handleRollback = async (timestamp) => {
+    if (window.confirm(`Are you sure you want to roll back both model weights to version backup ${timestamp}?`)) {
+      setRollingBack(true);
+      try {
+        const res = await rollbackMLModel(timestamp);
+        if (res.status === 'success') {
+          alert(res.message);
+          const info = await getMLModelInfo();
+          if (info && !info.error) setModelInfo(info);
+          const bks = await getMLBackups();
+          if (bks && !bks.error) setBackups(bks.data || []);
+        } else {
+          alert("Rollback failed: " + res.message);
+        }
+      } catch (err) {
+        alert("Rollback error: " + err.message);
+      } finally {
+        setRollingBack(false);
+      }
+    }
+  };
+
   useEffect(() => {
     if (selectedLog && selectedLog.unique_id) {
       setLoadingCorrelated(true);
@@ -1413,444 +1512,659 @@ function MLAnalytics() {
         </div>
       </div>
 
-      {/* Metric Cards Grid */}
-      <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
-        <div className="metric-header">
-          <span>AI Evaluations</span>
-          <div className="metric-icon-wrapper blue"><Brain size={18} /></div>
-        </div>
-        <div className="metric-value">{stats.total_evaluations.toLocaleString()}</div>
-        <div className="metric-trend trend-down">
-          <Clock size={12} /> <span>Real-time capture</span>
-        </div>
+      {/* Sub-tab selection menu */}
+      <div style={{ display: 'flex', gap: '10px', gridColumn: 'span 12', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>
+        <button 
+          className={`subtab-btn ${activeSubTab === 'analytics' ? 'active' : ''}`}
+          onClick={() => setActiveSubTab('analytics')}
+          style={{ padding: '6px 16px', fontSize: '13px', border: 'none', background: 'none', cursor: 'pointer', color: activeSubTab === 'analytics' ? 'var(--accent-color)' : 'var(--text-secondary)', borderBottom: activeSubTab === 'analytics' ? '2px solid var(--accent-color)' : 'none', fontWeight: 600 }}
+        >
+          Analytics Telemetry
+        </button>
+        <button 
+          className={`subtab-btn ${activeSubTab === 'management' ? 'active' : ''}`}
+          onClick={() => setActiveSubTab('management')}
+          style={{ padding: '6px 16px', fontSize: '13px', border: 'none', background: 'none', cursor: 'pointer', color: activeSubTab === 'management' ? 'var(--accent-color)' : 'var(--text-secondary)', borderBottom: activeSubTab === 'management' ? '2px solid var(--accent-color)' : 'none', fontWeight: 600 }}
+        >
+          Model Control & Retraining
+        </button>
       </div>
 
-      <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
-        <div className="metric-header">
-          <span>Avg Threat Score</span>
-          <div className="metric-icon-wrapper blue" style={{ color: 'var(--accent-color)', background: 'var(--accent-bg)' }}><Activity size={18} /></div>
-        </div>
-        <div className="metric-value" style={{ color: 'var(--accent-color)' }}>{(stats.avg_threat_score * 100).toFixed(1)}%</div>
-        <div className="metric-trend trend-down">
-          <span>Overall anomaly ratio</span>
-        </div>
-      </div>
-
-      <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
-        <div className="metric-header">
-          <span>Blocks Executed</span>
-          <div className="metric-icon-wrapper red"><ShieldAlert size={18} /></div>
-        </div>
-        <div className="metric-value" style={{ color: 'var(--danger-color)' }}>{stats.decision_breakdown.block.toLocaleString()}</div>
-        <div className="metric-trend trend-up">
-          <span>
-            {stats.total_evaluations > 0
-              ? ((stats.decision_breakdown.block / stats.total_evaluations) * 100).toFixed(1)
-              : 0}% block rate
-          </span>
-        </div>
-      </div>
-
-      <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
-        <div className="metric-header">
-          <span>Rate Limited</span>
-          <div className="metric-icon-wrapper orange"><Lock size={18} /></div>
-        </div>
-        <div className="metric-value" style={{ color: 'var(--warning-color)' }}>{stats.decision_breakdown.rate_limit.toLocaleString()}</div>
-        <div className="metric-trend trend-up">
-          <span>
-            {stats.total_evaluations > 0
-              ? ((stats.decision_breakdown.rate_limit / stats.total_evaluations) * 100).toFixed(1)
-              : 0}% rate limits
-          </span>
-        </div>
-      </div>
-
-      {/* Decision Threshold Banner */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', padding: '24px' }}>
-        <div className="card-title" style={{ marginBottom: '16px' }}>
-          <SettingsIcon size={18} color="var(--accent-color)" />
-          Hybrid Decision Matrix Routing Thresholds
-        </div>
-
-        <div style={{ display: 'flex', width: '100%', height: '32px', borderRadius: '8px', overflow: 'hidden', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', marginBottom: '16px', fontSize: '12px', fontWeight: 600, textAlign: 'center', lineHeight: '32px' }}>
-          <div style={{ width: '40%', background: 'rgba(16, 185, 129, 0.15)', borderRight: '1px solid rgba(16, 185, 129, 0.3)', color: 'var(--success-color)' }}>ALLOW (Score &lt; 40%)</div>
-          <div style={{ width: '30%', background: 'rgba(99, 102, 241, 0.15)', borderRight: '1px solid rgba(99, 102, 241, 0.3)', color: 'var(--accent-color)' }}>LOG (40% - 70%)</div>
-          <div style={{ width: '15%', background: 'rgba(245, 158, 11, 0.15)', borderRight: '1px solid rgba(245, 158, 11, 0.3)', color: 'var(--warning-color)' }}>LIMIT (70% - 85%)</div>
-          <div style={{ width: '15%', background: 'rgba(244, 63, 94, 0.15)', color: 'var(--danger-color)' }}>BLOCK (&gt;= 85%)</div>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', fontSize: '13px', flexWrap: 'wrap', gap: '8px' }}>
-          <span>ℹ️ Scores combine CRS signatures (50%), XGBoost classification (30%), Isolation Forest novelty (20%), and Redis reputation.</span>
-          <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>Engine: Active (FastAPI Daemon)</span>
-        </div>
-      </div>
-
-      {/* Visual Analytics Row */}
-      {/* Timeline Chart */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 8' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>
-            <Activity size={18} color="var(--accent-color)" />
-            Threat Score Timeline Trends
-          </div>
-          <div className="pulse-container">
-            <div className="pulse-dot"></div>
-            <span>Live Sync</span>
-          </div>
-        </div>
-
-        <div className="chart-container" style={{ minHeight: '280px' }}>
-          {timeline.length > 0 ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={timeline} margin={{ top: 10, right: 15, left: -15, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="mlThreatScoreGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--danger-color)" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="var(--danger-color)" stopOpacity={0.0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis
-                  dataKey="time_bucket"
-                  tickFormatter={(val) => {
-                    try {
-                      return val.split(' ')[1].slice(0, 5); // Display HH:MM
-                    } catch {
-                      return val;
-                    }
-                  }}
-                  stroke="var(--text-secondary)"
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                  interval="preserveStartEnd"
-                  minTickGap={50}
-                />
-                {/* Left YAxis: Threat Score */}
-                <YAxis
-                  yAxisId="left"
-                  domain={[0, 1]}
-                  tickFormatter={(val) => `${(val * 100).toFixed(0)}%`}
-                  stroke="var(--text-secondary)"
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                {/* Right YAxis: Request Count */}
-                <YAxis
-                  yAxisId="right"
-                  orientation="right"
-                  stroke="var(--text-secondary)"
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                  allowDecimals={false}
-                />
-                <RechartsTooltip
-                  contentStyle={{
-                    background: 'var(--bg-secondary)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '12px',
-                    color: 'var(--text-primary)',
-                    fontFamily: 'inherit',
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
-                  }}
-                  labelFormatter={(label) => `Time: ${label}`}
-                  formatter={(value, name) => [
-                    name === 'avg_score' ? `${(value * 100).toFixed(1)}%` : value,
-                    name === 'avg_score' ? 'Avg Threat' : 'Request Count'
-                  ]}
-                />
-                {/* Request Count Bar in the background */}
-                <Bar
-                  yAxisId="right"
-                  dataKey="count"
-                  name="Request Count"
-                  fill="rgba(99, 102, 241, 0.12)"
-                  stroke="rgba(99, 102, 241, 0.35)"
-                  strokeWidth={1}
-                  barSize={18}
-                  radius={[4, 4, 0, 0]}
-                />
-                {/* Avg Threat Score Area in the foreground */}
-                <Area
-                  yAxisId="left"
-                  type="monotone"
-                  dataKey="avg_score"
-                  name="Avg Threat"
-                  stroke="var(--danger-color)"
-                  strokeWidth={2.5}
-                  fillOpacity={1}
-                  fill="url(#mlThreatScoreGrad)"
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          ) : (
-            <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '14px' }}>
-              Waiting for ML evaluation requests to compile graph data...
+      {activeSubTab === 'analytics' ? (
+        <>
+          {/* Metric Cards Grid */}
+          <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
+            <div className="metric-header">
+              <span>AI Evaluations</span>
+              <div className="metric-icon-wrapper blue"><Brain size={18} /></div>
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* Pie Actions Share */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 4' }}>
-        <div className="card-title">
-          <Brain size={18} color="var(--accent-color)" />
-          Mitigation Action Shares
-        </div>
-
-        <div className="chart-container" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
-          <div style={{ width: '100%', height: '160px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={displayPieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={45}
-                  outerRadius={65}
-                  paddingAngle={3}
-                  dataKey="value"
-                >
-                  {displayPieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <RechartsTooltip
-                  contentStyle={{
-                    background: 'var(--bg-secondary)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
-                    color: 'var(--text-primary)',
-                    fontFamily: 'inherit'
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+            <div className="metric-value">{stats.total_evaluations.toLocaleString()}</div>
+            <div className="metric-trend trend-down">
+              <Clock size={12} /> <span>Real-time capture</span>
+            </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', width: '100%', marginTop: '16px', fontSize: '12px' }}>
-            {Object.entries(stats.decision_breakdown).map(([key, val]) => (
-              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
-                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: decisionColors[key] }} />
-                <span style={{ textTransform: 'capitalize' }}>{key.replace('_', ' ')}:</span>
-                <strong style={{ color: 'var(--text-primary)', marginLeft: 'auto' }}>{val}</strong>
+          <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
+            <div className="metric-header">
+              <span>Avg Threat Score</span>
+              <div className="metric-icon-wrapper blue" style={{ color: 'var(--accent-color)', background: 'var(--accent-bg)' }}><Activity size={18} /></div>
+            </div>
+            <div className="metric-value" style={{ color: 'var(--accent-color)' }}>{(stats.avg_threat_score * 100).toFixed(1)}%</div>
+            <div className="metric-trend trend-down">
+              <span>Overall anomaly ratio</span>
+            </div>
+          </div>
+
+          <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
+            <div className="metric-header">
+              <span>Blocks Executed</span>
+              <div className="metric-icon-wrapper red"><ShieldAlert size={18} /></div>
+            </div>
+            <div className="metric-value" style={{ color: 'var(--danger-color)' }}>{stats.decision_breakdown.block.toLocaleString()}</div>
+            <div className="metric-trend trend-up">
+              <span>
+                {stats.total_evaluations > 0
+                  ? ((stats.decision_breakdown.block / stats.total_evaluations) * 100).toFixed(1)
+                  : 0}% block rate
+              </span>
+            </div>
+          </div>
+
+          <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
+            <div className="metric-header">
+              <span>Rate Limited</span>
+              <div className="metric-icon-wrapper orange"><Lock size={18} /></div>
+            </div>
+            <div className="metric-value" style={{ color: 'var(--warning-color)' }}>{stats.decision_breakdown.rate_limit.toLocaleString()}</div>
+            <div className="metric-trend trend-up">
+              <span>
+                {stats.total_evaluations > 0
+                  ? ((stats.decision_breakdown.rate_limit / stats.total_evaluations) * 100).toFixed(1)
+                  : 0}% rate limits
+              </span>
+            </div>
+          </div>
+
+          {/* Decision Threshold Banner */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', padding: '24px' }}>
+            <div className="card-title" style={{ marginBottom: '16px' }}>
+              <SettingsIcon size={18} color="var(--accent-color)" />
+              Hybrid Decision Matrix Routing Thresholds
+            </div>
+
+            <div style={{ display: 'flex', width: '100%', height: '32px', borderRadius: '8px', overflow: 'hidden', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', marginBottom: '16px', fontSize: '12px', fontWeight: 600, textAlign: 'center', lineHeight: '32px' }}>
+              <div style={{ width: '40%', background: 'rgba(16, 185, 129, 0.15)', borderRight: '1px solid rgba(16, 185, 129, 0.3)', color: 'var(--success-color)' }}>ALLOW (Score &lt; 40%)</div>
+              <div style={{ width: '30%', background: 'rgba(99, 102, 241, 0.15)', borderRight: '1px solid rgba(99, 102, 241, 0.3)', color: 'var(--accent-color)' }}>LOG (40% - 70%)</div>
+              <div style={{ width: '15%', background: 'rgba(245, 158, 11, 0.15)', borderRight: '1px solid rgba(245, 158, 11, 0.3)', color: 'var(--warning-color)' }}>LIMIT (70% - 85%)</div>
+              <div style={{ width: '15%', background: 'rgba(244, 63, 94, 0.15)', color: 'var(--danger-color)' }}>BLOCK (&gt;= 85%)</div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', fontSize: '13px', flexWrap: 'wrap', gap: '8px' }}>
+              <span>ℹ️ Scores combine CRS signatures (50%), XGBoost classification (30%), Isolation Forest novelty (20%), and Redis reputation.</span>
+              <span style={{ color: 'var(--accent-color)', fontWeight: 500 }}>Engine: Active (FastAPI Daemon)</span>
+            </div>
+          </div>
+
+          {/* Visual Analytics Row */}
+          {/* Timeline Chart */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 8' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <div className="card-title" style={{ marginBottom: 0 }}>
+                <Activity size={18} color="var(--accent-color)" />
+                Threat Score Timeline Trends
               </div>
-            ))}
-          </div>
-        </div>
-      </div>
+              <div className="pulse-container">
+                <div className="pulse-dot"></div>
+                <span>Live Sync</span>
+              </div>
+            </div>
 
-      {/* Leaderboards */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 6' }}>
-        <div className="card-title">
-          <Globe size={18} color="var(--accent-color)" />
-          Highly Suspect Target Endpoints
-        </div>
-
-        <div style={{ overflow: 'hidden' }}>
-          {stats.top_anomalous_uris.length > 0 ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-secondary)' }}>
-                  <th style={{ padding: '8px 0', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>URI Path</th>
-                  <th style={{ padding: '8px 0', textAlign: 'center', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>Count</th>
-                  <th style={{ padding: '8px 0', textAlign: 'right', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>Avg Threat</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.top_anomalous_uris.map((item, idx) => (
-                  <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', color: 'var(--text-primary)' }}>
-                    <td style={{ padding: '10px 0', fontFamily: 'monospace', color: 'var(--accent-color)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.uri}>
-                      {item.uri}
-                    </td>
-                    <td style={{ padding: '10px 0', textAlign: 'center' }}>{item.count}</td>
-                    <td style={{ padding: '10px 0', textAlign: 'right', color: item.avg_score >= 0.7 ? 'var(--danger-color)' : 'var(--warning-color)', fontWeight: 600 }}>
-                      {(item.avg_score * 100).toFixed(0)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div style={{ padding: '16px 0', color: 'var(--text-secondary)', textAlign: 'center' }}>No endpoints evaluated yet.</div>
-          )}
-        </div>
-      </div>
-
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 6' }}>
-        <div className="card-title">
-          <Server size={18} color="var(--accent-color)" />
-          Top Suspect Client IPs
-        </div>
-
-        <div style={{ overflow: 'hidden' }}>
-          {stats.top_anomalous_ips.length > 0 ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-secondary)' }}>
-                  <th style={{ padding: '8px 0', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>IP Address</th>
-                  <th style={{ padding: '8px 0', textAlign: 'center', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>Count</th>
-                  <th style={{ padding: '8px 0', textAlign: 'right', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>Avg Threat</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.top_anomalous_ips.map((item, idx) => (
-                  <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', color: 'var(--text-primary)' }}>
-                    <td style={{ padding: '10px 0', fontFamily: 'monospace', color: 'var(--accent-color)' }}>{item.ip}</td>
-                    <td style={{ padding: '10px 0', textAlign: 'center' }}>{item.count}</td>
-                    <td style={{ padding: '10px 0', textAlign: 'right', color: item.avg_score >= 0.7 ? 'var(--danger-color)' : 'var(--warning-color)', fontWeight: 600 }}>
-                      {(item.avg_score * 100).toFixed(0)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div style={{ padding: '16px 0', color: 'var(--text-secondary)', textAlign: 'center' }}>No suspicious IPs evaluated yet.</div>
-          )}
-        </div>
-      </div>
-
-      {/* Live Inferences Logs */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 12' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>
-            <ShieldAlert size={18} color="var(--danger-color)" />
-            Recent AI/ML Evaluation Inferences
-          </div>
-
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <input
-              type="text"
-              placeholder="Search by URI, IP, variables..."
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setPage(1);
-              }}
-              className="search-input"
-              style={{ width: '220px', paddingLeft: '14px' }}
-            />
-
-            <select
-              value={filterDecision}
-              onChange={(e) => {
-                setFilterDecision(e.target.value);
-                setPage(1);
-              }}
-              className="filter-select"
-            >
-              <option value="">All Actions</option>
-              <option value="allow">Allow Only</option>
-              <option value="log">Log Only</option>
-              <option value="rate_limit">Rate Limit Only</option>
-              <option value="block">Block Only</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Logs Table */}
-        <div className="logs-table-wrapper">
-          <table className="logs-table">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Client IP</th>
-                <th>Request Details</th>
-                <th style={{ textAlign: 'center' }}>XGB Prob</th>
-                <th style={{ textAlign: 'center' }}>Isolation Score</th>
-                <th style={{ textAlign: 'center' }}>Threat Score</th>
-                <th style={{ textAlign: 'center' }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.length > 0 ? (
-                logs.map((log) => (
-                  <tr
-                    key={log.id}
-                    onClick={() => setSelectedLog(log)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                      {formatLocalTime(log.timestamp)}
-                    </td>
-                    <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>{log.remote_addr}</td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)' }}>{log.method}</span>
-                        <span style={{ fontFamily: 'monospace', color: 'var(--accent-color)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.uri}>{log.uri}</span>
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'center', color: log.xgb_prob >= 0.7 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>
-                      {(log.xgb_prob * 100).toFixed(1)}%
-                    </td>
-                    <td style={{ textAlign: 'center', color: log.iso_score <= -0.1 ? 'var(--warning-color)' : 'var(--text-secondary)' }}>
-                      {log.iso_score.toFixed(3)}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                        <div style={{ width: '48px', height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${log.threat_score * 100}%`, background: decisionColors[log.decision] }} />
-                        </div>
-                        <strong style={{ fontSize: '12px', color: decisionColors[log.decision] }}>{(log.threat_score * 100).toFixed(0)}%</strong>
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span style={{
-                        display: 'inline-block',
-                        padding: '3px 8px',
+            <div className="chart-container" style={{ minHeight: '280px' }}>
+              {timeline.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={timeline} margin={{ top: 10, right: 15, left: -15, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="mlThreatScoreGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--danger-color)" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="var(--danger-color)" stopOpacity={0.0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <XAxis
+                      dataKey="time_bucket"
+                      tickFormatter={(val) => {
+                        try {
+                          return val.split(' ')[1].slice(0, 5); // Display HH:MM
+                        } catch {
+                          return val;
+                        }
+                      }}
+                      stroke="var(--text-secondary)"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      interval="preserveStartEnd"
+                      minTickGap={50}
+                    />
+                    {/* Left YAxis: Threat Score */}
+                    <YAxis
+                      yAxisId="left"
+                      domain={[0, 1]}
+                      tickFormatter={(val) => `${(val * 100).toFixed(0)}%`}
+                      stroke="var(--text-secondary)"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    {/* Right YAxis: Request Count */}
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      stroke="var(--text-secondary)"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      allowDecimals={false}
+                    />
+                    <RechartsTooltip
+                      contentStyle={{
+                        background: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '12px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                        background: `${decisionColors[log.decision]}1A`,
-                        color: decisionColors[log.decision],
-                        border: `1px solid ${decisionColors[log.decision]}40`
-                      }}>
-                        {log.decision.replace('_', ' ')}
-                      </span>
-                    </td>
+                        color: 'var(--text-primary)',
+                        fontFamily: 'inherit',
+                        boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+                      }}
+                      labelFormatter={(label) => `Time: ${label}`}
+                      formatter={(value, name) => [
+                        name === 'avg_score' ? `${(value * 100).toFixed(1)}%` : value,
+                        name === 'avg_score' ? 'Avg Threat' : 'Request Count'
+                      ]}
+                    />
+                    {/* Request Count Bar in the background */}
+                    <Bar
+                      yAxisId="right"
+                      dataKey="count"
+                      name="Request Count"
+                      fill="rgba(99, 102, 241, 0.12)"
+                      stroke="rgba(99, 102, 241, 0.35)"
+                      strokeWidth={1}
+                      barSize={18}
+                      radius={[4, 4, 0, 0]}
+                    />
+                    {/* Avg Threat Score Area in the foreground */}
+                    <Area
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="avg_score"
+                      name="Avg Threat"
+                      stroke="var(--danger-color)"
+                      strokeWidth={2.5}
+                      fillOpacity={1}
+                      fill="url(#mlThreatScoreGrad)"
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : (
+                <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                  Waiting for ML evaluation requests to compile graph data...
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Mitigation Actions Pie */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 4' }}>
+            <div className="card-title">
+              <Brain size={18} color="var(--accent-color)" />
+              Mitigation Action Shares
+            </div>
+
+            <div className="chart-container" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+              <div style={{ width: '100%', height: '160px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={displayPieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={45}
+                      outerRadius={65}
+                      paddingAngle={3}
+                      dataKey="value"
+                    >
+                      {displayPieData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip
+                      contentStyle={{
+                        background: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '8px',
+                        color: 'var(--text-primary)',
+                        fontFamily: 'inherit'
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', width: '100%', marginTop: '16px', fontSize: '12px' }}>
+                {Object.entries(stats.decision_breakdown).map(([key, val]) => (
+                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: decisionColors[key] }} />
+                    <span style={{ textTransform: 'capitalize' }}>{key.replace('_', ' ')}:</span>
+                    <strong style={{ color: 'var(--text-primary)', marginLeft: 'auto' }}>{val}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Leaderboards */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6' }}>
+            <div className="card-title">
+              <Globe size={18} color="var(--accent-color)" />
+              Highly Suspect Target Endpoints
+            </div>
+
+            <div style={{ overflow: 'hidden' }}>
+              {stats.top_anomalous_uris.length > 0 ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-secondary)' }}>
+                      <th style={{ padding: '8px 0', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>URI Path</th>
+                      <th style={{ padding: '8px 0', textAlign: 'center', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>Count</th>
+                      <th style={{ padding: '8px 0', textAlign: 'right', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>Avg Threat</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.top_anomalous_uris.map((item, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', color: 'var(--text-primary)' }}>
+                        <td style={{ padding: '10px 0', fontFamily: 'monospace', color: 'var(--accent-color)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.uri}>
+                          {item.uri}
+                        </td>
+                        <td style={{ padding: '10px 0', textAlign: 'center' }}>{item.count}</td>
+                        <td style={{ padding: '10px 0', textAlign: 'right', color: item.avg_score >= 0.7 ? 'var(--danger-color)' : 'var(--warning-color)', fontWeight: 600 }}>
+                          {(item.avg_score * 100).toFixed(0)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ padding: '16px 0', color: 'var(--text-secondary)', textAlign: 'center' }}>No endpoints evaluated yet.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6' }}>
+            <div className="card-title">
+              <Server size={18} color="var(--accent-color)" />
+              Top Suspect Client IPs
+            </div>
+
+            <div style={{ overflow: 'hidden' }}>
+              {stats.top_anomalous_ips.length > 0 ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-secondary)' }}>
+                      <th style={{ padding: '8px 0', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>IP Address</th>
+                      <th style={{ padding: '8px 0', textAlign: 'center', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>Count</th>
+                      <th style={{ padding: '8px 0', textAlign: 'right', fontSize: '12px', textTransform: 'uppercase', fontWeight: 500 }}>Avg Threat</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.top_anomalous_ips.map((item, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', color: 'var(--text-primary)' }}>
+                        <td style={{ padding: '10px 0', fontFamily: 'monospace', color: 'var(--accent-color)' }}>{item.ip}</td>
+                        <td style={{ padding: '10px 0', textAlign: 'center' }}>{item.count}</td>
+                        <td style={{ padding: '10px 0', textAlign: 'right', color: item.avg_score >= 0.7 ? 'var(--danger-color)' : 'var(--warning-color)', fontWeight: 600 }}>
+                          {(item.avg_score * 100).toFixed(0)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ padding: '16px 0', color: 'var(--text-secondary)', textAlign: 'center' }}>No suspicious IPs evaluated yet.</div>
+              )}
+            </div>
+          </div>
+
+          {/* Live Inferences Logs */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 12' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+              <div className="card-title" style={{ marginBottom: 0 }}>
+                <ShieldAlert size={18} color="var(--danger-color)" />
+                Recent AI/ML Evaluation Inferences
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <input
+                  type="text"
+                  placeholder="Search by URI, IP, variables..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setPage(1);
+                  }}
+                  className="search-input"
+                  style={{ width: '220px', paddingLeft: '14px' }}
+                />
+
+                <select
+                  value={filterDecision}
+                  onChange={(e) => {
+                    setFilterDecision(e.target.value);
+                    setPage(1);
+                  }}
+                  className="filter-select"
+                >
+                  <option value="">All Actions</option>
+                  <option value="allow">Allow Only</option>
+                  <option value="log">Log Only</option>
+                  <option value="rate_limit">Rate Limit Only</option>
+                  <option value="block">Block Only</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Logs Table */}
+            <div className="logs-table-wrapper">
+              <table className="logs-table">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Client IP</th>
+                    <th>Request Details</th>
+                    <th style={{ textAlign: 'center' }}>XGB Prob</th>
+                    <th style={{ textAlign: 'center' }}>Isolation Score</th>
+                    <th style={{ textAlign: 'center' }}>Threat Score</th>
+                    <th style={{ textAlign: 'center' }}>Action</th>
                   </tr>
+                </thead>
+                <tbody>
+                  {logs.length > 0 ? (
+                    logs.map((log) => (
+                      <tr
+                        key={log.id}
+                        onClick={() => setSelectedLog(log)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                          {formatLocalTime(log.timestamp)}
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>{log.remote_addr}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)' }}>{log.method}</span>
+                            <span style={{ fontFamily: 'monospace', color: 'var(--accent-color)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.uri}>{log.uri}</span>
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'center', color: log.xgb_prob >= 0.7 ? 'var(--danger-color)' : 'var(--text-secondary)' }}>
+                          {(log.xgb_prob * 100).toFixed(1)}%
+                        </td>
+                        <td style={{ textAlign: 'center', color: log.iso_score <= -0.1 ? 'var(--warning-color)' : 'var(--text-secondary)' }}>
+                          {log.iso_score.toFixed(3)}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                            <div style={{ width: '48px', height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${log.threat_score * 100}%`, background: decisionColors[log.decision] }} />
+                            </div>
+                            <strong style={{ fontSize: '12px', color: decisionColors[log.decision] }}>{(log.threat_score * 100).toFixed(0)}%</strong>
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '3px 8px',
+                            borderRadius: '12px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            textTransform: 'uppercase',
+                            background: `${decisionColors[log.decision]}1A`,
+                            color: decisionColors[log.decision],
+                            border: `1px solid ${decisionColors[log.decision]}40`
+                          }}>
+                            {log.decision.replace('_', ' ')}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-secondary)' }}>
+                        {loading ? "Syncing ML engine telemetry database..." : "No inferences recorded yet."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {totalLogs > size && (
+              <div className="pagination-container">
+                <span className="pagination-info">
+                  Showing {((page - 1) * size) + 1} - {Math.min(page * size, totalLogs)} of {totalLogs} events
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    disabled={page === 1}
+                    onClick={() => setPage(page - 1)}
+                    className="pagination-btn"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    disabled={page * size >= totalLogs}
+                    onClick={() => setPage(page + 1)}
+                    className="pagination-btn"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Models Status Cards */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div className="card-title">
+              <Brain size={18} color="var(--accent-color)" />
+              Supervised Model: XGBoost Classifier
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Model Accuracy Gate</div>
+                  <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--success-color)', marginTop: '4px' }}>
+                    {modelInfo?.model_metadata?.xgboost?.accuracy ? `${(modelInfo.model_metadata.xgboost.accuracy * 100).toFixed(1)}%` : 'N/A'}
+                  </div>
+                </div>
+                <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Training Samples</div>
+                  <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px' }}>
+                    {modelInfo?.model_metadata?.xgboost?.sample_count?.toLocaleString() || 'N/A'}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-secondary)' }}>Model Version:</span> <strong style={{ color: 'var(--text-primary)' }}>v{modelInfo?.model_metadata?.xgboost?.version || 'N/A'}</strong></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-secondary)' }}>Last Trained:</span> <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{modelInfo?.model_metadata?.xgboost?.training_date ? formatLocalTime(modelInfo.model_metadata.xgboost.training_date) : 'N/A'}</strong></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-secondary)' }}>Balanced Acc:</span> <strong style={{ color: 'var(--text-primary)' }}>{modelInfo?.model_metadata?.xgboost?.balanced_accuracy ? `${(modelInfo.model_metadata.xgboost.balanced_accuracy * 100).toFixed(1)}%` : 'N/A'}</strong></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', borderTop: '1px solid var(--border-subtle)', paddingTop: '6px', marginTop: '4px' }}>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>Notes:</span>
+                  <p style={{ fontStyle: 'italic', fontSize: '11px', color: 'var(--text-primary)', margin: 0 }}>{modelInfo?.model_metadata?.xgboost?.notes || 'No description notes available.'}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div className="card-title">
+              <Brain size={18} color="var(--ml-color)" />
+              Anomaly Detector: Isolation Forest
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Type Classification</div>
+                  <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--ml-color)', marginTop: '4px' }}>Unsupervised</div>
+                </div>
+                <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Training Samples</div>
+                  <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px' }}>
+                    {modelInfo?.model_metadata?.isolation_forest?.sample_count?.toLocaleString() || 'N/A'}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-secondary)' }}>Model Version:</span> <strong style={{ color: 'var(--text-primary)' }}>v{modelInfo?.model_metadata?.isolation_forest?.version || 'N/A'}</strong></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-secondary)' }}>Last Trained:</span> <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{modelInfo?.model_metadata?.isolation_forest?.training_date ? formatLocalTime(modelInfo.model_metadata.isolation_forest.training_date) : 'N/A'}</strong></div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', borderTop: '1px solid var(--border-subtle)', paddingTop: '6px', marginTop: '4px' }}>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>Notes:</span>
+                  <p style={{ fontStyle: 'italic', fontSize: '11px', color: 'var(--text-primary)', margin: 0 }}>{modelInfo?.model_metadata?.isolation_forest?.notes || 'No description notes available.'}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Explainability Feature Importance & Rollback Row */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div className="card-title">
+              <Brain size={18} color="var(--accent-color)" />
+              Explainability — Model Features Contribution
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '340px', overflowY: 'auto', paddingRight: '4px' }}>
+              {featureImportance.length > 0 ? (
+                featureImportance.map((item, idx) => (
+                  <div key={idx} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-primary)' }}>
+                      <span style={{ fontWeight: 500 }}>{item.feature}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 600 }}>{(item.importance * 100).toFixed(1)}%</span>
+                    </div>
+                    <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ width: `${item.importance * 100}%`, height: '100%', background: 'linear-gradient(90deg, var(--accent-dim), var(--accent-color))', borderRadius: '4px', boxShadow: '0 0 6px var(--accent-glow)' }}></div>
+                    </div>
+                  </div>
                 ))
               ) : (
-                <tr>
-                  <td colSpan="7" style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-secondary)' }}>
-                    {loading ? "Syncing ML engine telemetry database..." : "No inferences recorded yet."}
-                  </td>
-                </tr>
+                <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>No feature importance telemetry loaded.</div>
               )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {totalLogs > size && (
-          <div className="pagination-container">
-            <span className="pagination-info">
-              Showing {((page - 1) * size) + 1} - {Math.min(page * size, totalLogs)} of {totalLogs} events
-            </span>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                disabled={page === 1}
-                onClick={() => setPage(page - 1)}
-                className="pagination-btn"
-              >
-                Prev
-              </button>
-              <button
-                disabled={page * size >= totalLogs}
-                onClick={() => setPage(page + 1)}
-                className="pagination-btn"
-              >
-                Next
-              </button>
             </div>
           </div>
-        )}
-      </div>
+
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div className="card-title">
+              <Clock size={18} color="var(--accent-color)" />
+              Historical Backups & Rollback Control
+            </div>
+            <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', maxHeight: '340px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>
+                    <th style={{ padding: '10px' }}>Backup Date</th>
+                    <th style={{ padding: '10px', textAlign: 'center' }}>XGB</th>
+                    <th style={{ padding: '10px', textAlign: 'center' }}>ISO</th>
+                    <th style={{ padding: '10px', textAlign: 'right' }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backups.length > 0 ? (
+                    backups.map((bk, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
+                        <td style={{ padding: '10px', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>{bk.formatted_date}</td>
+                        <td style={{ padding: '10px', textAlign: 'center' }}>
+                          <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '3px', background: bk.xgboost ? 'var(--success-bg)' : 'var(--danger-bg)', color: bk.xgboost ? 'var(--success-color)' : 'var(--danger-color)' }}>
+                            {bk.xgboost ? 'Ready' : 'Missing'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'center' }}>
+                          <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '3px', background: bk.isolation_forest ? 'var(--success-bg)' : 'var(--danger-bg)', color: bk.isolation_forest ? 'var(--success-color)' : 'var(--danger-color)' }}>
+                            {bk.isolation_forest ? 'Ready' : 'Missing'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'right' }}>
+                          <button
+                            disabled={rollingBack}
+                            onClick={() => handleRollback(bk.timestamp)}
+                            className="action-btn-inspect"
+                            style={{ padding: '3px 8px', fontSize: '11px' }}
+                          >
+                            Rollback
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="4" style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)' }}>No backups available.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Retrainer Console Terminal */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+              <div className="card-title" style={{ marginBottom: 0 }}>
+                <Activity size={18} color="var(--accent-color)" />
+                ML Retrainer Console Log
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Status:</span>
+                <span style={{
+                  padding: '2px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase',
+                  background: retrainStatus.status === 'running' ? 'var(--warning-bg)' : retrainStatus.status === 'success' ? 'var(--success-bg)' : 'var(--bg-tertiary)',
+                  color: retrainStatus.status === 'running' ? 'var(--warning-color)' : retrainStatus.status === 'success' ? 'var(--success-color)' : 'var(--text-secondary)',
+                  border: retrainStatus.status === 'running' ? '1px solid rgba(255, 149, 0, 0.2)' : retrainStatus.status === 'success' ? '1px solid rgba(0, 255, 157, 0.2)' : '1px solid var(--border-color)'
+                }}>
+                  {retrainStatus.status}
+                </span>
+                <button
+                  onClick={handleTriggerRetrain}
+                  disabled={retrainStatus.status === 'running' || triggeringRetrain}
+                  className="modal-btn primary"
+                  style={{ padding: '6px 14px', borderRadius: '8px' }}
+                >
+                  {retrainStatus.status === 'running' ? (
+                    <>
+                      <Activity className="animate-spin" size={14} /> Training...
+                    </>
+                  ) : (
+                    <>
+                      <Brain size={14} /> Retrain ML Models
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+            <pre style={{
+              background: 'var(--bg-void)',
+              color: 'var(--success-color)',
+              border: '1px solid var(--border-color)',
+              padding: '16px',
+              borderRadius: '8px',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '11px',
+              maxHeight: '260px',
+              overflowY: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all'
+            }}>
+              {retrainStatus.logs || "Console output empty. Trigger retraining to view log output."}
+            </pre>
+          </div>
+        </>
+      )}
 
       {/* View Payload Detail Modal */}
       {selectedLog && createPortal(
@@ -6083,6 +6397,8 @@ function App() {
   const [isExceptionModalOpen, setIsExceptionModalOpen] = useState(false);
   const [globalSuccessMsg, setGlobalSuccessMsg] = useState('');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isAlertHistoryModalOpen, setIsAlertHistoryModalOpen] = useState(false);
+  const [isAlertSettingsModalOpen, setIsAlertSettingsModalOpen] = useState(false);
 
   // Wrapper that syncs tab state + URL together
   const setActiveTab = (tabId) => {
@@ -6216,20 +6532,27 @@ function App() {
             {activeTab === 'settings' && 'System Settings'}
           </h1>
 
-          <div className="user-profile-badge" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', padding: '6px 14px', borderRadius: '20px' }}>
-            <span style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 500 }}>@{username}</span>
-            <span className={`role-badge role-${(userRole || 'analyst').toLowerCase()}`} style={{
-              fontSize: '10px',
-              fontWeight: 700,
-              padding: '2px 8px',
-              borderRadius: '10px',
-              textTransform: 'uppercase',
-              background: userRole === 'admin' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-              color: userRole === 'admin' ? '#fca5a5' : '#93c5fd',
-              border: userRole === 'admin' ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(59, 130, 246, 0.3)'
-            }}>
-              {userRole}
-            </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <NotificationBell 
+              userRole={userRole} 
+              onOpenHistory={() => setIsAlertHistoryModalOpen(true)} 
+              onOpenSettings={() => setIsAlertSettingsModalOpen(true)} 
+            />
+            <div className="user-profile-badge" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', padding: '6px 14px', borderRadius: '20px' }}>
+              <span style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 500 }}>@{username}</span>
+              <span className={`role-badge role-${(userRole || 'analyst').toLowerCase()}`} style={{
+                fontSize: '10px',
+                fontWeight: 700,
+                padding: '2px 8px',
+                borderRadius: '10px',
+                textTransform: 'uppercase',
+                background: userRole === 'admin' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                color: userRole === 'admin' ? '#fca5a5' : '#93c5fd',
+                border: userRole === 'admin' ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(59, 130, 246, 0.3)'
+              }}>
+                {userRole}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -6253,6 +6576,18 @@ function App() {
           {activeTab === 'integrations' && <Integrations key="integrations" />}
           {activeTab === 'settings' && userRole === 'admin' && <Settings key="settings" onLogout={handleLogout} />}
         </motion.div>
+
+        <AlertHistoryModal
+          isOpen={isAlertHistoryModalOpen}
+          onClose={() => setIsAlertHistoryModalOpen(false)}
+          userRole={userRole}
+        />
+
+        <AlertSettingsModal
+          isOpen={isAlertSettingsModalOpen}
+          onClose={() => setIsAlertSettingsModalOpen(false)}
+          userRole={userRole}
+        />
 
         <FlagFpModal
           isOpen={isFpModalOpen}
@@ -6316,5 +6651,625 @@ function App() {
   );
 }
 
+function NotificationBell({ userRole, onOpenHistory, onOpenSettings }) {
+  const [history, setHistory] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState(null);
+  const dropdownRef = useRef(null);
+
+  const fetchUnread = async () => {
+    try {
+      const hist = await getAlertHistory(10, 0);
+      const unread = hist.filter(h => h.status !== 'acknowledged');
+      setHistory(hist.slice(0, 5)); // show latest 5
+      setUnreadCount(unread.length);
+    } catch (err) {
+      console.error("Error fetching unread notifications:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 8000); // pull every 8s
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  const handleAckAll = async () => {
+    try {
+      const user = parseJwt(localStorage.getItem('token'))?.username || 'admin';
+      const unread = history.filter(h => h.status !== 'acknowledged');
+      for (const alertItem of unread) {
+        await acknowledgeAlert(alertItem.id, user);
+      }
+      fetchUnread();
+    } catch (err) {
+      alert("Failed to acknowledge notifications: " + err.message);
+    }
+  };
+
+  const handleSingleAck = async (id, e) => {
+    e.stopPropagation();
+    try {
+      const user = parseJwt(localStorage.getItem('token'))?.username || 'admin';
+      await acknowledgeAlert(id, user);
+      fetchUnread();
+    } catch (err) {
+      alert("Failed to acknowledge alert: " + err.message);
+    }
+  };
+
+  return (
+    <div ref={dropdownRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        style={{
+          background: 'none', border: 'none', color: unreadCount > 0 ? 'var(--accent-color)' : 'var(--text-secondary)',
+          cursor: 'pointer', padding: '6px', borderRadius: '50%', position: 'relative', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s',
+          boxShadow: unreadCount > 0 ? '0 0 12px var(--accent-glow)' : 'none'
+        }}
+        className="hover-glow"
+      >
+        <Bell size={20} />
+        {unreadCount > 0 && (
+          <span style={{
+            position: 'absolute', top: '0', right: '0', background: 'var(--danger-color)', color: '#fff',
+            fontSize: '9px', fontWeight: 800, minWidth: '15px', height: '15px', borderRadius: '10px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 2px',
+            border: '1px solid var(--bg-primary)', boxShadow: '0 0 8px var(--danger-glow)'
+          }}>
+            {unreadCount}
+          </span>
+        )}
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            transition={{ duration: 0.15 }}
+            style={{
+              position: 'absolute', top: '38px', right: '0', width: '360px',
+              background: 'var(--bg-secondary)', backdropFilter: 'blur(20px)',
+              border: '1px solid var(--border-color)', borderRadius: '12px',
+              boxShadow: 'var(--shadow-card)',
+              zIndex: 9999, overflow: 'hidden'
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border-color)' }}>
+              <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>Security Alerts</span>
+              {unreadCount > 0 && (
+                <button 
+                  onClick={handleAckAll}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent-color)', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Ack All
+                </button>
+              )}
+            </div>
+
+            {/* List */}
+            <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
+              {history.length > 0 ? (
+                history.map(item => (
+                  <div 
+                    key={item.id} 
+                    onClick={() => setSelectedAlert(item)}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0, 212, 255, 0.04)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = item.status !== 'acknowledged' ? 'rgba(0, 212, 255, 0.01)' : 'transparent'}
+                    style={{
+                      padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)',
+                      cursor: 'pointer', transition: 'background 0.2s', display: 'flex', flexDirection: 'column', gap: '4px',
+                      background: item.status !== 'acknowledged' ? 'rgba(0, 212, 255, 0.01)' : 'transparent'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>{item.rule_name}</span>
+                      <span style={{
+                        padding: '1px 6px', borderRadius: '3px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
+                        background: item.severity === 'critical' ? 'var(--danger-bg)' : 'var(--warning-bg)',
+                        color: item.severity === 'critical' ? 'var(--danger-color)' : 'var(--warning-color)',
+                        border: item.severity === 'critical' ? '1px solid rgba(255, 59, 92, 0.2)' : '1px solid rgba(255, 149, 0, 0.2)'
+                      }}>{item.severity}</span>
+                    </div>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '12px', margin: 0, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{item.message}</p>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>{formatLocalTime(item.created_at)}</span>
+                      {item.status !== 'acknowledged' && (
+                        <button 
+                          onClick={(e) => handleSingleAck(item.id, e)}
+                          style={{
+                            background: 'var(--accent-bg)', border: '1px solid var(--accent-border)',
+                            color: 'var(--accent-color)', fontSize: '10px', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer',
+                            fontWeight: 600
+                          }}
+                        >
+                          Acknowledge
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>No warning alerts found.</div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1px', background: 'var(--border-color)',
+              borderTop: '1px solid var(--border-color)', textAlign: 'center'
+            }}>
+              <button 
+                onClick={() => { setIsOpen(false); onOpenHistory(); }}
+                style={{
+                  background: 'var(--bg-tertiary)', border: 'none', color: 'var(--text-secondary)', padding: '12px 0',
+                  fontSize: '12px', cursor: 'pointer', fontWeight: 600, transition: 'color 0.2s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-color)'}
+                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+              >
+                View History Logs
+              </button>
+              <button 
+                onClick={() => { setIsOpen(false); onOpenSettings(); }}
+                style={{
+                  background: 'var(--bg-tertiary)', border: 'none', color: 'var(--text-secondary)', padding: '12px 0',
+                  fontSize: '12px', cursor: 'pointer', fontWeight: 600, transition: 'color 0.2s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-color)'}
+                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
+              >
+                Alert Config
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Details View Modal */}
+      {selectedAlert && (
+        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100000 }}>
+          <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '560px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Alert details: {selectedAlert.rule_name}</h3>
+              <button style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '18px', cursor: 'pointer' }} onClick={() => setSelectedAlert(null)}>X</button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px', color: 'var(--text-primary)' }}>
+              <p><strong>Trigger message:</strong> {selectedAlert.message}</p>
+              <p><strong>Severity:</strong> <span style={{ textTransform: 'uppercase', color: 'var(--accent-color)' }}>{selectedAlert.severity}</span></p>
+              <p><strong>Dispatch Status:</strong> <code style={{ color: 'var(--success-color)' }}>{selectedAlert.status}</code></p>
+              {selectedAlert.error_message && <p><strong>Dispatch error:</strong> <code style={{ color: 'var(--danger-color)' }}>{selectedAlert.error_message}</code></p>}
+              <div><strong>Raw threat payload:</strong></div>
+              <pre style={{ background: 'var(--bg-void)', padding: '12px', borderRadius: '6px', overflowY: 'auto', maxHeight: '180px', fontSize: '11px', color: 'var(--success-color)', border: '1px solid var(--border-color)' }}>{JSON.stringify(selectedAlert.event_data, null, 2)}</pre>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AlertHistoryModal({ isOpen, onClose, userRole }) {
+  const [history, setHistory] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [selectedAlert, setSelectedAlert] = useState(null);
+
+  const fetchHistory = async () => {
+    try {
+      const hist = await getAlertHistory(100, 0);
+      setHistory(hist);
+      const st = await getAlertStats(7);
+      setStats(st);
+    } catch (err) {
+      console.error("Error loading alert history:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchHistory();
+    }
+  }, [isOpen]);
+
+  const handleAck = async (id) => {
+    try {
+      const user = parseJwt(localStorage.getItem('token'))?.username || 'admin';
+      await acknowledgeAlert(id, user);
+      fetchHistory();
+    } catch (err) {
+      alert("Failed to acknowledge: " + err.message);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
+      <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '900px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Triggered Alert History Logs</h3>
+          <button style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '18px', cursor: 'pointer' }} onClick={onClose}>X</button>
+        </div>
+
+        {/* Stats */}
+        {stats && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '15px' }}>
+            <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Total Alerts (7d)</div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>{stats.total_alerts}</div>
+            </div>
+            <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Critical Alerts</div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--danger-color)' }}>{stats.alerts_by_severity?.critical || 0}</div>
+            </div>
+            <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Dispatched Notifications</div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--success-color)' }}>{stats.alerts_by_status?.sent || 0}</div>
+            </div>
+            <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '12px', borderRadius: '8px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Throttled events</div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--warning-color)' }}>{stats.alerts_by_status?.throttled || 0}</div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+            <thead>
+              <tr style={{ background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>
+                <th style={{ padding: '12px' }}>Time</th>
+                <th style={{ padding: '12px' }}>Rule</th>
+                <th style={{ padding: '12px' }}>Event</th>
+                <th style={{ padding: '12px' }}>Severity</th>
+                <th style={{ padding: '12px' }}>Message</th>
+                <th style={{ padding: '12px' }}>Status</th>
+                <th style={{ padding: '12px' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.length > 0 ? (
+                history.map((alert) => (
+                  <tr key={alert.id} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
+                    <td style={{ padding: '12px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{formatLocalTime(alert.created_at)}</td>
+                    <td style={{ padding: '12px', fontWeight: 600 }}>{alert.rule_name}</td>
+                    <td style={{ padding: '12px' }}><span className="badge-purple">{alert.event_type}</span></td>
+                    <td style={{ padding: '12px' }}>
+                      <span style={{
+                        padding: '2px 6px', borderRadius: '4px', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+                        background: alert.severity === 'critical' ? 'var(--danger-bg)' : 'var(--warning-bg)',
+                        color: alert.severity === 'critical' ? 'var(--danger-color)' : 'var(--warning-color)',
+                        border: alert.severity === 'critical' ? '1px solid rgba(255, 59, 92, 0.2)' : '1px solid rgba(255, 149, 0, 0.2)'
+                      }}>{alert.severity}</span>
+                    </td>
+                    <td style={{ padding: '12px', maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{alert.message}</td>
+                    <td style={{ padding: '12px' }}>
+                      <span style={{
+                        padding: '2px 6px', borderRadius: '10px', fontSize: '10px',
+                        background: alert.status === 'sent' ? 'var(--success-bg)' : alert.status === 'throttled' ? 'var(--warning-bg)' : 'var(--danger-bg)',
+                        color: alert.status === 'sent' ? 'var(--success-color)' : alert.status === 'throttled' ? 'var(--warning-color)' : 'var(--danger-color)',
+                        border: alert.status === 'sent' ? '1px solid rgba(0, 255, 157, 0.2)' : alert.status === 'throttled' ? '1px solid rgba(255, 149, 0, 0.2)' : '1px solid rgba(255, 59, 92, 0.2)'
+                      }}>{alert.status}</span>
+                    </td>
+                    <td style={{ padding: '12px' }}>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button className="action-btn-inspect" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => setSelectedAlert(alert)}>View</button>
+                        {alert.status !== 'acknowledged' && (
+                          <button className="modal-btn primary" style={{ padding: '4px 8px', fontSize: '11px', boxShadow: 'none' }} onClick={() => handleAck(alert.id)}>Ack</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="7" style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)' }}>No alerts triggered.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Details View */}
+      {selectedAlert && (
+        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000 }}>
+          <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '500px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--accent-color)' }}>Alert Details: {selectedAlert.rule_name}</h3>
+              <button style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '16px', cursor: 'pointer' }} onClick={() => setSelectedAlert(null)}>X</button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px', color: 'var(--text-primary)' }}>
+              <p><strong>Message:</strong> {selectedAlert.message}</p>
+              <div><strong>Raw Payload:</strong></div>
+              <pre style={{ background: 'var(--bg-void)', padding: '12px', borderRadius: '6px', overflowY: 'auto', maxHeight: '160px', fontSize: '11px', color: 'var(--success-color)', border: '1px solid var(--border-color)' }}>{JSON.stringify(selectedAlert.event_data, null, 2)}</pre>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AlertSettingsModal({ isOpen, onClose, userRole }) {
+  const [activeTab, setActiveTab] = useState('rules'); // 'rules', 'channels'
+  const [channels, setChannels] = useState([]);
+  const [rules, setRules] = useState([]);
+
+  // Modal forms
+  const [isChannelCreateOpen, setIsChannelCreateOpen] = useState(false);
+  const [isRuleCreateOpen, setIsRuleCreateOpen] = useState(false);
+
+  // Form structures
+  const [channelForm, setChannelForm] = useState({ name: '', channel_type: 'slack', config: {} });
+  const [ruleForm, setRuleForm] = useState({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
+
+  const loadData = async () => {
+    try {
+      const chans = await getAlertChannels();
+      setChannels(chans);
+      const rls = await getAlertRules();
+      setRules(rls);
+    } catch (err) {
+      console.error("Error loading alert configurations:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      loadData();
+    }
+  }, [isOpen]);
+
+  const handleCreateChannel = async (e) => {
+    e.preventDefault();
+    try {
+      await createAlertChannel(channelForm);
+      setIsChannelCreateOpen(false);
+      setChannelForm({ name: '', channel_type: 'slack', config: {} });
+      loadData();
+    } catch (err) {
+      alert("Failed to save channel: " + err.message);
+    }
+  };
+
+  const handleDeleteChannel = async (id) => {
+    if (window.confirm("Are you sure you want to delete this channel?")) {
+      try {
+        await deleteAlertChannel(id);
+        loadData();
+      } catch (err) {
+        alert("Failed to delete: " + err.message);
+      }
+    }
+  };
+
+  const handleTestChannel = async (id) => {
+    try {
+      const res = await testAlertChannel(id, { test_message: "Warning alerting configured successfully." });
+      if (res.success) {
+        alert("Test notification dispatched successfully!");
+      } else {
+        alert("Dispatch failed: " + res.message);
+      }
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+  };
+
+  const handleCreateRule = async (e) => {
+    e.preventDefault();
+    try {
+      await createAlertRule(ruleForm);
+      setIsRuleCreateOpen(false);
+      setRuleForm({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
+      loadData();
+    } catch (err) {
+      alert("Failed to create rule: " + err.message);
+    }
+  };
+
+  const handleDeleteRule = async (id) => {
+    if (window.confirm("Are you sure you want to delete this rule?")) {
+      try {
+        await deleteAlertRule(id);
+        loadData();
+      } catch (err) {
+        alert("Failed to delete rule: " + err.message);
+      }
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
+      <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '800px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Alert Notification Configuration</h3>
+          <button style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '18px', cursor: 'pointer' }} onClick={onClose}>X</button>
+        </div>
+
+        {/* Tab Selection */}
+        <div style={{ display: 'flex', gap: '10px', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>
+          <button className={`tab-btn ${activeTab === 'rules' ? 'active' : ''}`} style={{ padding: '6px 12px', fontSize: '13px' }} onClick={() => setActiveTab('rules')}>Evaluation Rules</button>
+          <button className={`tab-btn ${activeTab === 'channels' ? 'active' : ''}`} style={{ padding: '6px 12px', fontSize: '13px' }} onClick={() => setActiveTab('channels')}>Integrations</button>
+        </div>
+
+        {activeTab === 'rules' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Define warnings and critical alert rules:</span>
+              {userRole === 'admin' && <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => setIsRuleCreateOpen(true)}>+ New Rule</button>}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              {rules.map(rule => (
+                <div key={rule.id} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '14px', borderRadius: '8px', position: 'relative' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{rule.name}</span>
+                    <span style={{
+                      padding: '1px 6px', borderRadius: '3px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
+                      background: rule.severity === 'critical' ? 'var(--danger-bg)' : 'var(--warning-bg)',
+                      color: rule.severity === 'critical' ? 'var(--danger-color)' : 'var(--warning-color)',
+                      border: rule.severity === 'critical' ? '1px solid rgba(255, 59, 92, 0.2)' : '1px solid rgba(255, 149, 0, 0.2)'
+                    }}>{rule.severity}</span>
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '12px', margin: '4px 0 10px 0' }}>{rule.description || 'No description'}</p>
+                  <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', color: 'var(--text-primary)' }}>
+                    <div><strong>Event type:</strong> <span className="badge-purple">{rule.event_type}</span></div>
+                    <div><strong>Conditions:</strong> <code style={{ fontSize: '11px', color: 'var(--success-color)' }}>{JSON.stringify(rule.conditions)}</code></div>
+                    <div><strong>Channels assigned:</strong> Channel IDs: {JSON.stringify(rule.channels)}</div>
+                  </div>
+                  {userRole === 'admin' && (
+                    <button 
+                      onClick={() => handleDeleteRule(rule.id)}
+                      style={{ background: 'none', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', fontSize: '12px', marginTop: '10px', float: 'right' }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'channels' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Configure Slack and SMTP notification profiles:</span>
+              {userRole === 'admin' && <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => setIsChannelCreateOpen(true)}>+ Add integration</button>}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              {channels.map(chan => (
+                <div key={chan.id} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '14px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{chan.name}</span>
+                      <span style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', fontSize: '9px', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '3px' }}>{chan.channel_type}</span>
+                    </div>
+                    <code style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginTop: '6px' }}>{JSON.stringify(chan.config)}</code>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="action-btn-inspect" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => handleTestChannel(chan.id)}>Test</button>
+                    {userRole === 'admin' && (
+                      <button 
+                        onClick={() => handleDeleteChannel(chan.id)}
+                        style={{ background: 'none', border: 'none', color: 'var(--danger-color)', fontSize: '12px', cursor: 'pointer' }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Channel Create Overlay */}
+      {isChannelCreateOpen && (
+        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000 }}>
+          <form className="modal-content" onSubmit={handleCreateChannel} style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '480px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)' }}>Add Notification integration</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Name</label>
+              <input className="settings-input" type="text" required value={channelForm.name} onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Type</label>
+              <select className="settings-input" value={channelForm.channel_type} onChange={(e) => setChannelForm({ ...channelForm, channel_type: e.target.value })}>
+                <option value="slack" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Slack Webhook</option>
+                <option value="email" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Email SMTP</option>
+                <option value="webhook" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Generic Webhook</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Config JSON</label>
+              <textarea className="settings-input" required style={{ minHeight: '80px', fontSize: '11px', fontFamily: 'monospace' }} placeholder='{"webhook_url": "..."}' onChange={(e) => {
+                try {
+                  const cfg = JSON.parse(e.target.value);
+                  setChannelForm({ ...channelForm, config: cfg });
+                } catch {}
+              }}></textarea>
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '8px' }}>
+              <button type="button" className="modal-btn secondary" onClick={() => setIsChannelCreateOpen(false)}>Cancel</button>
+              <button type="submit" className="modal-btn primary">Save Channel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Rule Create Overlay */}
+      {isRuleCreateOpen && (
+        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000 }}>
+          <form className="modal-content" onSubmit={handleCreateRule} style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '480px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)' }}>Create Alert rule</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Name</label>
+              <input className="settings-input" type="text" required value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Event Type</label>
+              <select className="settings-input" value={ruleForm.event_type} onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}>
+                <option value="attack_detected" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Attack Detected</option>
+                <option value="high_threat_score" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>High Threat Score</option>
+                <option value="ml_anomaly" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>ML Anomaly</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Severity</label>
+              <select className="settings-input" value={ruleForm.severity} onChange={(e) => setRuleForm({ ...ruleForm, severity: e.target.value })}>
+                <option value="critical" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Critical</option>
+                <option value="high" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>High</option>
+                <option value="medium" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Medium</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON</label>
+              <textarea className="settings-input" style={{ minHeight: '60px', fontSize: '11px', fontFamily: 'monospace' }} placeholder='{"threat_score_gt": 80}' onChange={(e) => {
+                try {
+                  const conds = JSON.parse(e.target.value);
+                  setRuleForm({ ...ruleForm, conditions: conds });
+                } catch {}
+              }}></textarea>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Assign to Channels (IDs, e.g. 1,2)</label>
+              <input className="settings-input" type="text" onChange={(e) => {
+                const ids = e.target.value.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x));
+                setRuleForm({ ...ruleForm, channels: ids });
+              }} />
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '8px' }}>
+              <button type="button" className="modal-btn secondary" onClick={() => setIsRuleCreateOpen(false)}>Cancel</button>
+              <button type="submit" className="modal-btn primary">Create Rule</button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default App;
+
 

@@ -57,9 +57,10 @@ log "============================================================"
 log "  CyberSentinel ML Model Retraining — ${TIMESTAMP}"
 log "============================================================"
 
-# --- Step 1: Verify Python venv and training scripts exist ---
+# --- Step 1: Verify Python interpreter and training scripts exist ---
 if [ ! -f "$VENV_PYTHON" ]; then
-    error "Python venv not found at ${VENV_PYTHON}. Is the ml-waf venv set up?"
+    warn "Python venv not found at ${VENV_PYTHON}. Falling back to system python3."
+    VENV_PYTHON="python3"
 fi
 if [ ! -f "${ML_DIR}/train_xgb.py" ] || [ ! -f "${ML_DIR}/train_iso.py" ]; then
     error "Training scripts (train_xgb.py / train_iso.py) not found in ${ML_DIR}."

@@ -73,6 +73,7 @@ async def health_check():
     except Exception:
         ml_enabled = False
 
+
     return HealthResponse(
         status="ok" if db_ok else "warning",
         log_directory_exists=log_dir_exists,

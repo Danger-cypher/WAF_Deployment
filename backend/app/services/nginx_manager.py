@@ -165,6 +165,7 @@ def apply_ddos_settings(settings: dict) -> bool:
                         logger.warning(f"Skipping invalid IP/CIDR in trusted list: '{ip}'")
                         continue
                     config_lines.append(f"    {ip} 0;")
+            config_lines.append("}")
             config_lines.append("")
             config_lines.append("map $limit $limit_key {")
             config_lines.append('    0 "";')
@@ -322,16 +323,16 @@ def reload_nginx() -> bool:
     """
     candidates = [
         # Docker reload variants (first check if running in docker-compose environment)
-        ["docker", "exec", "waf-openresty", "openresty", "-s", "reload"],
-        ["docker", "exec", "waf-openresty", "nginx", "-s", "reload"],
+        ["docker", "exec", "waf-openresty", "openresty", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
+        ["docker", "exec", "waf-openresty", "nginx", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
         # sudo variants (for non-root service user via sudoers grant)
-        ["sudo", "/usr/local/openresty/bin/openresty", "-s", "reload"],
-        ["sudo", "/usr/local/openresty/nginx/sbin/nginx", "-s", "reload"],
+        ["sudo", "/usr/local/openresty/bin/openresty", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
+        ["sudo", "/usr/local/openresty/nginx/sbin/nginx", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
         # Direct variants (when running as root)
-        ["/usr/local/openresty/bin/openresty", "-s", "reload"],
-        ["/usr/local/openresty/nginx/sbin/nginx", "-s", "reload"],
-        ["openresty", "-s", "reload"],
-        ["nginx", "-s", "reload"],
+        ["/usr/local/openresty/bin/openresty", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
+        ["/usr/local/openresty/nginx/sbin/nginx", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
+        ["openresty", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
+        ["nginx", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
     ]
     for cmd in candidates:
         try:
@@ -481,11 +482,6 @@ def sync_protected_apps_to_nginx() -> bool:
             
         logger.info(f"Successfully generated dynamic rate limits config at {rate_limits_conf_path}")
 
-        # 2. Generate virtual host server blocks with health checked upstreams
-        if not active_apps:
-            logger.warning("No active protected applications found in database. NGINX config not updated.")
-            return False
-            
         config_lines = [
             "# =============================================================================",
             "# Dynamic WAF Protected Applications — Virtual Host Configuration",
@@ -504,84 +500,105 @@ def sync_protected_apps_to_nginx() -> bool:
             ""
         ]
 
-        has_wildcard_default = any(app.get("domain") == "_" for app in active_apps)
-        
-        for idx, app in enumerate(active_apps):
-            app_id = app.get("id")
-            name = app.get("name", f"App {app_id}")
-            domain = app.get("domain", "_").strip().lower()
-            upstream_host = app.get("upstream_host", "host.docker.internal").strip()
-            upstream_port = app.get("upstream_port", 7000)
-            protocol = app.get("protocol", "http").strip().lower()
-            burst = app.get("burst_tolerance", 100)
-            
-            # Decide if default_server is applied
-            is_default = False
-            if domain == "_":
-                is_default = True
-            elif not has_wildcard_default and idx == 0:
-                is_default = True
-                
-            listen_suffix = " default_server" if is_default else ""
-            
+        if not active_apps:
+            logger.warning("No active protected applications found in database. Generating fallback server block.")
             config_lines.extend([
-                f"# --- Upstream App {app_id}: {name} ({domain}) ---",
-                f"upstream upstream_app_{app_id} {{",
-                f"    server {upstream_host}:{upstream_port} max_fails=3 fail_timeout=10s;",
-                "}",
-                "",
-                f"# --- App {app_id}: {name} ({domain}) ---",
+                "# Fallback dummy server when no apps are active",
                 "server {",
-                f"    listen 443 ssl{listen_suffix};",
-                f"    listen [::]:443 ssl{listen_suffix};",
+                "    listen 443 ssl default_server;",
+                "    listen [::]:443 ssl default_server;",
                 "    http2 on;",
-                f"    server_name {domain};",
+                "    server_name _;",
                 "",
                 "    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;",
                 "    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;",
                 "",
-                "    resolver 127.0.0.11 valid=30s ipv6=off;",
-                "",
-                "    location @json_forbidden {",
-                "        default_type application/json;",
-                "        add_header Content-Type 'application/json; charset=utf-8' always;",
-                "        return 403 '{\"error\": \"🚨 WAF caught you! This attack has been blocked 🚫 and logged 📋. CyberSentinel is watching 👀\", \"code\": 403}';",
-                "    }",
-                "",
                 "    location / {",
-                f"        limit_req zone=zone_app_{app_id} burst={burst};",
-                f"        proxy_pass {protocol}://upstream_app_{app_id};",
-                "        proxy_http_version 1.1;",
-                "        proxy_set_header Upgrade $http_upgrade;",
-                "        proxy_set_header Connection 'upgrade';",
-                "        proxy_set_header Host $host;",
-                "        proxy_set_header X-Real-IP $remote_addr;",
-                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-                "        proxy_set_header X-Forwarded-Proto $scheme;",
-                "        proxy_next_upstream error timeout http_502 http_503;",
-                "        proxy_next_upstream_tries 3;",
-                "        proxy_next_upstream_timeout 10s;",
+                "        default_type text/html;",
+                "        return 404 \"<html><head><title>No Protected Applications</title></head><body style='font-family:sans-serif; text-align:center; padding:50px; background:#0b0f19; color:#f3f4f6;'><h2>CyberSentinel WAF</h2><p style='color:#9ca3af;'>No active protected applications are currently routed through this gateway.</p></body></html>\";",
                 "    }",
-                "",
-                "    location /api {",
-                "        error_page 403 = @json_forbidden;",
-                f"        limit_req zone=zone_app_{app_id} burst={max(5, burst // 3)} nodelay;",
-                "",
-                f"        proxy_pass {protocol}://upstream_app_{app_id};",
-                "        proxy_http_version 1.1;",
-                "        proxy_set_header Upgrade $http_upgrade;",
-                "        proxy_set_header Connection 'upgrade';",
-                "        proxy_set_header Host $host;",
-                "        proxy_set_header X-Real-IP $remote_addr;",
-                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-                "        proxy_set_header X-Forwarded-Proto $scheme;",
-                "        proxy_next_upstream error timeout http_502 http_503;",
-                "        proxy_next_upstream_tries 3;",
-                "        proxy_next_upstream_timeout 10s;",
-                "    }",
-                "}",
-                ""
+                "}"
             ])
+        else:
+            has_wildcard_default = any(app.get("domain") == "_" for app in active_apps)
+            
+            for idx, app in enumerate(active_apps):
+                app_id = app.get("id")
+                name = app.get("name", f"App {app_id}")
+                domain = app.get("domain", "_").strip().lower()
+                upstream_host = app.get("upstream_host", "host.docker.internal").strip()
+                upstream_port = app.get("upstream_port", 7000)
+                protocol = app.get("protocol", "http").strip().lower()
+                burst = app.get("burst_tolerance", 100)
+                
+                # Decide if default_server is applied
+                is_default = False
+                if domain == "_":
+                    is_default = True
+                elif not has_wildcard_default and idx == 0:
+                    is_default = True
+                    
+                listen_suffix = " default_server" if is_default else ""
+                
+                config_lines.extend([
+                    f"# --- Upstream App {app_id}: {name} ({domain}) ---",
+                    f"upstream upstream_app_{app_id} {{",
+                    f"    server {upstream_host}:{upstream_port} max_fails=3 fail_timeout=10s;",
+                    "}",
+                    "",
+                    f"# --- App {app_id}: {name} ({domain}) ---",
+                    "server {",
+                    f"    listen 443 ssl{listen_suffix};",
+                    f"    listen [::]:443 ssl{listen_suffix};",
+                    "    http2 on;",
+                    f"    server_name {domain};",
+                    "",
+                    "    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;",
+                    "    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;",
+                    "",
+                    "    resolver 127.0.0.11 valid=30s ipv6=off;",
+                    "",
+                    "    location @json_forbidden {",
+                    "        default_type application/json;",
+                    "        add_header Content-Type 'application/json; charset=utf-8' always;",
+                    "        return 403 '{\"error\": \"🚨 WAF caught you! This attack has been blocked 🚫 and logged 📋. CyberSentinel is watching 👀\", \"code\": 403}';",
+                    "    }",
+                    "",
+                    "    location / {",
+                    f"        limit_req zone=zone_app_{app_id} burst={burst};",
+                    f"        proxy_pass {protocol}://upstream_app_{app_id};",
+                    "        proxy_http_version 1.1;",
+                    "        proxy_set_header Upgrade $http_upgrade;",
+                    "        proxy_set_header Connection 'upgrade';",
+                    "        proxy_set_header Host $host;",
+                    "        proxy_set_header X-Real-IP $remote_addr;",
+                    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+                    "        proxy_set_header X-Forwarded-Proto $scheme;",
+                    "        proxy_next_upstream error timeout http_502 http_503;",
+                    "        proxy_next_upstream_tries 3;",
+                    "        proxy_next_upstream_timeout 10s;",
+                    "    }",
+                    "",
+                    "    location /api {",
+                    "        error_page 403 = @json_forbidden;",
+                    f"        limit_req zone=zone_app_{app_id} burst={max(5, burst // 3)} nodelay;",
+                    "",
+                    f"        proxy_pass {protocol}://upstream_app_{app_id};",
+                    "        proxy_http_version 1.1;",
+                    "        proxy_set_header Upgrade $http_upgrade;",
+                    "        proxy_set_header Connection 'upgrade';",
+                    "        proxy_set_header Host $host;",
+                    "        proxy_set_header X-Real-IP $remote_addr;",
+                    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+                    "        proxy_set_header X-Forwarded-Proto $scheme;",
+                    "        proxy_next_upstream error timeout http_502 http_503;",
+                    "        proxy_next_upstream_tries 3;",
+                    "        proxy_next_upstream_timeout 10s;",
+                    "    }",
+                    "}",
+                    ""
+                ])
+
             
         config_content = "\n".join(config_lines) + "\n"
         apps_conf_path = "/etc/nginx/sites-enabled/mssp"
