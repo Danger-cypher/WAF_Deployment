@@ -46,11 +46,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2'
-          memory: 1G
+          cpus: ${BACKEND_CPU_LIMIT:-2}
+          memory: ${BACKEND_MEM_LIMIT:-1G}
         reservations:
-          cpus: '0.5'
-          memory: 256M
+          cpus: ${BACKEND_CPU_RESERVE:-0.5}
+          memory: ${BACKEND_MEM_RESERVE:-256M}
     networks:
       - waf-network
 
@@ -80,11 +80,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2'
-          memory: 2G
+          cpus: ${ML_CPU_LIMIT:-2}
+          memory: ${ML_MEM_LIMIT:-2G}
         reservations:
-          cpus: '1'
-          memory: 512M
+          cpus: ${ML_CPU_RESERVE:-1}
+          memory: ${ML_MEM_RESERVE:-512M}
     networks:
       - waf-network
 
@@ -107,11 +107,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 512M
+          cpus: ${REDIS_CPU_LIMIT:-1}
+          memory: ${REDIS_MEM_LIMIT:-512M}
         reservations:
-          cpus: '0.25'
-          memory: 128M
+          cpus: ${REDIS_CPU_RESERVE:-0.25}
+          memory: ${REDIS_MEM_RESERVE:-128M}
     networks:
       - waf-network
 
@@ -159,11 +159,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2'
-          memory: 1G
+          cpus: ${OPENRESTY_CPU_LIMIT:-2}
+          memory: ${OPENRESTY_MEM_LIMIT:-1G}
         reservations:
-          cpus: '0.5'
-          memory: 256M
+          cpus: ${OPENRESTY_CPU_RESERVE:-0.5}
+          memory: ${OPENRESTY_MEM_RESERVE:-256M}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -189,11 +189,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 256M
+          cpus: ${FRONTEND_CPU_LIMIT:-0.5}
+          memory: ${FRONTEND_MEM_LIMIT:-256M}
         reservations:
-          cpus: '0.1'
-          memory: 64M
+          cpus: ${FRONTEND_CPU_RESERVE:-0.1}
+          memory: ${FRONTEND_MEM_RESERVE:-64M}
     networks:
       - waf-network
 
