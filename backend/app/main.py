@@ -52,6 +52,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to sync protected apps to NGINX on startup: {e}")
 
+    # Sync ModSecurity rules and exclusions on startup
+    try:
+        from app.services.rule_manager import sync_rules_and_exclusions
+        sync_rules_and_exclusions()
+    except Exception as e:
+        logger.error(f"Failed to sync ModSecurity rules to NGINX on startup: {e}")
+
     # Initial scan of the log directory
     scan_log_directory()
 
