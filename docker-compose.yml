@@ -24,8 +24,8 @@ services:
     expose:
       - "8000"
     environment:
-      ML_API: http://ml-engine:9000
-      REDIS_HOST: redis
+      ML_API: http://waf-ml:9000
+      REDIS_HOST: waf-redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       GEOIP_DATA_DIR: /etc/nginx/geoip
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
@@ -66,8 +66,10 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     environment:
-      REDIS_HOST: redis
+      REDIS_HOST: waf-redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      ML_DB_PATH: /opt/ModSecurity/WAF_GUI/backend/app/data/ml_events.db
+
     depends_on:
       redis:
         condition: service_healthy
@@ -134,12 +136,16 @@ services:
       - ./ml-waf:/opt/ml-waf:ro
       # GeoIP2 databases folder mapped inside OpenResty
       - ./backend/app/data:/etc/nginx/geoip:ro
+      # Let's Encrypt: certbot writes challenges here; nginx reads them for HTTP-01 validation
+      - ./configs/acme-challenge:/etc/nginx/acme-challenge
+      # Let's Encrypt: issued certs are stored here (certbot + nginx both read from this path)
+      - ./configs/nginx/ssl/letsencrypt:/etc/nginx/ssl/letsencrypt
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     environment:
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
-      ML_HOST: ml-engine
+      ML_HOST: waf-ml
       ML_PORT: 9000
     depends_on:
       backend:
@@ -197,6 +203,39 @@ services:
     networks:
       - waf-network
 
+  certbot:
+    image: certbot/certbot:latest
+    container_name: waf-certbot
+    restart: unless-stopped
+    volumes:
+      # Shared webroot for HTTP-01 challenge tokens (nginx serves this path on port 80)
+      - ./configs/acme-challenge:/acme-challenge
+      # Output directory: certbot writes fullchain.pem + privkey.pem here
+      - ./configs/nginx/ssl/letsencrypt:/etc/letsencrypt/live
+      # Certbot config and work dirs
+      - ./configs/certbot/config:/etc/letsencrypt
+      - ./configs/certbot/work:/var/lib/letsencrypt
+      - ./configs/certbot/logs:/var/log/letsencrypt
+      - /etc/localtime:/etc/localtime:ro
+    entrypoint: /bin/sh
+    command: >
+      -c "trap exit TERM;
+          while :; do
+            certbot renew
+              --webroot -w /acme-challenge
+              --non-interactive
+              --quiet;
+            sleep 43200;
+          done"
+    networks:
+      - waf-network
+
 networks:
   waf-network:
     driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: "172.20.0.0/16"
+        - subnet: "fd00::/80"
+

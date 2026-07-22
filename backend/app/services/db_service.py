@@ -123,8 +123,6 @@ def init_db():
                 )
             """)
 
-
-
             # Run migrations for protected_apps schema changes
             for col, default in [
                 ("rate_limit_rps", "50"),
@@ -136,6 +134,20 @@ def init_db():
                     )
                 except Exception:
                     pass
+
+            # SSL provisioning columns migration
+            for col_def in [
+                "ssl_option TEXT NOT NULL DEFAULT 'self-signed'",
+                "ssl_cert_path TEXT DEFAULT NULL",
+                "ssl_key_path TEXT DEFAULT NULL",
+            ]:
+                col_name = col_def.split()[0]
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE protected_apps ADD COLUMN {col_def}"
+                    )
+                except Exception:
+                    pass  # Column already exists — expected on re-init
 
             conn.commit()
             logger.info("Database schemas initialized successfully.")
@@ -809,14 +821,33 @@ def get_protected_app_by_id(app_id: int):
         return None
 
 
-def create_protected_app(name: str, domain: str, upstream_host: str, upstream_port: int, protocol: str = "http", is_active: int = 1, rate_limit_rps: int = 50, burst_tolerance: int = 100):
+def create_protected_app(
+    name: str,
+    domain: str,
+    upstream_host: str,
+    upstream_port: int,
+    protocol: str = "http",
+    is_active: int = 1,
+    rate_limit_rps: int = 50,
+    burst_tolerance: int = 100,
+    ssl_option: str = "self-signed",
+    ssl_cert_path: str = None,
+    ssl_key_path: str = None,
+):
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO protected_apps (name, domain, upstream_host, upstream_port, protocol, is_active, rate_limit_rps, burst_tolerance)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (name, domain.strip().lower(), upstream_host.strip(), upstream_port, protocol.strip().lower(), is_active, rate_limit_rps, burst_tolerance))
+                INSERT INTO protected_apps
+                    (name, domain, upstream_host, upstream_port, protocol, is_active,
+                     rate_limit_rps, burst_tolerance, ssl_option, ssl_cert_path, ssl_key_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                name, domain.strip().lower(), upstream_host.strip(),
+                upstream_port, protocol.strip().lower(), is_active,
+                rate_limit_rps, burst_tolerance,
+                ssl_option, ssl_cert_path, ssl_key_path,
+            ))
             conn.commit()
             new_id = cursor.lastrowid
             return get_protected_app_by_id(new_id)
@@ -825,15 +856,38 @@ def create_protected_app(name: str, domain: str, upstream_host: str, upstream_po
         return None
 
 
-def update_protected_app(app_id: int, name: str, domain: str, upstream_host: str, upstream_port: int, protocol: str = "http", is_active: int = 1, rate_limit_rps: int = 50, burst_tolerance: int = 100):
+def update_protected_app(
+    app_id: int,
+    name: str,
+    domain: str,
+    upstream_host: str,
+    upstream_port: int,
+    protocol: str = "http",
+    is_active: int = 1,
+    rate_limit_rps: int = 50,
+    burst_tolerance: int = 100,
+    ssl_option: str = "self-signed",
+    ssl_cert_path: str = None,
+    ssl_key_path: str = None,
+):
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE protected_apps
-                SET name = ?, domain = ?, upstream_host = ?, upstream_port = ?, protocol = ?, is_active = ?, rate_limit_rps = ?, burst_tolerance = ?
+                SET name = ?, domain = ?, upstream_host = ?, upstream_port = ?,
+                    protocol = ?, is_active = ?, rate_limit_rps = ?, burst_tolerance = ?,
+                    ssl_option = ?,
+                    ssl_cert_path = COALESCE(?, ssl_cert_path),
+                    ssl_key_path  = COALESCE(?, ssl_key_path)
                 WHERE id = ?
-            """, (name, domain.strip().lower(), upstream_host.strip(), upstream_port, protocol.strip().lower(), is_active, rate_limit_rps, burst_tolerance, app_id))
+            """, (
+                name, domain.strip().lower(), upstream_host.strip(),
+                upstream_port, protocol.strip().lower(), is_active,
+                rate_limit_rps, burst_tolerance,
+                ssl_option, ssl_cert_path, ssl_key_path,
+                app_id,
+            ))
             conn.commit()
             return get_protected_app_by_id(app_id)
     except Exception as e:

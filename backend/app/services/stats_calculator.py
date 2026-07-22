@@ -4,42 +4,69 @@ from app.services.log_reader import get_all_logs, get_total_blocked_count
 from collections import Counter
 
 
-def _get_total_nginx_requests() -> int:
-    """
-    Count total lines in nginx access.log and its most recent rotated copy (.1).
-    Nginx logrotate runs at midnight — immediately after rotation the current
-    access.log is empty and all lines are in access.log.1.  Reading both files
-    ensures the counter never drops to zero after a rotation.
-    Compressed archives (.2.gz and older) are intentionally skipped to keep
-    the response fast.
-    """
-    import gzip
+import time
+
+_nginx_req_cache = {}
+_nginx_req_cache_time = {}
+
+def _get_total_nginx_requests(hours: int = None) -> int:
+    now = time.monotonic()
+    cache_key = hours or 0
+    if cache_key in _nginx_req_cache and (now - _nginx_req_cache_time.get(cache_key, 0)) < 5.0:
+        return _nginx_req_cache[cache_key]
+
     count = 0
     candidates = [
         '/var/log/nginx/access.log',
         '/var/log/nginx/access.log.1',
     ]
+    
+    if hours is None:
+        try:
+            for path in candidates:
+                if os.path.exists(path):
+                    with open(path, 'rb') as f:
+                        count += sum(1 for _ in f)
+            _nginx_req_cache[cache_key] = count
+            _nginx_req_cache_time[cache_key] = now
+            return count
+        except Exception:
+            return 0
+            
+    # Time-filtered logic
+    import re
+    from datetime import datetime, timedelta
+    cutoff = datetime.now() - timedelta(hours=hours)
+    # Nginx access log timestamp: [17/Jul/2026:10:02:00 +0000]
+    DATE_RE = re.compile(r"\[(\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2})")
     try:
         for path in candidates:
             if os.path.exists(path):
-                try:
-                    with open(path, 'rb') as f:
-                        count += sum(1 for _ in f)
-                except Exception:
-                    pass
-        return count
+                with open(path, 'r', errors='replace') as f:
+                    for line in f:
+                        match = DATE_RE.search(line)
+                        if match:
+                            try:
+                                dt = datetime.strptime(match.group(1), "%d/%b/%Y:%H:%M:%S")
+                                if dt >= cutoff:
+                                    count += 1
+                            except Exception:
+                                pass
     except Exception:
-        return 0
+        pass
+    _nginx_req_cache[cache_key] = count
+    _nginx_req_cache_time[cache_key] = now
+    return count
 
-def calculate_stats() -> Dict[str, Any]:
-    logs = get_all_logs()
+def calculate_stats(hours: int = None) -> Dict[str, Any]:
+    logs = get_all_logs(hours)
 
     # Total requests is all traffic processed by the proxy (read from NGINX access log)
-    nginx_reqs = _get_total_nginx_requests()
+    nginx_reqs = _get_total_nginx_requests(hours)
 
     # Blocked count: read ALL "Access denied" lines directly from both error logs
     # (not capped at 5000 like get_all_logs). This is the true cumulative block count.
-    total_blocked = get_total_blocked_count()
+    total_blocked = get_total_blocked_count(hours)
 
     # If WAF logs exceed access logs (due to log rotation sync issues), fallback gracefully
     total_requests = max(nginx_reqs, total_blocked)
@@ -82,8 +109,8 @@ def calculate_stats() -> Dict[str, Any]:
     }
 
 
-def get_top_ips(limit: int = 10) -> List[Dict[str, Any]]:
-    logs = get_all_logs()
+def get_top_ips(limit: int = 10, hours: int = None) -> List[Dict[str, Any]]:
+    logs = get_all_logs(hours)
     ips = [log.client_ip for log in logs if log.client_ip]
     most_common = Counter(ips).most_common(limit)
     
@@ -121,15 +148,15 @@ def get_top_ips(limit: int = 10) -> List[Dict[str, Any]]:
 
 
 
-def get_attack_types_distribution() -> List[Dict[str, Any]]:
-    logs = get_all_logs()
+def get_attack_types_distribution(hours: int = None) -> List[Dict[str, Any]]:
+    logs = get_all_logs(hours)
     types = [log.attack_type for log in logs]
     counts = Counter(types)
     return [{"attack_type": t, "count": c} for t, c in counts.items()]
 
 
-def get_timeline() -> List[Dict[str, Any]]:
-    logs = get_all_logs()
+def get_timeline(hours: int = None) -> List[Dict[str, Any]]:
+    logs = get_all_logs(hours)
     # Group by 15-minute intervals
     timeline_counter = {}
     
@@ -149,15 +176,15 @@ def get_timeline() -> List[Dict[str, Any]]:
 
 
 
-def get_top_rules(limit: int = 10) -> List[Dict[str, Any]]:
-    logs = get_all_logs()
+def get_top_rules(limit: int = 10, hours: int = None) -> List[Dict[str, Any]]:
+    logs = get_all_logs(hours)
     rules = [log.rule_id for log in logs if log.rule_id]
     most_common = Counter(rules).most_common(limit)
     return [{"rule_id": r, "count": c} for r, c in most_common]
 
 
-def get_severity_distribution() -> List[Dict[str, Any]]:
-    logs = get_all_logs()
+def get_severity_distribution(hours: int = None) -> List[Dict[str, Any]]:
+    logs = get_all_logs(hours)
     # Normalize severities to standardized Title Case
     severities = []
     for log in logs:

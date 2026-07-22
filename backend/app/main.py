@@ -21,6 +21,7 @@ from app.routes import (
     security_audit,
     apps,
     alerts,
+    system,
 )
 from app.services.log_reader import scan_log_directory
 from app.websocket.connection_manager import start_log_watcher
@@ -75,6 +76,10 @@ async def lifespan(app: FastAPI):
     # Start the log retention enforcement background task
     retention_task = asyncio.create_task(start_log_retention_service())
 
+    # Start the SSL renewal directory watcher background task
+    from app.services.ssl_monitor import start_ssl_monitor
+    ssl_monitor_task = asyncio.create_task(start_ssl_monitor())
+
     yield
 
     # Shutdown event
@@ -94,6 +99,13 @@ async def lifespan(app: FastAPI):
     retention_task.cancel()
     try:
         await retention_task
+    except asyncio.CancelledError:
+        pass
+
+    # Cancel the SSL monitor task
+    ssl_monitor_task.cancel()
+    try:
+        await ssl_monitor_task
     except asyncio.CancelledError:
         pass
 
@@ -147,6 +159,27 @@ async def add_csp_nonce(request: Request, call_next):
     return response
 
 
+# Cache hardening config at module level — refreshed every 30 s.
+# This avoids a settings file read + deep merge on EVERY HTTP request.
+import time as _time_module
+_hardening_cache: dict = {}
+_hardening_cache_ts: float = 0.0
+_HARDENING_CACHE_TTL: float = 30.0  # seconds
+
+
+def _get_hardening_cached() -> dict:
+    global _hardening_cache, _hardening_cache_ts
+    now = _time_module.monotonic()
+    if now - _hardening_cache_ts > _HARDENING_CACHE_TTL:
+        try:
+            from app.services.settings_manager import settings_manager
+            _hardening_cache = settings_manager.get_hardening()
+            _hardening_cache_ts = now
+        except Exception as e:
+            logger.error(f"Failed to refresh hardening cache: {e}")
+    return _hardening_cache
+
+
 # Add security headers middleware
 @app.middleware("http")
 async def add_security_headers(request, call_next):
@@ -159,11 +192,9 @@ async def add_security_headers(request, call_next):
         "default-src 'none'; frame-ancestors 'none';"
     )
 
-    # Dynamic Infrastructure Hardening & Server Cloaking
+    # Dynamic Infrastructure Hardening & Server Cloaking (cached — no disk I/O per request)
     try:
-        from app.services.settings_manager import settings_manager
-
-        hardening = settings_manager.get_hardening()
+        hardening = _get_hardening_cached()
 
         # 1. HSTS Header
         if hardening.get("hsts_enabled", True):
@@ -217,6 +248,7 @@ app.include_router(security_audit.router, prefix="/security", tags=["Security Au
 app.include_router(apps.router, tags=["Protected Apps"], dependencies=csrf_deps)
 app.include_router(alerts.router, tags=["Alerts"], dependencies=csrf_deps)
 app.include_router(alerts.trigger_router, tags=["Alerts"])
+app.include_router(system.router, tags=["System"], prefix="/api/system", dependencies=csrf_deps)
 
 if __name__ == "__main__":
     import uvicorn

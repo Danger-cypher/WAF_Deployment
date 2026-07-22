@@ -2,7 +2,7 @@ import os
 import sqlite3
 from fastapi import APIRouter, Query, Depends
 from typing import Optional
-from app.services.auth import require_any_role, TokenData
+from app.services.auth import require_any_role, require_admin, TokenData
 
 router = APIRouter()
 
@@ -181,7 +181,7 @@ class RollbackPayload(BaseModel):
 @router.get("/ml/model-info")
 async def get_ml_model_info(current_user: TokenData = Depends(require_any_role)):
     import requests
-    ml_api = os.environ.get("ML_API", "http://ml-engine:9000")
+    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
     try:
         res = requests.get(f"{ml_api}/health", timeout=5)
         if res.status_code == 200:
@@ -191,9 +191,9 @@ async def get_ml_model_info(current_user: TokenData = Depends(require_any_role))
         return {"status": "error", "message": str(e)}
 
 @router.post("/ml/retrain")
-async def trigger_ml_retrain(current_user: TokenData = Depends(require_any_role)):
+async def trigger_ml_retrain(current_user: TokenData = Depends(require_admin)):
     import requests
-    ml_api = os.environ.get("ML_API", "http://ml-engine:9000")
+    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
     try:
         res = requests.post(f"{ml_api}/retrain", timeout=5)
         if res.status_code == 200:
@@ -205,7 +205,7 @@ async def trigger_ml_retrain(current_user: TokenData = Depends(require_any_role)
 @router.get("/ml/retrain/status")
 async def get_ml_retrain_status(current_user: TokenData = Depends(require_any_role)):
     import requests
-    ml_api = os.environ.get("ML_API", "http://ml-engine:9000")
+    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
     try:
         res = requests.get(f"{ml_api}/retrain/status", timeout=5)
         if res.status_code == 200:
@@ -217,7 +217,7 @@ async def get_ml_retrain_status(current_user: TokenData = Depends(require_any_ro
 @router.get("/ml/backups")
 async def get_ml_backups(current_user: TokenData = Depends(require_any_role)):
     import requests
-    ml_api = os.environ.get("ML_API", "http://ml-engine:9000")
+    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
     try:
         res = requests.get(f"{ml_api}/models/backups", timeout=5)
         if res.status_code == 200:
@@ -227,9 +227,9 @@ async def get_ml_backups(current_user: TokenData = Depends(require_any_role)):
         return {"status": "error", "message": str(e)}
 
 @router.post("/ml/rollback")
-async def rollback_ml_model(payload: RollbackPayload, current_user: TokenData = Depends(require_any_role)):
+async def rollback_ml_model(payload: RollbackPayload, current_user: TokenData = Depends(require_admin)):
     import requests
-    ml_api = os.environ.get("ML_API", "http://ml-engine:9000")
+    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
     try:
         res = requests.post(f"{ml_api}/models/rollback", json=payload.model_dump(), timeout=5)
         if res.status_code == 200:
@@ -241,7 +241,7 @@ async def rollback_ml_model(payload: RollbackPayload, current_user: TokenData = 
 @router.get("/ml/feature-importance")
 async def get_ml_feature_importance(current_user: TokenData = Depends(require_any_role)):
     import requests
-    ml_api = os.environ.get("ML_API", "http://ml-engine:9000")
+    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
     try:
         res = requests.get(f"{ml_api}/models/feature-importance", timeout=5)
         if res.status_code == 200:

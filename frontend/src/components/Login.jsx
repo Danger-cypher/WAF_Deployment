@@ -27,7 +27,7 @@ function ParticleCanvas() {
       color: Math.random() > 0.7
         ? 'rgba(0,255,157,'
         : Math.random() > 0.4
-          ? 'rgba(0,212,255,'
+          ? 'rgba(20,184,166,'
           : 'rgba(191,90,242,',
     }));
 
@@ -54,7 +54,7 @@ function ParticleCanvas() {
             ctx.beginPath();
             ctx.moveTo(particles[i].x, particles[i].y);
             ctx.lineTo(particles[j].x, particles[j].y);
-            ctx.strokeStyle = `rgba(0,212,255,${alpha})`;
+            ctx.strokeStyle = `rgba(20,184,166,${alpha})`;
             ctx.lineWidth = 0.6;
             ctx.stroke();
           }
@@ -191,7 +191,7 @@ function ThreatCounter() {
   );
 }
 
-const Login = ({ setAuth }) => {
+const Login = ({ setAuth, onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -219,8 +219,26 @@ const Login = ({ setAuth }) => {
         throw new Error('Invalid credentials');
       }
 
-      await response.json();
-      // Auth token is now set securely via HttpOnly cookies
+      // Auth cookie is now set. Immediately fetch the user profile so we
+      // can pass the role to the parent before it renders — this prevents
+      // the Settings tab from being absent on first login.
+      let user = { role: 'analyst', username };
+      try {
+        const meRes = await fetch(
+          `${window.location.protocol}//${window.location.host}/api/auth/me`,
+          { credentials: 'include' }
+        );
+        if (meRes.ok) {
+          const meData = await meRes.json();
+          user = { role: meData.role || 'analyst', username: meData.username || username };
+        }
+      } catch (_) {
+        // Fall back to username from form if /me fails
+      }
+
+      // Notify parent with the user data BEFORE flipping isAuthenticated,
+      // so userRole state is populated in the same render cycle.
+      if (onLoginSuccess) onLoginSuccess(user);
       setAuth(true);
     } catch (err) {
       setError(err.message || 'Authentication failed. Please try again.');
@@ -280,10 +298,10 @@ const Login = ({ setAuth }) => {
                   alignItems: 'center', 
                   gap: '10px',
                   padding: '8px 18px', 
-                  background: 'rgba(0, 212, 255, 0.06)', 
-                  border: '1px solid rgba(0, 212, 255, 0.15)', 
+                  background: 'var(--accent-bg)', 
+                  border: '1px solid var(--accent-border)', 
                   borderRadius: '30px',
-                  boxShadow: '0 4px 20px rgba(0, 212, 255, 0.1)',
+                  boxShadow: '0 4px 20px var(--accent-glow)',
                   color: 'var(--accent-color)',
                   textTransform: 'uppercase',
                   letterSpacing: '1.5px',

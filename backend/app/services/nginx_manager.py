@@ -489,13 +489,24 @@ def sync_protected_apps_to_nginx() -> bool:
             "# Do not edit manually",
             "# =============================================================================",
             "",
-            "# Port 80 HTTP -> HTTPS redirector",
+            "# Port 80: ACME HTTP-01 challenge passthrough + HTTPS redirect",
             "server {",
             "    listen 80 default_server;",
             "    listen [::]:80 default_server;",
             "    server_name _;",
             "    access_log /var/log/nginx/http_redirect.log combined;",
-            "    return 301 https://$host$request_uri;",
+            "",
+            "    # Let's Encrypt HTTP-01 challenge: serve webroot, do NOT redirect",
+            "    location /.well-known/acme-challenge/ {",
+            "        root /etc/nginx/acme-challenge;",
+            "        default_type text/plain;",
+            "        try_files $uri =404;",
+            "    }",
+            "",
+            "    # All other traffic: redirect to HTTPS",
+            "    location / {",
+            "        return 301 https://$host$request_uri;",
+            "    }",
             "}",
             ""
         ]
@@ -540,21 +551,46 @@ def sync_protected_apps_to_nginx() -> bool:
                     
                 listen_suffix = " default_server" if is_default else ""
                 
+                # Determine which cert to use for this app
+                ssl_option = app.get("ssl_option", "self-signed")
+                ssl_cert_path = app.get("ssl_cert_path") or ""
+                ssl_key_path  = app.get("ssl_key_path")  or ""
+
+                # Validate that the configured cert files actually exist on disk;
+                # fall back to the default self-signed cert if they are missing.
+                DEFAULT_CERT = "/etc/nginx/ssl/cybersentinel.crt"
+                DEFAULT_KEY  = "/etc/nginx/ssl/cybersentinel.key"
+
+                if ssl_option in ("letsencrypt", "custom") and ssl_cert_path and ssl_key_path:
+                    if os.path.exists(ssl_cert_path) and os.path.exists(ssl_key_path):
+                        active_cert = ssl_cert_path
+                        active_key  = ssl_key_path
+                    else:
+                        logger.warning(
+                            f"App {app_id} ({domain}): configured cert not found at {ssl_cert_path}. "
+                            "Falling back to self-signed cert."
+                        )
+                        active_cert = DEFAULT_CERT
+                        active_key  = DEFAULT_KEY
+                else:
+                    active_cert = DEFAULT_CERT
+                    active_key  = DEFAULT_KEY
+
                 config_lines.extend([
                     f"# --- Upstream App {app_id}: {name} ({domain}) ---",
                     f"upstream upstream_app_{app_id} {{",
                     f"    server {upstream_host}:{upstream_port} max_fails=3 fail_timeout=10s;",
                     "}",
                     "",
-                    f"# --- App {app_id}: {name} ({domain}) ---",
+                    f"# --- App {app_id}: {name} ({domain}) [{ssl_option}] ---",
                     "server {",
                     f"    listen 443 ssl{listen_suffix};",
                     f"    listen [::]:443 ssl{listen_suffix};",
                     "    http2 on;",
                     f"    server_name {domain};",
                     "",
-                    "    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;",
-                    "    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;",
+                    f"    ssl_certificate     {active_cert};",
+                    f"    ssl_certificate_key {active_key};",
                     "",
                     "    resolver 127.0.0.11 valid=30s ipv6=off;",
                     "",
@@ -611,3 +647,49 @@ def sync_protected_apps_to_nginx() -> bool:
     except Exception as e:
         logger.error(f"Failed to sync protected apps to NGINX: {e}")
         return False
+
+
+def test_nginx_config() -> tuple[bool, str]:
+    """
+    Runs syntax check on NGINX/OpenResty configuration (openresty -c /etc/nginx/nginx.conf -t).
+    Returns (True, "") if syntax is valid, or (False, error_details) otherwise.
+    """
+    candidates = [
+        # Docker syntax test variants
+        ["docker", "exec", "waf-openresty", "openresty", "-c", "/etc/nginx/nginx.conf", "-t"],
+        ["docker", "exec", "waf-openresty", "nginx", "-c", "/etc/nginx/nginx.conf", "-t"],
+        # sudo variants
+        ["sudo", "/usr/local/openresty/bin/openresty", "-c", "/etc/nginx/nginx.conf", "-t"],
+        ["sudo", "/usr/local/openresty/nginx/sbin/nginx", "-c", "/etc/nginx/nginx.conf", "-t"],
+        # Direct variants
+        ["/usr/local/openresty/bin/openresty", "-c", "/etc/nginx/nginx.conf", "-t"],
+        ["/usr/local/openresty/nginx/sbin/nginx", "-c", "/etc/nginx/nginx.conf", "-t"],
+        ["openresty", "-c", "/etc/nginx/nginx.conf", "-t"],
+        ["nginx", "-c", "/etc/nginx/nginx.conf", "-t"],
+    ]
+    for cmd in candidates:
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=10  # nosec B603
+            )
+            if result.returncode == 0:
+                logger.info(f"NGINX/OpenResty config test passed via: {' '.join(cmd)}")
+                return True, ""
+            else:
+                stderr = result.stderr or result.stdout or ""
+                logger.warning(
+                    f"Config test via '{' '.join(cmd)}' failed (rc={result.returncode}): "
+                    f"{stderr.strip()}"
+                )
+                return False, stderr.strip()
+        except FileNotFoundError:
+            continue
+        except subprocess.TimeoutExpired:
+            logger.error(f"Config test command timed out: {' '.join(cmd)}")
+            return False, "Syntax validation check timed out."
+        except Exception as e:
+            logger.error(f"Error testing config via '{' '.join(cmd)}': {e}")
+            return False, str(e)
+    logger.error("All NGINX/OpenResty configuration test attempts exhausted.")
+    return False, "Could not run configuration syntax validation check."
+

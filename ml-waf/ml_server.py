@@ -4,6 +4,7 @@ import logging
 import sqlite3
 import json
 import threading
+import time
 import requests
 from datetime import datetime
 import pytz
@@ -472,11 +473,38 @@ def fetch_abuseipdb_score(ip: str):
         logger.error(f"Error querying AbuseIPDB for IP {ip}: {e}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Client-side alert throttle
+# Prevents firing the same (event_type, ip) pair to the backend more than once
+# per _ALERT_COOLDOWN_S seconds.  The backend already has server-side throttling
+# but without this guard, every blocked request spawned an HTTP POST.
+# _alert_throttle: {signature_str: last_sent_epoch_float}
+_ALERT_COOLDOWN_S = 60.0   # seconds
+_alert_throttle: dict = {}
+_alert_throttle_lock = threading.Lock()
+
+
+def _should_send_alert(event_type: str, ip: str) -> bool:
+    """Returns True only if enough time has passed since the last alert for this key."""
+    key = f"{event_type}:{ip}"
+    now = time.monotonic()
+    with _alert_throttle_lock:
+        last = _alert_throttle.get(key, 0.0)
+        if now - last < _ALERT_COOLDOWN_S:
+            return False
+        _alert_throttle[key] = now
+        return True
+
+
 def send_backend_alert(event_type: str, event_data: dict, message: str = None):
     """
     Sends alert to the WAF backend alert trigger API.
-    Runs as a background task.
+    Runs as a background task. Client-side throttle applied before any HTTP call.
     """
+    ip = event_data.get("remote_addr") or event_data.get("client_ip") or ""
+    if not _should_send_alert(event_type, ip):
+        logger.debug(f"Alert throttled (client-side): {event_type} from {ip}")
+        return
     try:
         url = "http://waf-backend:8000/alerts/trigger"
         payload = {
@@ -491,6 +519,7 @@ def send_backend_alert(event_type: str, event_data: dict, message: str = None):
             logger.info(f"Successfully posted alert of type '{event_type}' to backend")
     except Exception as e:
         logger.error(f"Failed to send alert to backend: {e}")
+
 
 @app.post("/predict")
 def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, response: Response):

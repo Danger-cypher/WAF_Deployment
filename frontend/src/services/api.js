@@ -90,9 +90,10 @@ export async function getLogById(logId) {
 /**
  * Fetch overall statistics
  */
-export async function getStats() {
+export async function getStats(hours) {
   try {
-    const response = await fetch(`${BASE_URL}/stats`, { cache: 'no-store' });
+    const url = hours ? `${BASE_URL}/stats?hours=${hours}` : `${BASE_URL}/stats`;
+    const response = await fetch(url, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch stats:", error);
@@ -103,9 +104,10 @@ export async function getStats() {
 /**
  * Fetch attack timeline
  */
-export async function getTimeline() {
+export async function getTimeline(hours) {
   try {
-    const response = await fetch(`${BASE_URL}/timeline`, { cache: 'no-store' });
+    const url = hours ? `${BASE_URL}/timeline?hours=${hours}` : `${BASE_URL}/timeline`;
+    const response = await fetch(url, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch timeline:", error);
@@ -116,9 +118,10 @@ export async function getTimeline() {
 /**
  * Fetch attack categories distribution
  */
-export async function getAttackTypes() {
+export async function getAttackTypes(hours) {
   try {
-    const response = await fetch(`${BASE_URL}/attack-types`, { cache: 'no-store' });
+    const url = hours ? `${BASE_URL}/attack-types?hours=${hours}` : `${BASE_URL}/attack-types`;
+    const response = await fetch(url, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch attack types:", error);
@@ -129,9 +132,10 @@ export async function getAttackTypes() {
 /**
  * Fetch top attacking IPs
  */
-export async function getTopIPs() {
+export async function getTopIPs(hours) {
   try {
-    const response = await fetch(`${BASE_URL}/top-ips`, { cache: 'no-store' });
+    const url = hours ? `${BASE_URL}/top-ips?hours=${hours}` : `${BASE_URL}/top-ips`;
+    const response = await fetch(url, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch top IPs:", error);
@@ -142,9 +146,10 @@ export async function getTopIPs() {
 /**
  * Fetch top rules triggered
  */
-export async function getTopRules() {
+export async function getTopRules(hours) {
   try {
-    const response = await fetch(`${BASE_URL}/top-rules`, { cache: 'no-store' });
+    const url = hours ? `${BASE_URL}/top-rules?hours=${hours}` : `${BASE_URL}/top-rules`;
+    const response = await fetch(url, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch top rules:", error);
@@ -1272,4 +1277,40 @@ export async function getAlertStats(days = 30) {
     throw error;
   }
 }
+
+export async function getCustomRules() {
+  try {
+    const response = await fetch(`${BASE_URL}/rules/custom`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch custom rules:", error);
+    throw error;
+  }
+}
+
+export async function saveCustomRules(rules_content) {
+  try {
+    const response = await fetch(`${BASE_URL}/rules/custom`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rules_content })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save custom rules:", error);
+    throw error;
+  }
+}
+
+export async function getSecurityStatistics(hours = 24) {
+  try {
+    const response = await fetch(`${BASE_URL}/security/statistics?hours=${hours}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch security audit statistics:", error);
+    return null;
+  }
+}
+
+
 

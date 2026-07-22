@@ -107,15 +107,32 @@ def get_global_redis_client() -> Optional[redis.Redis]:
     return _redis_client
 
 
+# Cache the redis connection check result to avoid connecting on every request
+_redis_cache_result: Optional[bool] = None
+_redis_cache_time: float = 0.0
+_REDIS_CACHE_TTL: float = 30.0  # seconds
+
+
 def validate_redis_connection() -> bool:
     """
     Test Redis connection and return status.
+    Result is cached for 30 seconds to avoid blocking on every health check.
     """
-    client = get_redis_client()
-    if client is None:
-        return False
+    global _redis_cache_result, _redis_cache_time
+    import time
+    now = time.monotonic()
+    if _redis_cache_result is not None and (now - _redis_cache_time) < _REDIS_CACHE_TTL:
+        return _redis_cache_result
+
+    client = get_redis_client(socket_timeout=1.0, socket_connect_timeout=1.0)
     try:
-        client.ping()
-        return True
+        if client is None:
+            _redis_cache_result = False
+        else:
+            client.ping()
+            _redis_cache_result = True
     except Exception:
-        return False
+        _redis_cache_result = False
+
+    _redis_cache_time = now
+    return _redis_cache_result

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Trash2, Edit2, Server, Globe, Power, Play, Square, Check, X, Shield, Activity, HelpCircle, ArrowRight } from 'lucide-react';
 import { getProtectedApps, createProtectedApp, updateProtectedApp, deleteProtectedApp, toggleProtectedApp } from '../services/api';
 
-export default function ProtectedApps() {
+export default function ProtectedApps({ onOpenWizard }) {
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -150,7 +150,7 @@ export default function ProtectedApps() {
           <span>Protected Applications</span>
         </h2>
         <button
-          onClick={handleOpenCreateModal}
+          onClick={() => onOpenWizard ? onOpenWizard() : handleOpenCreateModal()}
           disabled={actionLoading}
           style={{
             padding: '10px 20px',
@@ -182,7 +182,7 @@ export default function ProtectedApps() {
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', color: 'rgba(255, 255, 255, 0.7)', fontSize: '14px', lineHeight: '1.5' }}>
           <Shield size={20} style={{ color: 'var(--accent-color)', flexShrink: 0, marginTop: '2px' }} />
           <div>
-            <strong>WAF Gateway Multi-Application Routing:</strong> Define virtual hosts to protect multiple separate applications behind CyberSentinel WAF. 
+            <strong>WAF Gateway Multi-Application Routing:</strong> Define virtual hosts to protect multiple separate applications behind CyberSentinel WAF.
             Traffic matching the specified <strong>Domain Name</strong> will be forwarded to the corresponding internal <strong>Upstream Host & Port</strong> after full ModSecurity & Machine Learning checks.
           </div>
         </div>
@@ -205,7 +205,7 @@ export default function ProtectedApps() {
           <h3 style={{ margin: '0 0 8px', fontSize: '18px', color: '#fff' }}>No Applications Configured</h3>
           <p style={{ margin: '0 0 24px', color: 'rgba(255,255,255,0.5)', fontSize: '14px' }}>Get started by adding your first protected service.</p>
           <button
-            onClick={handleOpenCreateModal}
+            onClick={() => onOpenWizard ? onOpenWizard() : handleOpenCreateModal()}
             style={{
               padding: '10px 20px',
               background: 'rgba(0, 212, 255, 0.15)',
@@ -314,7 +314,7 @@ export default function ProtectedApps() {
                   )}
                 </button>
                 <button
-                  onClick={() => handleOpenEditModal(app)}
+                  onClick={() => onOpenWizard ? onOpenWizard(app) : handleOpenEditModal(app)}
                   disabled={actionLoading}
                   style={{
                     padding: '8px 12px',

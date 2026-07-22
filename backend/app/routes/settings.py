@@ -36,7 +36,14 @@ class PasswordChangeModel(BaseModel):
     newPassword: str
 
 
+class AutoLearningModel(BaseModel):
+    enabled: bool
+    learning_period: str
+    confidence_threshold: int
+
+
 class CustomResponseModel(BaseModel):
+
     html_content: str
 
 
@@ -186,7 +193,21 @@ async def update_positive_security(
     return settings_manager.update_positive_security(settings_dict)
 
 
+# 3.7 Auto-Learning Settings Routes
+@router.get("/settings/auto-learning", response_model=Dict[str, Any])
+async def get_auto_learning(current_user: TokenData = Depends(require_admin)):
+    return settings_manager.get_auto_learning()
+
+
+@router.post("/settings/auto-learning", response_model=Dict[str, Any])
+async def update_auto_learning(
+    settings: AutoLearningModel, current_user: TokenData = Depends(require_admin)
+):
+    return settings_manager.update_auto_learning(settings.dict())
+
+
 # 3.8 Anti-DDoS & Bot Mitigation Settings Routes
+
 @router.get("/settings/ddos-bot", response_model=Dict[str, Any])
 async def get_ddos_bot_mitigation(current_user: TokenData = Depends(require_admin)):
     return settings_manager.get_ddos_bot_mitigation()

@@ -572,12 +572,36 @@ class AlertDatabaseService:
             """, (start_date,))
             most_triggered_rules = [{"rule_name": row[0], "count": row[1]} for row in cursor.fetchall()]
             
+            # Recent alerts
+            cursor.execute("SELECT * FROM alert_history ORDER BY id DESC LIMIT 5")
+            recent_alerts = [self._row_to_dict(r) for r in cursor.fetchall()]
+            
+            # Avg alerts per day
+            avg_alerts_per_day = round(float(total_alerts) / max(days, 1), 2)
+            
+            # Alert rate trend (first half of period vs second half)
+            mid_date = (datetime.now() - timedelta(days=days / 2.0)).isoformat()
+            cursor.execute("SELECT COUNT(*) FROM alert_history WHERE created_at >= ? AND created_at < ?", (start_date, mid_date))
+            first_half = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM alert_history WHERE created_at >= ?", (mid_date,))
+            second_half = cursor.fetchone()[0]
+            
+            if second_half > first_half:
+                alert_rate_trend = "increasing"
+            elif second_half < first_half:
+                alert_rate_trend = "decreasing"
+            else:
+                alert_rate_trend = "stable"
+                
             return {
                 "total_alerts": total_alerts,
                 "alerts_by_severity": alerts_by_severity,
                 "alerts_by_status": alerts_by_status,
                 "alerts_by_event_type": alerts_by_event_type,
                 "most_triggered_rules": most_triggered_rules,
+                "recent_alerts": recent_alerts,
+                "avg_alerts_per_day": avg_alerts_per_day,
+                "alert_rate_trend": alert_rate_trend,
                 "period_days": days
             }
         finally:

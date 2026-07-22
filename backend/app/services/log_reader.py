@@ -19,10 +19,17 @@ NGINX_ERROR_LOG = "/var/log/nginx/error.log"
 # Note: error.log.1 is the most recent rotated file (current night's logs)
 NGINX_ERROR_LOG_ROTATED = "/var/log/nginx/error.log.1"
 
-# Cache state to optimize redundant disk polling and JSON parsing
+# Cache state to optimize redundant disk polling and JSON parsing.
+# 10s is a good balance: live enough for the dashboard, cheap enough not to re-parse
+# 4+ MB of nginx error logs on every polling cycle.
 cached_logs: List[LogEntry] = []
 last_scan_time: float = 0.0
-SCAN_INTERVAL: float = 2.0
+SCAN_INTERVAL: float = 10.0  # seconds between full disk re-scans
+
+# Separate nginx error-log cache so the parsed results survive multiple
+# get_all_logs() calls within the same SCAN_INTERVAL window.
+_nginx_cache: List[LogEntry] = []
+_nginx_cache_time: float = 0.0
 
 
 def list_newest_log_files(limit: int = 5000) -> List[str]:
@@ -124,7 +131,7 @@ def scan_log_directory():
         logger.info(f"Loaded {new_count} new entries from JSON audit logs")
 
 
-def get_all_logs() -> List[LogEntry]:
+def get_all_logs(hours: int = None) -> List[LogEntry]:
     """
     Get all WAF log entries, merging JSON audit logs with nginx error log entries.
     The nginx error log is always readable and serves as a reliable fallback.
@@ -135,79 +142,108 @@ def get_all_logs() -> List[LogEntry]:
 
     # If the cache is still fresh and contains items, return it directly to avoid disk I/O
     if current_time - last_scan_time < SCAN_INTERVAL and cached_logs:
-        return cached_logs
+        result = cached_logs
+    else:
+        last_scan_time = current_time
 
-    last_scan_time = current_time
+        # Rescan JSON audit directory
+        scan_log_directory()
 
-    # Rescan JSON audit directory
-    scan_log_directory()
+        # Read from nginx error log AND its rotated copy to survive nightly logrotate.
+        global _nginx_cache, _nginx_cache_time
+        nginx_entries: List[LogEntry] = []
+        if current_time - _nginx_cache_time < SCAN_INTERVAL and _nginx_cache:
+            nginx_entries = _nginx_cache
+        else:
+            for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
+                if os.path.isfile(log_path):
+                    nginx_entries.extend(parse_nginx_error_log(log_path))
+            _nginx_cache = nginx_entries
+            _nginx_cache_time = current_time
 
-    # Read from nginx error log AND its rotated copy to survive nightly logrotate.
-    # After midnight logrotate runs: error.log is empty, all entries are in error.log.1.
-    # Merging both ensures the blocked count never drops to 0 after rotation.
-    nginx_entries: List[LogEntry] = []
-    for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
-        if os.path.isfile(log_path):
-            nginx_entries.extend(parse_nginx_error_log(log_path))
+        merged: Dict[str, LogEntry] = {}
+        for entry in nginx_entries:
+            merged[entry.id] = entry
+        for entry in parsed_entries.values():
+            merged[entry.id] = entry
 
-    # Build a merged map: unique_id -> LogEntry, preferring JSON audit log data
-    # (more detailed) over error log data
-    merged: Dict[str, LogEntry] = {}
+        result = list(merged.values())
 
-    # Start with nginx error log entries (lower priority)
-    for entry in nginx_entries:
-        merged[entry.id] = entry
+        def parse_time(e):
+            try:
+                # Some logs use 'YYYY-MM-DD HH:MM:SS' and some use ISO
+                if len(e.timestamp) == 19 and e.timestamp[10] == ' ':
+                    return datetime.strptime(e.timestamp, "%Y-%m-%d %H:%M:%S")
+                return datetime.fromisoformat(e.timestamp.replace('Z', '+00:00'))
+            except Exception:
+                return datetime.min
 
-    # Override with JSON audit log entries (higher priority, more detail)
-    for entry in parsed_entries.values():
-        merged[entry.id] = entry
+        result.sort(key=parse_time, reverse=True)
+        
+        # We need to save the parse_time on the object for fast filtering later
+        for r in result:
+            if not hasattr(r, '_dt'):
+                r._dt = parse_time(r)
 
-    # Return ALL merged logs (no filtering by HTTP code)
-    # This is used for stats, timeline, and analytics
-    result = list(merged.values())
+        cached_logs = result
+        
+    if hours is not None:
+        from datetime import timedelta
+        cutoff = datetime.now() - timedelta(hours=hours)
+        # Filter based on cached datetime object
+        result = [r for r in result if getattr(r, '_dt', datetime.min) >= cutoff]
 
-    # Sort by timestamp (newest first)
-    def parse_time(e):
-        try:
-            return datetime.fromisoformat(e.timestamp)
-        except Exception:
-            return datetime.min
-
-    result.sort(key=parse_time, reverse=True)
-
-    logger.debug(
-        f"Total merged logs: {len(result)} "
-        f"(JSON audit: {len(parsed_entries)}, nginx: {len(nginx_entries)})"
-    )
-
-    cached_logs = result
     return result
 
 
-def get_total_blocked_count() -> int:
+def get_total_blocked_count(hours: int = None) -> int:
     """
     Returns an accurate total count of ALL ModSecurity blocks across both the
-    current and most recent rotated error log — without the 5000-entry cap
-    that get_all_logs() imposes for dashboard display performance.
-    This is the authoritative number for the 'Blocked WAF Threats' card.
+    current and most recent rotated error log.
     """
     import re
     MODSEC_BLOCK_RE = re.compile(r"ModSecurity: Access denied")
     count = 0
+    
+    if hours is None:
+        for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
+            if not os.path.isfile(log_path):
+                continue
+            try:
+                with open(log_path, 'rb') as f:
+                    for raw_line in f:
+                        try:
+                            line = raw_line.decode('utf-8', errors='replace')
+                            if MODSEC_BLOCK_RE.search(line):
+                                count += 1
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(f"Could not read {log_path} for block count: {e}")
+        return count
+
+    # Time-filtered logic
+    from datetime import datetime, timedelta
+    cutoff = datetime.now() - timedelta(hours=hours)
+    # Nginx error log timestamp: 2026/07/17 10:02:00
+    DATE_RE = re.compile(r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})")
     for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
         if not os.path.isfile(log_path):
             continue
         try:
-            with open(log_path, 'rb') as f:
-                for raw_line in f:
-                    try:
-                        line = raw_line.decode('utf-8', errors='replace')
-                        if MODSEC_BLOCK_RE.search(line):
-                            count += 1
-                    except Exception:
-                        pass
+            with open(log_path, 'r', errors='replace') as f:
+                for line in f:
+                    if MODSEC_BLOCK_RE.search(line):
+                        match = DATE_RE.search(line)
+                        if match:
+                            try:
+                                dt = datetime.strptime(match.group(1), "%Y/%m/%d %H:%M:%S")
+                                if dt >= cutoff:
+                                    count += 1
+                            except Exception:
+                                pass
         except Exception as e:
-            logger.warning(f"Could not read {log_path} for block count: {e}")
+            logger.warning(f"Could not read {log_path} for time-filtered block count: {e}")
     return count
 
 

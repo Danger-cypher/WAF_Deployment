@@ -20,12 +20,20 @@ import {
   getCurrentUser, logoutUser,
   getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getApiProtectionAnalytics, getHardeningSettings, saveHardeningSettings, getAntiDefacementSettings, saveAntiDefacementSettings, getMLStats, getMLLogs, getMLTimeline,
   getMLModelInfo, triggerMLRetrain, getMLRetrainStatus, getMLBackups, rollbackMLModel, getMLFeatureImportance,
-  getAlertChannels, createAlertChannel, updateAlertChannel, deleteAlertChannel, testAlertChannel, getAlertRules, createAlertRule, updateAlertRule, deleteAlertRule, getAlertHistory, acknowledgeAlert, getAlertStats
+  getAlertChannels, createAlertChannel, updateAlertChannel, deleteAlertChannel, testAlertChannel, getAlertRules, createAlertRule, updateAlertRule, deleteAlertRule, getAlertHistory, acknowledgeAlert, getAlertStats,
+  getCustomRules, saveCustomRules
 } from './services/api';
-import { Copy, Check, ChevronLeft, ChevronRight, X, Clock, Database, Code, ShieldAlert as AlertIcon, AlertTriangle as AlertTriangleIcon, LogOut, Brain, Bell } from 'lucide-react';
+import { Copy, Check, ChevronLeft, ChevronRight, X, Clock, Database, Code, ShieldAlert as AlertIcon, AlertTriangle as AlertTriangleIcon, LogOut, Brain, Bell, FileText, RefreshCw } from 'lucide-react';
 import Login from './components/Login';
 import DdosBotMitigation from './components/DdosBotMitigation';
 import ProtectedApps from './components/ProtectedApps';
+import SetupWizard from './components/SetupWizard';
+import ProtectedAppWizard from './components/ProtectedAppWizard';
+
+import SecurityReports from './components/SecurityReports';
+import QuickActionsBar from './components/QuickActionsBar';
+import Tooltip, { HelpText } from './components/Tooltip';
+import { NoTrafficEmptyState, NoLogsEmptyState, NoSearchResultsEmptyState, NoFalsePositivesEmptyState, NoExceptionsEmptyState, NoMLEventsEmptyState } from './components/EmptyStates';
 
 import './index.css';
 
@@ -400,18 +408,13 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
 }
 
 function Sidebar({ activeTab, setActiveTab, handleLogout, userRole, collapsed, setCollapsed }) {
+  // Streamlined 5-tab navigation
   const navItems = [
-    { id: 'analytics', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'logs', label: 'Live Logs', icon: Activity },
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'protection', label: 'Protection Status', icon: ShieldCheck },
+    { id: 'events', label: 'Security Events', icon: Activity },
     { id: 'ml_engine', label: 'AI/ML Engine', icon: Brain },
-    { id: 'false_positives', label: 'False Positives', icon: ShieldCheck },
-    { id: 'exceptions', label: 'Exceptions', icon: AlertTriangle },
-    { id: 'rules', label: 'Rules', icon: ShieldAlert },
-    { id: 'api_protection', label: 'API Protection', icon: Globe },
-    { id: 'ddos_bot', label: 'Bot & DDoS', icon: Lock },
-    { id: 'protected_apps', label: 'Apps Control', icon: Server },
-    { id: 'integrations', label: 'Integrations', icon: Server },
-    ...(userRole === 'admin' ? [{ id: 'settings', label: 'Settings', icon: SettingsIcon }] : []),
+    { id: 'advanced', label: 'Advanced', icon: SettingsIcon }
   ];
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronLeft;
@@ -702,6 +705,11 @@ function ThreatAnalytics() {
         </div>
       </div>
     );
+  }
+
+  // Show empty state if no traffic has been analyzed yet
+  if (!loading && stats.total_requests === 0 && timelineData.length === 0) {
+    return <NoTrafficEmptyState />;
   }
 
   const blockedPercentage = stats.total_requests > 0 ? (stats.total_blocked / stats.total_requests) * 100 : 0;
@@ -1936,8 +1944,14 @@ function MLAnalytics() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="7" style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-secondary)' }}>
-                        {loading ? "Syncing ML engine telemetry database..." : "No inferences recorded yet."}
+                      <td colSpan="7" style={{ padding: 0 }}>
+                        {loading ? (
+                          <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-secondary)' }}>
+                            Syncing ML engine telemetry database...
+                          </div>
+                        ) : (
+                          <NoMLEventsEmptyState />
+                        )}
                       </td>
                     </tr>
                   )}
@@ -1975,9 +1989,12 @@ function MLAnalytics() {
         <>
           {/* Models Status Cards */}
           <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div className="card-title">
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Brain size={18} color="var(--accent-color)" />
-              Supervised Model: XGBoost Classifier
+              <span>Supervised Model: XGBoost Classifier</span>
+              <HelpText>
+                XGBoost is a machine learning model trained on known attack patterns. It analyzes incoming requests and predicts the probability that they are malicious based on historical data. Higher accuracy means better threat detection.
+              </HelpText>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -2007,9 +2024,12 @@ function MLAnalytics() {
           </div>
 
           <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div className="card-title">
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Brain size={18} color="var(--ml-color)" />
-              Anomaly Detector: Isolation Forest
+              <span>Anomaly Detector: Isolation Forest</span>
+              <HelpText>
+                Isolation Forest detects unusual traffic patterns without needing labeled attack data. It identifies requests that deviate significantly from normal behavior, catching zero-day attacks and novel threats that rule-based systems might miss.
+              </HelpText>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -2384,7 +2404,7 @@ function LiveLogs({ onMarkFalsePositive }) {
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
   const [attackFilter, setAttackFilter] = useState('');
-  const [trafficTab, setTrafficTab] = useState('web');
+  const [trafficTab, setTrafficTab] = useState('all');
   const [focusMode, setFocusMode] = useState(false);
   const [sortField, setSortField] = useState('timestamp');
   const [sortOrder, setSortOrder] = useState('desc');
@@ -2400,6 +2420,49 @@ function LiveLogs({ onMarkFalsePositive }) {
       return next;
     });
   };
+
+  const handleExportReport = () => {
+    if (!logs || logs.length === 0) {
+      alert('No log data available to export. Please wait for data to load.');
+      return;
+    }
+    // Build CSV from currently displayed (filtered) logs
+    const headers = [
+      'Transaction ID', 'Timestamp', 'Client IP', 'Country',
+      'Method', 'URI', 'HTTP Code', 'Severity', 'Attack Type',
+      'Rule ID', 'Message', 'Source ASN'
+    ];
+    const rows = logs.map(log => [
+      log.id || '',
+      log.timestamp || '',
+      log.client_ip || '',
+      log.country || 'Unknown',
+      log.method || '',
+      log.uri || '',
+      log.http_code || '',
+      log.severity || '',
+      log.attack_type || '',
+      log.rule_id || '',
+      (log.message || '').replace(/"/g, '""'),  // escape quotes
+      log.source_asn_org || ''
+    ]);
+    const csv = [
+      headers.join(','),
+      ...rows.map(r => r.map(v => `"${v}"`).join(','))
+    ].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateStr = new Date().toISOString().split('T')[0];
+    const tabLabel = trafficTab === 'all' ? 'all' : trafficTab === 'api' ? 'api' : 'web';
+    a.download = `waf_events_${tabLabel}_${dateStr}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
 
   const toggleExpand = (id) => {
     setExpandedLogs(prev => {
@@ -2607,6 +2670,39 @@ function LiveLogs({ onMarkFalsePositive }) {
             <span style={{ fontSize: '15px' }}>🎯</span>
             {focusMode ? 'Focus: Critical + High' : 'Focus Mode'}
           </button>
+
+          {/* Export Report: downloads the currently-filtered logs as structured CSV */}
+          <button
+            onClick={handleExportReport}
+            title="Export currently filtered events as a structured CSV report"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              borderRadius: '8px',
+              border: '1px solid rgba(16, 185, 129, 0.35)',
+              background: 'rgba(16, 185, 129, 0.08)',
+              color: '#6ee7b7',
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'rgba(16,185,129,0.15)';
+              e.currentTarget.style.borderColor = 'rgba(16,185,129,0.6)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'rgba(16,185,129,0.08)';
+              e.currentTarget.style.borderColor = 'rgba(16,185,129,0.35)';
+            }}
+          >
+            <FileText size={14} />
+            Export Report
+          </button>
+
         </div>
       </div>
 
@@ -2645,12 +2741,12 @@ function LiveLogs({ onMarkFalsePositive }) {
       }}>
         {[
           {
-            id: 'web',
-            label: 'Web Application',
-            icon: Globe,
-            color: '#3b82f6',
-            activeBg: 'rgba(59,130,246,0.15)',
-            activeBorder: 'rgba(59,130,246,0.3)',
+            id: 'all',
+            label: 'All Traffic',
+            icon: Activity,
+            color: '#a1a1aa',
+            activeBg: 'rgba(161,161,170,0.15)',
+            activeBorder: 'rgba(161,161,170,0.3)',
           },
           {
             id: 'api',
@@ -2661,12 +2757,12 @@ function LiveLogs({ onMarkFalsePositive }) {
             activeBorder: 'rgba(245,158,11,0.3)',
           },
           {
-            id: 'all',
-            label: 'All Traffic',
-            icon: Activity,
-            color: '#a1a1aa',
-            activeBg: 'rgba(161,161,170,0.15)',
-            activeBorder: 'rgba(161,161,170,0.3)',
+            id: 'web',
+            label: 'Web Application',
+            icon: Globe,
+            color: '#3b82f6',
+            activeBg: 'rgba(59,130,246,0.15)',
+            activeBorder: 'rgba(59,130,246,0.3)',
           },
         ].map(tab => {
           const isActive = trafficTab === tab.id;
@@ -2753,10 +2849,23 @@ function LiveLogs({ onMarkFalsePositive }) {
                       </div>
                     </td>
                   </tr>
+                ) : sortedLogs.length === 0 && search.trim() === '' ? (
+                  <tr>
+                    <td colSpan="8" style={{ padding: 0 }}>
+                      <NoLogsEmptyState />
+                    </td>
+                  </tr>
                 ) : sortedLogs.length === 0 ? (
                   <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', padding: '60px', color: '#a1a1aa' }}>
-                      No matching threat records discovered.
+                    <td colSpan="8" style={{ padding: 0 }}>
+                      <NoSearchResultsEmptyState 
+                        searchTerm={search || severityFilter || attackFilter}
+                        onClear={() => {
+                          setSearch('');
+                          setSeverityFilter('');
+                          setAttackFilter('');
+                        }}
+                      />
                     </td>
                   </tr>
                 ) : (
@@ -3298,7 +3407,12 @@ function FalsePositives({ userRole, onCreateException }) {
       <div className="dashboard-grid animate-fade-in" style={{ gap: '16px', marginBottom: '8px' }}>
         <div className="metric-card glass-panel" style={{ gridColumn: 'span 4' }}>
           <div className="metric-header">
-            <span>Total False Positive Reports</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              Total False Positive Reports
+              <HelpText>
+                False positives are legitimate requests that were incorrectly blocked by the WAF. Review these to fine-tune your rules and reduce unnecessary blocks for real users.
+              </HelpText>
+            </span>
             <div className="metric-icon-wrapper blue"><Database size={18} /></div>
           </div>
           <div className="metric-value">{entries.length}</div>
@@ -3388,11 +3502,7 @@ function FalsePositives({ userRole, onCreateException }) {
         {loading ? (
           <div style={{ padding: '40px', textAlign: 'center', color: '#a1a1aa' }}>Loading review registry...</div>
         ) : entries.length === 0 ? (
-          <div style={{ padding: '60px 40px', textAlign: 'center', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
-            <ShieldCheck size={40} color="#a1a1aa" style={{ opacity: 0.3 }} />
-            <div style={{ fontWeight: 600, fontSize: '15px' }}>No marked false positives found</div>
-            <div style={{ fontSize: '12px', maxWidth: '300px', opacity: 0.7 }}>Legitimate requests incorrectly blocked by WAF policies will appear here for analyst tuning.</div>
-          </div>
+          <NoFalsePositivesEmptyState />
         ) : (
           <table className="logs-table">
             <thead>
@@ -4055,11 +4165,7 @@ function Exceptions() {
             {loading ? (
               <div style={{ padding: '40px', textAlign: 'center', color: '#a1a1aa' }}>Syncing exceptions database...</div>
             ) : exclusions.length === 0 ? (
-              <div style={{ padding: '60px 40px', textAlign: 'center', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
-                <AlertTriangle size={40} color="#a1a1aa" style={{ opacity: 0.3 }} />
-                <div style={{ fontWeight: 600, fontSize: '15px' }}>No active exclusion rules registered</div>
-                <div style={{ fontSize: '12px', maxWidth: '300px', opacity: 0.7 }}>Approved exceptions designed from false positives will list here to selectively bypass WAF filters.</div>
-              </div>
+              <NoExceptionsEmptyState />
             ) : (
               <table className="logs-table">
                 <thead>
@@ -4583,10 +4689,15 @@ function Rules({ userRole }) {
         {/* Paranoia Selector Slider */}
         <div style={{ background: 'rgba(255,255,255,0.01)', padding: '16px 20px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.04)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5' }}>OWASP CRS Paranoia Level Setting</div>
-              <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: '2px' }}>Higher paranoia levels add strict rulesets to block advanced attacks but increase risk of false positives.</div>
+              <HelpText>
+                Paranoia Level controls how strict the WAF rules are. Level 1 (default) blocks common attacks with minimal false positives. Higher levels add more aggressive rules but may block legitimate traffic. Start with PL1 and increase only if needed.
+              </HelpText>
             </div>
+            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: '2px' }}>Higher paranoia levels add strict rulesets to block advanced attacks but increase risk of false positives.</div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontSize: '11px', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
               ACTIVE: PL{stats.paranoia_level}
             </span>
@@ -5079,39 +5190,122 @@ function Rules({ userRole }) {
   );
 }
 
-function Integrations() {
+function AlertsIntegrations({ userRole }) {
   const [loading, setLoading] = useState(true);
   const [healthData, setHealthData] = useState(null);
+  const [activeSubTab, setActiveSubTab] = useState('connectors'); // 'connectors', 'channels', 'rules'
+
+  // Alert Config State
+  const [channels, setChannels] = useState([]);
+  const [rules, setRules] = useState([]);
+  const [isChannelCreateOpen, setIsChannelCreateOpen] = useState(false);
+  const [isRuleCreateOpen, setIsRuleCreateOpen] = useState(false);
+  const [channelForm, setChannelForm] = useState({ name: '', channel_type: 'slack', config: {} });
+  const [ruleForm, setRuleForm] = useState({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
+
+  const fetchHealth = async () => {
+    try {
+      const data = await getHealth();
+      setHealthData(data);
+    } catch (err) {
+      console.error("Health check failed", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadAlertData = async () => {
+    try {
+      const chans = await getAlertChannels();
+      setChannels(chans || []);
+      const rls = await getAlertRules();
+      setRules(rls || []);
+    } catch (err) {
+      console.error("Error loading alert configurations:", err);
+    }
+  };
 
   useEffect(() => {
-    const fetchHealth = async () => {
-      try {
-        const data = await getHealth();
-        setHealthData(data);
-      } catch (err) {
-        console.error("Health check failed", err);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchHealth();
+    loadAlertData();
     const interval = setInterval(fetchHealth, 5000);
     return () => clearInterval(interval);
   }, []);
 
+  const handleCreateChannel = async (e) => {
+    e.preventDefault();
+    try {
+      if (channelForm.id) {
+        await updateAlertChannel(channelForm.id, channelForm);
+      } else {
+        await createAlertChannel(channelForm);
+      }
+      setIsChannelCreateOpen(false);
+      setChannelForm({ name: '', channel_type: 'slack', config: {} });
+      loadAlertData();
+    } catch (err) {
+      alert("Failed to save channel: " + err.message);
+    }
+  };
+
+  const handleDeleteChannel = async (id) => {
+    if (window.confirm("Are you sure you want to delete this notification channel?")) {
+      try {
+        await deleteAlertChannel(id);
+        loadAlertData();
+      } catch (err) {
+        alert("Failed to delete channel: " + err.message);
+      }
+    }
+  };
+
+  const handleTestChannel = async (id) => {
+    try {
+      const res = await testAlertChannel(id, { test_message: "Test warning alert configured successfully." });
+      if (res.success) {
+        alert("Test notification dispatched successfully!");
+      } else {
+        alert("Dispatch failed: " + res.message);
+      }
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+  };
+
+  const handleCreateRule = async (e) => {
+    e.preventDefault();
+    try {
+      await createAlertRule(ruleForm);
+      setIsRuleCreateOpen(false);
+      setRuleForm({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
+      loadAlertData();
+    } catch (err) {
+      alert("Failed to create rule: " + err.message);
+    }
+  };
+
+  const handleDeleteRule = async (id) => {
+    if (window.confirm("Are you sure you want to delete this alerting rule?")) {
+      try {
+        await deleteAlertRule(id);
+        loadAlertData();
+      } catch (err) {
+        alert("Failed to delete rule: " + err.message);
+      }
+    }
+  };
+
   const futureIntegrations = [
-    { name: 'Elasticsearch', desc: 'Forward WAF audit events directly to an Elasticsearch index.', icon: Database },
-    { name: 'Fluent Bit', desc: 'Stream live CyberSentinel Engine log feeds via Fluent Bit log processors.', icon: Code },
-    { name: 'Telegram Alerts', desc: 'Deliver critical block events to your SOC channels via Telegram Bot API.', icon: Server },
-    { name: 'Slack', desc: 'Send real-time threat notifications with payload details to Slack workspace.', icon: Server },
-    { name: 'Email Notifications', desc: 'Receive daily security posture reports and high severity incident emails.', icon: Globe }
+    { name: 'Elasticsearch Indexer', desc: 'Forward WAF audit events directly to an Elasticsearch cluster.', icon: Database },
+    { name: 'Fluent Bit Log Streamer', desc: 'Stream live CyberSentinel logs via Fluent Bit daemonsets.', icon: Code },
+    { name: 'Telegram Alerts', desc: 'Send real-time alerts to Telegram SOC channels via Bot API.', icon: Server }
   ];
 
   if (loading && !healthData) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '300px', color: '#a1a1aa', gap: '12px' }}>
         <Activity className="animate-spin" size={24} color="#3b82f6" />
-        <span>Loading CyberSentinel service integration data...</span>
+        <span>Loading alerting & integrations status...</span>
       </div>
     );
   }
@@ -5124,133 +5318,336 @@ function Integrations() {
       transition={{ duration: 0.4 }}
       style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}
     >
-      {/* Service Status Cards Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
-        {/* CyberSentinel Engine */}
-        <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 600, color: '#e4e4e7' }}>CyberSentinel Engine</span>
-            <span className="status-badge green">
-              <span className="status-dot"></span> Active
-            </span>
-          </div>
-          <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div><strong style={{ color: '#d4d4d8' }}>Engine:</strong> v3.0.12 (libmodsecurity)</div>
-            <div><strong style={{ color: '#d4d4d8' }}>Type:</strong> Web Application Firewall</div>
-            <div><strong style={{ color: '#d4d4d8' }}>Scope:</strong> Connection/Request Filtering</div>
-          </div>
-        </div>
-
-        {/* OWASP CRS */}
-        <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 600, color: '#e4e4e7' }}>OWASP CRS</span>
-            <span className="status-badge green">
-              <span className="status-dot"></span> Active
-            </span>
-          </div>
-          <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div><strong style={{ color: '#d4d4d8' }}>Ruleset:</strong> v4.0.0 (Core Ruleset)</div>
-            <div><strong style={{ color: '#d4d4d8' }}>Active Rules:</strong> 250+ guards</div>
-            <div><strong style={{ color: '#d4d4d8' }}>Paranoia Level:</strong> PL1</div>
-          </div>
-        </div>
-
-        {/* NGINX */}
-        <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 600, color: '#e4e4e7' }}>NGINX</span>
-            <span className="status-badge green">
-              <span className="status-dot"></span> Running
-            </span>
-          </div>
-          <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div><strong style={{ color: '#d4d4d8' }}>Version:</strong> nginx/1.24.0</div>
-            <div><strong style={{ color: '#d4d4d8' }}>ModSec Connector:</strong> Enabled</div>
-            <div><strong style={{ color: '#d4d4d8' }}>Reverse Proxy:</strong> Active</div>
-          </div>
-        </div>
-
-        {/* FastAPI Backend */}
-        <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: 600, color: '#e4e4e7' }}>FastAPI Backend</span>
-            <span className={`status-badge ${healthData?.status === 'ok' ? 'green' : 'red'}`}>
-              <span className="status-dot"></span> {healthData?.status === 'ok' ? 'Connected' : 'Offline'}
-            </span>
-          </div>
-          <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div><strong style={{ color: '#d4d4d8' }}>Port:</strong> 8001 (Uvicorn)</div>
-            <div><strong style={{ color: '#d4d4d8' }}>Parsed Logs:</strong> {healthData?.total_parsed_files || 0} files</div>
-            <div><strong style={{ color: '#d4d4d8' }}>Log Status:</strong> {healthData?.log_directory_exists ? 'Readable' : 'Unreachable'}</div>
-          </div>
-        </div>
-
+      {/* Tab Selection */}
+      <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '12px' }}>
+        <button
+          className={`tab-btn ${activeSubTab === 'connectors' ? 'active' : ''}`}
+          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'connectors' ? 'rgba(59,130,246,0.1)' : 'transparent', border: activeSubTab === 'connectors' ? '1px solid rgba(59,130,246,0.2)' : '1px solid transparent', color: activeSubTab === 'connectors' ? '#60a5fa' : '#a1a1aa', cursor: 'pointer', transition: 'all 0.2s' }}
+          onClick={() => setActiveSubTab('connectors')}
+        >
+          Connectors & Health
+        </button>
+        <button
+          className={`tab-btn ${activeSubTab === 'channels' ? 'active' : ''}`}
+          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'channels' ? 'rgba(59,130,246,0.1)' : 'transparent', border: activeSubTab === 'channels' ? '1px solid rgba(59,130,246,0.2)' : '1px solid transparent', color: activeSubTab === 'channels' ? '#60a5fa' : '#a1a1aa', cursor: 'pointer', transition: 'all 0.2s' }}
+          onClick={() => setActiveSubTab('channels')}
+        >
+          Notification Channels ({channels.length})
+        </button>
+        <button
+          className={`tab-btn ${activeSubTab === 'rules' ? 'active' : ''}`}
+          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'rules' ? 'rgba(59,130,246,0.1)' : 'transparent', border: activeSubTab === 'rules' ? '1px solid rgba(59,130,246,0.2)' : '1px solid transparent', color: activeSubTab === 'rules' ? '#60a5fa' : '#a1a1aa', cursor: 'pointer', transition: 'all 0.2s' }}
+          onClick={() => setActiveSubTab('rules')}
+        >
+          Evaluation Rules ({rules.length})
+        </button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginTop: '8px' }}>
-        {/* API Health Section */}
-        <div className="glass-panel" style={{ padding: '24px' }}>
-          <div style={{ fontSize: '15px', fontWeight: 600, color: '#f4f4f5', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Activity size={16} color="#3b82f6" />
-            <span>Internal API Gateway Probe Status</span>
+      {/* Connectors Tab */}
+      {activeSubTab === 'connectors' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
+            <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600, color: '#e4e4e7' }}>CyberSentinel Engine</span>
+                <span className="status-badge green"><span className="status-dot"></span> Active</span>
+              </div>
+              <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div><strong style={{ color: '#d4d4d8' }}>Engine:</strong> v3.0.12 (libmodsecurity)</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Type:</strong> Web Application Firewall</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Scope:</strong> Connection Filtering</div>
+              </div>
+            </div>
+
+            <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600, color: '#e4e4e7' }}>OWASP CRS</span>
+                <span className="status-badge green"><span className="status-dot"></span> Active</span>
+              </div>
+              <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div><strong style={{ color: '#d4d4d8' }}>Ruleset:</strong> v4.0.0 (Core Ruleset)</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Active Rules:</strong> 250+ guards</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Paranoia Level:</strong> PL1</div>
+              </div>
+            </div>
+
+            <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600, color: '#e4e4e7' }}>NGINX</span>
+                <span className="status-badge green"><span className="status-dot"></span> Running</span>
+              </div>
+              <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div><strong style={{ color: '#d4d4d8' }}>Version:</strong> nginx/1.24.0</div>
+                <div><strong style={{ color: '#d4d4d8' }}>ModSec Connector:</strong> Enabled</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Reverse Proxy:</strong> Active</div>
+              </div>
+            </div>
+
+            <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600, color: '#e4e4e7' }}>FastAPI Backend</span>
+                <span className={`status-badge ${healthData?.status === 'ok' ? 'green' : 'red'}`}>
+                  <span className="status-dot"></span> {healthData?.status === 'ok' ? 'Connected' : 'Offline'}
+                </span>
+              </div>
+              <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div><strong style={{ color: '#d4d4d8' }}>Port:</strong> 8000 (Uvicorn)</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Parsed Logs:</strong> {healthData?.total_parsed_files || 0} files</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Log Status:</strong> {healthData?.log_directory_exists ? 'Readable' : 'Unreachable'}</div>
+              </div>
+            </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>GET /logs</span>
-                <span style={{ fontSize: '11px', color: '#a1a1aa' }}>Query transaction log streams</span>
-              </div>
-              <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>200 OK</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>GET /stats</span>
-                <span style={{ fontSize: '11px', color: '#a1a1aa' }}>Calculates incident counters & distributions</span>
-              </div>
-              <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>200 OK</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>Dashboard WebSocket Channel</span>
-                <span style={{ fontSize: '11px', color: '#a1a1aa' }}>Real-time telemetry event stream</span>
-              </div>
-              <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>CONNECTED</span>
-            </div>
-          </div>
-        </div>
 
-      </div>
-
-      {/* Future Integrations Section */}
-      <div style={{ fontSize: '16px', fontWeight: 600, color: '#a1a1aa', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
-        <Lock size={18} color="#a1a1aa" />
-        <span>Enterprise Connectors (Future Roadmap)</span>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
-        {futureIntegrations.map((item, index) => {
-          const Icon = item.icon;
-          return (
-            <div
-              key={index}
-              className="glass-panel"
-              style={{ padding: '20px', display: 'flex', gap: '16px', opacity: 0.45, position: 'relative', overflow: 'hidden' }}
-            >
-              <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)', padding: '10px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '42px', width: '42px', flexShrink: 0 }}>
-                <Icon size={20} color="#a1a1aa" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
+            <div className="glass-panel" style={{ padding: '24px' }}>
+              <div style={{ fontSize: '15px', fontWeight: 600, color: '#f4f4f5', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Activity size={16} color="#3b82f6" />
+                <span>Internal API Gateway Probe Status</span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ fontWeight: 600, color: '#e4e4e7', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>{item.name}</span>
-                  <span style={{ fontSize: '9px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#a1a1aa', padding: '1px 5px', borderRadius: '3px', textTransform: 'uppercase' }}>Inactive</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>GET /logs</span>
+                    <span style={{ fontSize: '11px', color: '#a1a1aa' }}>Query transaction log streams</span>
+                  </div>
+                  <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>200 OK</span>
                 </div>
-                <p style={{ fontSize: '12px', color: '#a1a1aa', margin: 0, lineHeight: '1.4' }}>{item.desc}</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>GET /stats</span>
+                    <span style={{ fontSize: '11px', color: '#a1a1aa' }}>Calculates incident counters</span>
+                  </div>
+                  <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>200 OK</span>
+                </div>
               </div>
             </div>
-          );
-        })}
-      </div>
+          </div>
+
+          <div style={{ fontSize: '16px', fontWeight: 600, color: '#a1a1aa', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
+            <Lock size={18} color="#a1a1aa" />
+            <span>Enterprise Connectors (Future Roadmap)</span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+            {futureIntegrations.map((item, index) => {
+              const Icon = item.icon;
+              return (
+                <div key={index} className="glass-panel" style={{ padding: '20px', display: 'flex', gap: '16px', opacity: 0.45, position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)', padding: '10px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '42px', width: '42px', flexShrink: 0 }}>
+                    <Icon size={20} color="#a1a1aa" />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ fontWeight: 600, color: '#e4e4e7', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>{item.name}</span>
+                      <span style={{ fontSize: '9px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#a1a1aa', padding: '1px 5px', borderRadius: '3px', textTransform: 'uppercase' }}>Inactive</span>
+                    </div>
+                    <p style={{ fontSize: '12px', color: '#a1a1aa', margin: 0, lineHeight: '1.4' }}>{item.desc}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Channels Tab */}
+      {activeSubTab === 'channels' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '14px', color: '#a1a1aa' }}>Configure Slack, Email and Custom Webhook integrations:</span>
+            {userRole === 'admin' && (
+              <button className="action-btn-inspect" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={() => setIsChannelCreateOpen(true)}>
+                + Add Integration Channel
+              </button>
+            )}
+          </div>
+
+          {isChannelCreateOpen && (
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', padding: '20px', borderRadius: '8px', marginBottom: '16px' }}>
+              <form onSubmit={handleCreateChannel} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <h4 style={{ margin: 0, fontSize: '14px', color: '#60a5fa' }}>{channelForm.id ? 'Edit Notification Integration' : 'Add New Notification Integration'}</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Connection Name</label>
+                    <input className="settings-input" type="text" placeholder="e.g. SOC Team Slack" required value={channelForm.name} onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Connector Type</label>
+                    <select className="settings-input" style={{ width: '100%' }} value={channelForm.channel_type} onChange={(e) => {
+                      const newType = e.target.value;
+                      let defaultCfg = {};
+                      if (newType === 'email') defaultCfg = { smtp_host: "smtp.office365.com", smtp_port: 587, username: "darshan.butle@vginfotech.ai", password: "YOUR_PASSWORD_HERE", from_addr: "darshan.butle@vginfotech.ai", to_addrs: ["darshan.butle@vginfotech.ai"], use_tls: true, use_ssl: false };
+                      else if (newType === 'slack') defaultCfg = { webhook_url: "https://hooks.slack.com/services/..." };
+                      else defaultCfg = { url: "https://company.api/events", method: "POST", headers: {} };
+                      setChannelForm({ ...channelForm, channel_type: newType, config: defaultCfg });
+                    }}>
+                      <option value="slack">Slack Webhook</option>
+                      <option value="email">Email SMTP</option>
+                      <option value="webhook">Generic Webhook</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Configuration Payload (JSON)</label>
+                  <textarea 
+                    key={channelForm.channel_type}
+                    className="settings-input" 
+                    required 
+                    style={{ minHeight: '140px', fontSize: '11px', fontFamily: 'monospace' }} 
+                    defaultValue={Object.keys(channelForm.config).length > 0 ? JSON.stringify(channelForm.config, null, 2) : (channelForm.channel_type === 'slack' ? '{\n  "webhook_url": "https://hooks.slack.com/services/..."\n}' : channelForm.channel_type === 'email' ? '{\n  "smtp_host": "smtp.office365.com",\n  "smtp_port": 587,\n  "username": "darshan.butle@vginfotech.ai",\n  "password": "YOUR_PASSWORD_HERE",\n  "from_addr": "darshan.butle@vginfotech.ai",\n  "to_addrs": ["darshan.butle@vginfotech.ai"],\n  "use_tls": true,\n  "use_ssl": false\n}' : '{\n  "url": "https://company.api/events",\n  "method": "POST",\n  "headers": {}\n}')} 
+                    onChange={(e) => {
+                      try {
+                        const cfg = JSON.parse(e.target.value);
+                        setChannelForm({ ...channelForm, config: cfg });
+                      } catch {}
+                    }}
+                  ></textarea>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                  <button type="submit" className="modal-btn primary" style={{ margin: 0 }}>Save Integration</button>
+                  <button type="button" className="modal-btn secondary" onClick={() => { setIsChannelCreateOpen(false); setChannelForm({ name: '', channel_type: 'slack', config: {} }); }} style={{ margin: 0 }}>Cancel</button>
+                </div>
+              </form>
+            </motion.div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '16px' }}>
+            {channels.length > 0 ? (
+              channels.map(chan => (
+                <div key={chan.id} className="glass-panel" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, minWidth: 0, paddingRight: '16px' }}>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 700, fontSize: '14px', color: '#e4e4e7', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{chan.name}</span>
+                      <span style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', fontSize: '9px', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>{chan.channel_type}</span>
+                    </div>
+                    <code style={{ fontSize: '11px', color: '#a1a1aa', fontFamily: 'monospace', wordBreak: 'break-all' }}>{JSON.stringify(chan.config)}</code>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                    <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '11px', margin: 0 }} onClick={() => handleTestChannel(chan.id)}>Test</button>
+                    {userRole === 'admin' && chan.channel_type === 'email' && (
+                      <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '11px', margin: 0 }} onClick={() => { setChannelForm(chan); setIsChannelCreateOpen(true); }}>
+                        Edit
+                      </button>
+                    )}
+                    {userRole === 'admin' && (
+                      <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '11px', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(239,68,68,0.06)', margin: 0 }} onClick={() => handleDeleteChannel(chan.id)}>
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="glass-panel" style={{ gridColumn: 'span 12', padding: '30px', textAlign: 'center', color: '#a1a1aa' }}>
+                No active notification integrations configured.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Rules Tab */}
+      {activeSubTab === 'rules' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '14px', color: '#a1a1aa' }}>Define warning and critical event alerting thresholds:</span>
+            {userRole === 'admin' && (
+              <button className="action-btn-inspect" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={() => setIsRuleCreateOpen(true)}>
+                + Create Alert Rule
+              </button>
+            )}
+          </div>
+
+          {isRuleCreateOpen && (
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', padding: '20px', borderRadius: '8px', marginBottom: '16px' }}>
+              <form onSubmit={handleCreateRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <h4 style={{ margin: 0, fontSize: '14px', color: '#60a5fa' }}>Create Incident Alerting Rule</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Rule Name</label>
+                    <input className="settings-input" type="text" placeholder="e.g. Critical Threat Event" required value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Event Type</label>
+                    <select className="settings-input" style={{ width: '100%' }} value={ruleForm.event_type} onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}>
+                      <option value="attack_detected">Attack Detected (WAF)</option>
+                      <option value="high_threat_score">High Anomaly Threat Score</option>
+                      <option value="ml_anomaly">ML Engine Anomaly Event</option>
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Severity Level</label>
+                    <select className="settings-input" style={{ width: '100%' }} value={ruleForm.severity} onChange={(e) => setRuleForm({ ...ruleForm, severity: e.target.value })}>
+                      <option value="critical">Critical</option>
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Conditions JSON (Optional)</label>
+                    <input className="settings-input" type="text" placeholder='e.g. {"threat_score_gt": 80}' onChange={(e) => {
+                      try {
+                        const conds = JSON.parse(e.target.value);
+                        setRuleForm({ ...ruleForm, conditions: conds });
+                      } catch {}
+                    }} />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Throttle Cooldown (Minutes)</label>
+                    <input className="settings-input" type="number" min="1" value={ruleForm.throttle_minutes} onChange={(e) => setRuleForm({ ...ruleForm, throttle_minutes: parseInt(e.target.value) || 5 })} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Routing Targets (Channel IDs, comma-separated e.g. 1, 2)</label>
+                  <input className="settings-input" type="text" placeholder="Enter channel numeric IDs..." onChange={(e) => {
+                    const ids = e.target.value.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x));
+                    setRuleForm({ ...ruleForm, channels: ids });
+                  }} />
+                </div>
+                <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                  <button type="submit" className="modal-btn primary" style={{ margin: 0 }}>Create Rule</button>
+                  <button type="button" className="modal-btn secondary" onClick={() => setIsRuleCreateOpen(false)} style={{ margin: 0 }}>Cancel</button>
+                </div>
+              </form>
+            </motion.div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
+            {rules.length > 0 ? (
+              rules.map(rule => (
+                <div key={rule.id} className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 700, fontSize: '14px', color: '#e4e4e7' }}>{rule.name}</span>
+                    <span style={{
+                      padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
+                      background: rule.severity === 'critical' ? 'var(--danger-bg)' : 'var(--warning-bg)',
+                      color: rule.severity === 'critical' ? 'var(--danger-color)' : 'var(--warning-color)',
+                      border: rule.severity === 'critical' ? '1px solid rgba(255, 59, 92, 0.2)' : '1px solid rgba(255, 149, 0, 0.2)'
+                    }}>{rule.severity}</span>
+                  </div>
+                  <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px', color: '#a1a1aa' }}>
+                    <div><strong>Event type:</strong> <span className="badge-purple" style={{ padding: '2px 6px', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>{rule.event_type}</span></div>
+                    <div><strong>Conditions:</strong> <code style={{ fontSize: '11px', color: '#34d399', fontFamily: 'monospace' }}>{JSON.stringify(rule.conditions)}</code></div>
+                    <div><strong>Cooldown throttle:</strong> {rule.throttle_minutes} min</div>
+                    <div><strong>Channels assigned:</strong> Channel IDs: {JSON.stringify(rule.channels)}</div>
+                  </div>
+                  {userRole === 'admin' && (
+                    <button className="action-btn-inspect" style={{ alignSelf: 'flex-end', padding: '4px 10px', fontSize: '11px', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(239,68,68,0.06)', margin: 0, marginTop: '8px' }} onClick={() => handleDeleteRule(rule.id)}>
+                      Delete Rule
+                    </button>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="glass-panel" style={{ gridColumn: 'span 12', padding: '30px', textAlign: 'center', color: '#a1a1aa' }}>
+                No active alerting rules defined.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -6365,25 +6762,347 @@ function Settings({ onLogout }) {
 }
 
 // Map between URL paths and tab IDs
+// Protection Section Component - Sub-tabbed: Virtual Hosts | DDoS & Bot Shield
+function ProtectionSection({ appsRefreshKey, onOpenWizard }) {
+  const [activeSubTab, setActiveSubTab] = useState('apps');
+
+  const subTabs = [
+    {
+      id: 'apps',
+      label: 'Virtual Hosts',
+      icon: Server,
+      description: 'Manage reverse-proxy protected applications and SSL termination',
+      statusColor: '#10b981',
+    },
+    {
+      id: 'ddos',
+      label: 'DDoS & Bot Shield',
+      icon: ShieldAlert,
+      description: 'Layer-7 rate limiting, bot mitigation and live traffic analytics',
+      statusColor: '#f59e0b',
+    },
+  ];
+
+  const activeTabMeta = subTabs.find(t => t.id === activeSubTab);
+  const ActiveIcon = activeTabMeta?.icon;
+
+  return (
+    <div className="advanced-section">
+      {/* Section Header */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: '20px',
+        paddingBottom: '16px',
+        borderBottom: '1px solid rgba(255,255,255,0.06)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {ActiveIcon && (
+            <div style={{
+              width: '36px', height: '36px', borderRadius: '10px',
+              background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <ActiveIcon size={18} color="#3b82f6" />
+            </div>
+          )}
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#f4f4f5', lineHeight: 1.2 }}>
+              {activeTabMeta?.label}
+            </div>
+            <div style={{ fontSize: '12px', color: '#71717a', marginTop: '2px' }}>
+              {activeTabMeta?.description}
+            </div>
+          </div>
+        </div>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '6px',
+          padding: '4px 10px', borderRadius: '20px',
+          background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)',
+          fontSize: '11px', fontWeight: 600, color: '#34d399',
+        }}>
+          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
+          ACTIVE ENFORCEMENT
+        </div>
+      </div>
+
+      {/* Sub-navigation */}
+      <div className="subtabs-container" style={{ marginBottom: '24px' }}>
+        {subTabs.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              className={`subtab-btn ${activeSubTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveSubTab(tab.id)}
+            >
+              <Icon size={16} />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Content */}
+      <motion.div
+        key={activeSubTab}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
+      >
+        {activeSubTab === 'apps' && (
+          <ProtectedApps
+            key={appsRefreshKey}
+            onOpenWizard={onOpenWizard}
+          />
+        )}
+        {activeSubTab === 'ddos' && <DdosBotMitigation />}
+      </motion.div>
+    </div>
+  );
+}
+
+// Custom Rules Editor (Virtual Patching) Component
+function CustomRulesEditor({ userRole }) {
+  const [rulesContent, setRulesContent] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState({ type: '', text: '' });
+
+  const fetchRules = async () => {
+    setLoading(true);
+    setMessage({ type: '', text: '' });
+    try {
+      const data = await getCustomRules();
+      setRulesContent(data.rules_content || '');
+    } catch (err) {
+      console.error("Failed to load custom rules:", err);
+      setMessage({ type: 'error', text: 'Failed to load custom rules from server.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRules();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage({ type: '', text: '' });
+    try {
+      const res = await saveCustomRules(rulesContent);
+      setMessage({ type: 'success', text: res.message || 'Custom rules saved and applied successfully.' });
+    } catch (err) {
+      console.error("Failed to save custom rules:", err);
+      setMessage({ type: 'error', text: err.message || 'Validation failed. Check your rule syntax.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const insertSnippet = (snippet) => {
+    setRulesContent(prev => prev ? `${prev}\n\n${snippet}` : snippet);
+  };
+
+  return (
+    <div style={{ background: '#121319', borderRadius: '12px', border: '1px solid #1e2230', padding: '24px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h3 style={{ margin: 0, color: '#f4f4f5', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Code size={20} color="#3b82f6" />
+            Virtual Patching (Custom ModSecurity Rules)
+          </h3>
+          <p style={{ margin: '4px 0 0 0', color: '#71717a', fontSize: '13px' }}>
+            Write custom ModSecurity SecRules to mitigate zero-day vulnerabilities in real time. Rules are validated for syntax before reload.
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={fetchRules}
+            disabled={loading || saving}
+            style={{
+              padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px',
+              background: '#1e2230', color: '#a1a1aa', border: '1px solid #2a2e3d', borderRadius: '6px',
+              cursor: (loading || saving) ? 'not-allowed' : 'pointer', opacity: (loading || saving) ? 0.6 : 1, fontWeight: 500
+            }}
+          >
+            <RefreshCw size={14} className={loading ? 'spin' : ''} />
+            <span>Reload File</span>
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={loading || saving || userRole !== 'admin'}
+            style={{
+              padding: '8px 20px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px',
+              background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px',
+              cursor: (loading || saving || userRole !== 'admin') ? 'not-allowed' : 'pointer',
+              opacity: (loading || saving || userRole !== 'admin') ? 0.6 : 1, fontWeight: 600
+            }}
+          >
+            {saving ? <RefreshCw size={14} className="spin" /> : <Check size={14} />}
+            <span>{saving ? 'Validating & Applying...' : 'Apply & Reload WAF'}</span>
+          </button>
+        </div>
+      </div>
+
+      {message.text && (
+        <div style={{
+          padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px', fontWeight: 500,
+          background: message.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+          border: message.type === 'success' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+          color: message.type === 'success' ? '#34d399' : '#f87171',
+          whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)'
+        }}>
+          {message.text}
+        </div>
+      )}
+
+      {/* Quick Snippet Helpers */}
+      <div style={{ marginBottom: '16px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 600 }}>Quick Patch Templates:</span>
+        <button
+          onClick={() => insertSnippet(`SecRule REQUEST_HEADERS:User-Agent "@contains BadBot" "id:${1000000 + Math.floor(Math.random()*900000)},phase:1,deny,status:403,msg:'Blocked Bad Bot'"`)}
+          style={{ background: '#1e2230', border: '1px solid #2a2e3d', color: '#38bdf8', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+        >
+          + Block User-Agent
+        </button>
+        <button
+          onClick={() => insertSnippet(`SecRule REQUEST_URI "@contains /vulnerable-endpoint" "id:${1000000 + Math.floor(Math.random()*900000)},phase:1,deny,status:403,msg:'Virtual Patch Endpoint'"`)}
+          style={{ background: '#1e2230', border: '1px solid #2a2e3d', color: '#38bdf8', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+        >
+          + Block URI Endpoint
+        </button>
+        <button
+          onClick={() => insertSnippet(`SecRule REMOTE_ADDR "@ipMatch 192.168.1.100" "id:${1000000 + Math.floor(Math.random()*900000)},phase:1,deny,status:403,msg:'Blocked Attacker IP'"`)}
+          style={{ background: '#1e2230', border: '1px solid #2a2e3d', color: '#38bdf8', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+        >
+          + Block IP Address
+        </button>
+        <button
+          onClick={() => insertSnippet(`SecRule ARGS:payload "@rx (?i)<script>" "id:${1000000 + Math.floor(Math.random()*900000)},phase:2,deny,status:403,msg:'Parameter Regex Filter'"`)}
+          style={{ background: '#1e2230', border: '1px solid #2a2e3d', color: '#38bdf8', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+        >
+          + Parameter Regex Filter
+        </button>
+      </div>
+
+      {/* Code Editor */}
+      <div style={{ position: 'relative', borderRadius: '8px', border: '1px solid #27272a', overflow: 'hidden' }}>
+        <div style={{ background: '#18181b', padding: '8px 16px', borderBottom: '1px solid #27272a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '12px', color: '#a1a1aa', fontFamily: 'var(--font-mono)' }}>/etc/nginx/modsec/custom-rules.conf</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '11px', color: '#34d399', background: 'rgba(52, 211, 153, 0.1)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+              {rulesContent.split('\n').filter(line => line.trim().startsWith('SecRule')).length} Active Custom Rules
+            </span>
+            <span style={{ fontSize: '11px', color: '#52525b' }}>ModSecurity v3 Engine</span>
+          </div>
+        </div>
+        <textarea
+          value={rulesContent}
+          onChange={(e) => setRulesContent(e.target.value)}
+          disabled={loading || userRole !== 'admin'}
+          placeholder="# Write custom ModSecurity SecRules here...&#10;&#10;# Example:&#10;SecRule REQUEST_URI &quot;@contains /vulnerable-api&quot; &quot;id:1000001,phase:1,deny,status:403,msg:'Zero-day Virtual Patch'&quot;"
+          rows={18}
+          style={{
+            width: '100%',
+            background: '#09090b',
+            color: '#34d399',
+            fontFamily: 'Consolas, Monaco, "Andale Mono", "Ubuntu Mono", monospace',
+            fontSize: '13px',
+            lineHeight: '1.6',
+            padding: '16px',
+            border: 'none',
+            outline: 'none',
+            resize: 'vertical',
+            boxSizing: 'border-box'
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Advanced Settings Section Component - Collapsible subsections
+function AdvancedSection({ userRole, onMarkFalsePositive, onCreateException, onLogout, initialSubTab = 'false_positives' }) {
+  const [activeSubTab, setActiveSubTab] = useState(initialSubTab);
+
+  useEffect(() => {
+    setActiveSubTab(initialSubTab);
+  }, [initialSubTab]);
+
+  const subTabs = [
+    { id: 'false_positives', label: 'False Positives', icon: ShieldCheck },
+    { id: 'exceptions', label: 'Exceptions', icon: AlertTriangle },
+    { id: 'rules', label: 'Rules', icon: ShieldAlert },
+    { id: 'api_protection', label: 'API Protection', icon: Globe },
+    { id: 'integrations', label: 'Alerts & Integrations', icon: Server },
+    { id: 'reports', label: 'Security Reports', icon: FileText },
+    ...(userRole === 'admin' ? [
+      { id: 'custom_rules', label: 'Virtual Patching (Custom Rules)', icon: Code },
+      { id: 'settings', label: 'Settings', icon: SettingsIcon }
+    ] : []),
+  ];
+
+  return (
+    <div className="advanced-section">
+      {/* Sub-navigation tabs */}
+      <div className="subtabs-container" style={{ marginBottom: '24px' }}>
+        {subTabs.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              className={`subtab-btn ${activeSubTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveSubTab(tab.id)}
+            >
+              <Icon size={16} />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Content for each sub-tab */}
+      <motion.div
+        key={activeSubTab}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+      >
+        {activeSubTab === 'false_positives' && (
+          <FalsePositives userRole={userRole} onCreateException={onCreateException} />
+        )}
+        {activeSubTab === 'exceptions' && <Exceptions />}
+        {activeSubTab === 'rules' && <Rules userRole={userRole} />}
+        {activeSubTab === 'api_protection' && <ApiProtection />}
+        {activeSubTab === 'integrations' && <AlertsIntegrations userRole={userRole} />}
+        {activeSubTab === 'reports' && <SecurityReports />}
+        {activeSubTab === 'custom_rules' && userRole === 'admin' && (
+          <CustomRulesEditor userRole={userRole} />
+        )}
+        {activeSubTab === 'settings' && userRole === 'admin' && (
+          <Settings onLogout={onLogout} />
+        )}
+      </motion.div>
+    </div>
+  );
+}
+
 const TAB_ROUTES = {
-  analytics:       '/dashboard',
-  logs:            '/logs',
-  ml_engine:       '/ml-engine',
-  false_positives: '/false-positives',
-  exceptions:      '/exceptions',
-  rules:           '/rules',
-  api_protection:  '/api-protection',
-  ddos_bot:        '/ddos-bot',
-  protected_apps:  '/protected-apps',
-  integrations:    '/integrations',
-  settings:        '/settings',
+  overview:   '/dashboard',
+  protection: '/protection',
+  events:     '/events',
+  ml_engine:  '/ml-engine',
+  advanced:   '/advanced',
 };
 const ROUTE_TABS = Object.fromEntries(
   Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab])
 );
 function getTabFromPath() {
   const path = window.location.pathname;
-  return ROUTE_TABS[path] || 'analytics';
+  return ROUTE_TABS[path] || 'overview';
 }
 
 function App() {
@@ -6391,6 +7110,11 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userRole, setUserRole] = useState(null);
   const [username, setUsername] = useState(null);
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [setupComplete, setSetupComplete] = useState(false);
+  const [showAppWizard, setShowAppWizard] = useState(false);
+  const [editingApp, setEditingApp] = useState(null);
+  const [appsRefreshKey, setAppsRefreshKey] = useState(0);
   const [logToFlag, setLogToFlag] = useState(null);
   const [isFpModalOpen, setIsFpModalOpen] = useState(false);
   const [logToExclude, setLogToExclude] = useState(null);
@@ -6398,13 +7122,16 @@ function App() {
   const [globalSuccessMsg, setGlobalSuccessMsg] = useState('');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isAlertHistoryModalOpen, setIsAlertHistoryModalOpen] = useState(false);
-  const [isAlertSettingsModalOpen, setIsAlertSettingsModalOpen] = useState(false);
+  const [advancedInitialTab, setAdvancedInitialTab] = useState('false_positives');
 
   // Wrapper that syncs tab state + URL together
   const setActiveTab = (tabId) => {
     const path = TAB_ROUTES[tabId] || '/dashboard';
     window.history.pushState({ tab: tabId }, '', path);
     setActiveTabState(tabId);
+    if (tabId !== 'advanced') {
+      setAdvancedInitialTab('false_positives');
+    }
   };
 
   // Handle browser back/forward buttons
@@ -6485,6 +7212,14 @@ function App() {
           setIsAuthenticated(true);
           setUserRole(user.role || 'analyst');
           setUsername(user.username || 'user');
+          
+          // Check if this is first-time setup
+          const setupCompleteFlag = localStorage.getItem('waf_setup_complete');
+          if (!setupCompleteFlag) {
+            setShowSetupWizard(true);
+          } else {
+            setSetupComplete(true);
+          }
         }, 0);
       })
       .catch(() => {
@@ -6509,8 +7244,44 @@ function App() {
   }, [activeTab, userRole]);
 
   if (!isAuthenticated) {
-    return <Login setAuth={setIsAuthenticated} />;
+    return (
+      <Login
+        setAuth={setIsAuthenticated}
+        onLoginSuccess={(user) => {
+          // Set role immediately from login response so Settings tab
+          // appears without requiring a page reload.
+          setUserRole(user.role || 'analyst');
+          setUsername(user.username || 'user');
+        }}
+      />
+    );
   }
+
+
+  // Show setup wizard for first-time users
+  if (showSetupWizard) {
+    return (
+      <SetupWizard 
+        onComplete={(setupData) => {
+          setShowSetupWizard(false);
+          setSetupComplete(true);
+          console.log('Setup completed with data:', setupData);
+        }}
+      />
+    );
+  }
+
+  // Protected App Wizard handlers
+  const handleAddApp = () => {
+    setEditingApp(null);
+    setShowAppWizard(true);
+  };
+
+  const handleEditApp = (app) => {
+    setEditingApp(app);
+    setShowAppWizard(true);
+  };
+
 
   return (
     <>
@@ -6519,24 +7290,35 @@ function App() {
       <div className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`} style={{ paddingBottom: '44px' }}>
         <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <h1 className="page-title">
-            {activeTab === 'analytics' && 'WAF Dashboard'}
-            {activeTab === 'logs' && 'Real-Time Logging'}
-            {activeTab === 'ml_engine' && 'AI/ML Security Engine'}
-            {activeTab === 'false_positives' && 'False Positives'}
-            {activeTab === 'exceptions' && 'Exceptions & Exclusions'}
-            {activeTab === 'rules' && 'Rule Configuration'}
-            {activeTab === 'api_protection' && 'API Protection'}
-            {activeTab === 'ddos_bot' && 'Bot & DDoS Mitigation'}
-            {activeTab === 'protected_apps' && 'Protected Apps'}
-            {activeTab === 'integrations' && 'Service Health'}
-            {activeTab === 'settings' && 'System Settings'}
+            {activeTab === 'overview' && 'Security Overview'}
+            {activeTab === 'protection' && 'Protection Status'}
+            {activeTab === 'events' && 'Security Events'}
+            {activeTab === 'ml_engine' && 'AI/ML Engine'}
+            {activeTab === 'advanced' && 'Advanced Settings'}
           </h1>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            {/* WAF Active — compact inline pill, dashboard only */}
+            {activeTab === 'overview' && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                padding: '4px 10px', borderRadius: '20px',
+                background: 'rgba(16,185,129,0.08)',
+                border: '1px solid rgba(16,185,129,0.2)',
+                fontSize: '11px', fontWeight: 600, color: '#34d399',
+                whiteSpace: 'nowrap',
+              }}>
+                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981' }} />
+                WAF Active
+              </div>
+            )}
             <NotificationBell 
               userRole={userRole} 
               onOpenHistory={() => setIsAlertHistoryModalOpen(true)} 
-              onOpenSettings={() => setIsAlertSettingsModalOpen(true)} 
+              onOpenSettings={() => {
+                setAdvancedInitialTab('integrations');
+                setActiveTab('advanced');
+              }}
             />
             <div className="user-profile-badge" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', padding: '6px 14px', borderRadius: '20px' }}>
               <span style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 500 }}>@{username}</span>
@@ -6556,6 +7338,9 @@ function App() {
           </div>
         </div>
 
+
+
+
         <motion.div
           style={{ flex: 1, minHeight: 0 }}
           key={activeTab}
@@ -6564,28 +7349,40 @@ function App() {
           exit={{ opacity: 0, x: -15 }}
           transition={{ duration: 0.2, ease: 'easeOut' }}
         >
-          {activeTab === 'logs' && <LiveLogs key="logs" onMarkFalsePositive={handleTriggerMarkFp} />}
-          {activeTab === 'false_positives' && <FalsePositives key="false_positives" userRole={userRole} onCreateException={handleTriggerCreateException} />}
-          {activeTab === 'exceptions' && <Exceptions key="exceptions" />}
-          {activeTab === 'rules' && <Rules key="rules" userRole={userRole} />}
-          {activeTab === 'analytics' && <ThreatAnalytics key="analytics" />}
+          {/* Overview Tab - Shows ThreatAnalytics dashboard */}
+          {activeTab === 'overview' && <ThreatAnalytics key="overview" />}
+
+          {/* Protection Tab - Sub-tabbed: Virtual Hosts | DDoS & Bot Shield */}
+          {activeTab === 'protection' && (
+            <ProtectionSection
+              key="protection"
+              appsRefreshKey={appsRefreshKey}
+              onOpenWizard={(app) => { setEditingApp(app); setShowAppWizard(true); }}
+            />
+          )}
+          
+          {/* Security Events Tab - Renamed from Live Logs */}
+          {activeTab === 'events' && <LiveLogs key="events" onMarkFalsePositive={handleTriggerMarkFp} />}
+          
+          {/* AI/ML Engine Tab - Keep as is */}
           {activeTab === 'ml_engine' && <MLAnalytics key="ml_engine" />}
-          {activeTab === 'api_protection' && <ApiProtection key="api_protection" />}
-          {activeTab === 'ddos_bot' && <DdosBotMitigation key="ddos_bot" />}
-          {activeTab === 'protected_apps' && <ProtectedApps key="protected_apps" />}
-          {activeTab === 'integrations' && <Integrations key="integrations" />}
-          {activeTab === 'settings' && userRole === 'admin' && <Settings key="settings" onLogout={handleLogout} />}
+          
+          {/* Advanced Tab - Collapsed section with: False Positives, Exceptions, Rules, API Protection, Integrations, Settings */}
+          {activeTab === 'advanced' && (
+            <AdvancedSection 
+              key="advanced" 
+              userRole={userRole} 
+              onMarkFalsePositive={handleTriggerMarkFp}
+              onCreateException={handleTriggerCreateException}
+              onLogout={handleLogout}
+              initialSubTab={advancedInitialTab}
+            />
+          )}
         </motion.div>
 
         <AlertHistoryModal
           isOpen={isAlertHistoryModalOpen}
           onClose={() => setIsAlertHistoryModalOpen(false)}
-          userRole={userRole}
-        />
-
-        <AlertSettingsModal
-          isOpen={isAlertSettingsModalOpen}
-          onClose={() => setIsAlertSettingsModalOpen(false)}
           userRole={userRole}
         />
 
@@ -6607,6 +7404,20 @@ function App() {
             setLogToExclude(null);
           }}
           onSubmit={handleSaveException}
+        />
+
+        <ProtectedAppWizard
+          isOpen={showAppWizard}
+          onClose={() => {
+            setShowAppWizard(false);
+            setEditingApp(null);
+          }}
+          existingApp={editingApp}
+          onComplete={() => {
+            setShowAppWizard(false);
+            setEditingApp(null);
+            setAppsRefreshKey(prev => prev + 1);
+          }}
         />
 
         <AnimatePresence>
@@ -6708,6 +7519,8 @@ function NotificationBell({ userRole, onOpenHistory, onOpenSettings }) {
       alert("Failed to acknowledge alert: " + err.message);
     }
   };
+
+
 
   return (
     <div ref={dropdownRef} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
@@ -6999,271 +7812,6 @@ function AlertHistoryModal({ isOpen, onClose, userRole }) {
               <pre style={{ background: 'var(--bg-void)', padding: '12px', borderRadius: '6px', overflowY: 'auto', maxHeight: '160px', fontSize: '11px', color: 'var(--success-color)', border: '1px solid var(--border-color)' }}>{JSON.stringify(selectedAlert.event_data, null, 2)}</pre>
             </div>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AlertSettingsModal({ isOpen, onClose, userRole }) {
-  const [activeTab, setActiveTab] = useState('rules'); // 'rules', 'channels'
-  const [channels, setChannels] = useState([]);
-  const [rules, setRules] = useState([]);
-
-  // Modal forms
-  const [isChannelCreateOpen, setIsChannelCreateOpen] = useState(false);
-  const [isRuleCreateOpen, setIsRuleCreateOpen] = useState(false);
-
-  // Form structures
-  const [channelForm, setChannelForm] = useState({ name: '', channel_type: 'slack', config: {} });
-  const [ruleForm, setRuleForm] = useState({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
-
-  const loadData = async () => {
-    try {
-      const chans = await getAlertChannels();
-      setChannels(chans);
-      const rls = await getAlertRules();
-      setRules(rls);
-    } catch (err) {
-      console.error("Error loading alert configurations:", err);
-    }
-  };
-
-  useEffect(() => {
-    if (isOpen) {
-      loadData();
-    }
-  }, [isOpen]);
-
-  const handleCreateChannel = async (e) => {
-    e.preventDefault();
-    try {
-      await createAlertChannel(channelForm);
-      setIsChannelCreateOpen(false);
-      setChannelForm({ name: '', channel_type: 'slack', config: {} });
-      loadData();
-    } catch (err) {
-      alert("Failed to save channel: " + err.message);
-    }
-  };
-
-  const handleDeleteChannel = async (id) => {
-    if (window.confirm("Are you sure you want to delete this channel?")) {
-      try {
-        await deleteAlertChannel(id);
-        loadData();
-      } catch (err) {
-        alert("Failed to delete: " + err.message);
-      }
-    }
-  };
-
-  const handleTestChannel = async (id) => {
-    try {
-      const res = await testAlertChannel(id, { test_message: "Warning alerting configured successfully." });
-      if (res.success) {
-        alert("Test notification dispatched successfully!");
-      } else {
-        alert("Dispatch failed: " + res.message);
-      }
-    } catch (err) {
-      alert("Error: " + err.message);
-    }
-  };
-
-  const handleCreateRule = async (e) => {
-    e.preventDefault();
-    try {
-      await createAlertRule(ruleForm);
-      setIsRuleCreateOpen(false);
-      setRuleForm({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
-      loadData();
-    } catch (err) {
-      alert("Failed to create rule: " + err.message);
-    }
-  };
-
-  const handleDeleteRule = async (id) => {
-    if (window.confirm("Are you sure you want to delete this rule?")) {
-      try {
-        await deleteAlertRule(id);
-        loadData();
-      } catch (err) {
-        alert("Failed to delete rule: " + err.message);
-      }
-    }
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
-      <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '800px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Alert Notification Configuration</h3>
-          <button style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '18px', cursor: 'pointer' }} onClick={onClose}>X</button>
-        </div>
-
-        {/* Tab Selection */}
-        <div style={{ display: 'flex', gap: '10px', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>
-          <button className={`tab-btn ${activeTab === 'rules' ? 'active' : ''}`} style={{ padding: '6px 12px', fontSize: '13px' }} onClick={() => setActiveTab('rules')}>Evaluation Rules</button>
-          <button className={`tab-btn ${activeTab === 'channels' ? 'active' : ''}`} style={{ padding: '6px 12px', fontSize: '13px' }} onClick={() => setActiveTab('channels')}>Integrations</button>
-        </div>
-
-        {activeTab === 'rules' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Define warnings and critical alert rules:</span>
-              {userRole === 'admin' && <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => setIsRuleCreateOpen(true)}>+ New Rule</button>}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-              {rules.map(rule => (
-                <div key={rule.id} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '14px', borderRadius: '8px', position: 'relative' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{rule.name}</span>
-                    <span style={{
-                      padding: '1px 6px', borderRadius: '3px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
-                      background: rule.severity === 'critical' ? 'var(--danger-bg)' : 'var(--warning-bg)',
-                      color: rule.severity === 'critical' ? 'var(--danger-color)' : 'var(--warning-color)',
-                      border: rule.severity === 'critical' ? '1px solid rgba(255, 59, 92, 0.2)' : '1px solid rgba(255, 149, 0, 0.2)'
-                    }}>{rule.severity}</span>
-                  </div>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '12px', margin: '4px 0 10px 0' }}>{rule.description || 'No description'}</p>
-                  <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', color: 'var(--text-primary)' }}>
-                    <div><strong>Event type:</strong> <span className="badge-purple">{rule.event_type}</span></div>
-                    <div><strong>Conditions:</strong> <code style={{ fontSize: '11px', color: 'var(--success-color)' }}>{JSON.stringify(rule.conditions)}</code></div>
-                    <div><strong>Channels assigned:</strong> Channel IDs: {JSON.stringify(rule.channels)}</div>
-                  </div>
-                  {userRole === 'admin' && (
-                    <button 
-                      onClick={() => handleDeleteRule(rule.id)}
-                      style={{ background: 'none', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', fontSize: '12px', marginTop: '10px', float: 'right' }}
-                    >
-                      Delete
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'channels' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Configure Slack and SMTP notification profiles:</span>
-              {userRole === 'admin' && <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => setIsChannelCreateOpen(true)}>+ Add integration</button>}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-              {channels.map(chan => (
-                <div key={chan.id} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: '14px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{chan.name}</span>
-                      <span style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', fontSize: '9px', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '3px' }}>{chan.channel_type}</span>
-                    </div>
-                    <code style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginTop: '6px' }}>{JSON.stringify(chan.config)}</code>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button className="action-btn-inspect" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => handleTestChannel(chan.id)}>Test</button>
-                    {userRole === 'admin' && (
-                      <button 
-                        onClick={() => handleDeleteChannel(chan.id)}
-                        style={{ background: 'none', border: 'none', color: 'var(--danger-color)', fontSize: '12px', cursor: 'pointer' }}
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Channel Create Overlay */}
-      {isChannelCreateOpen && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000 }}>
-          <form className="modal-content" onSubmit={handleCreateChannel} style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '480px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)' }}>Add Notification integration</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Name</label>
-              <input className="settings-input" type="text" required value={channelForm.name} onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Type</label>
-              <select className="settings-input" value={channelForm.channel_type} onChange={(e) => setChannelForm({ ...channelForm, channel_type: e.target.value })}>
-                <option value="slack" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Slack Webhook</option>
-                <option value="email" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Email SMTP</option>
-                <option value="webhook" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Generic Webhook</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Config JSON</label>
-              <textarea className="settings-input" required style={{ minHeight: '80px', fontSize: '11px', fontFamily: 'monospace' }} placeholder='{"webhook_url": "..."}' onChange={(e) => {
-                try {
-                  const cfg = JSON.parse(e.target.value);
-                  setChannelForm({ ...channelForm, config: cfg });
-                } catch {}
-              }}></textarea>
-            </div>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '8px' }}>
-              <button type="button" className="modal-btn secondary" onClick={() => setIsChannelCreateOpen(false)}>Cancel</button>
-              <button type="submit" className="modal-btn primary">Save Channel</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Rule Create Overlay */}
-      {isRuleCreateOpen && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000 }}>
-          <form className="modal-content" onSubmit={handleCreateRule} style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '480px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)' }}>Create Alert rule</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Name</label>
-              <input className="settings-input" type="text" required value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Event Type</label>
-              <select className="settings-input" value={ruleForm.event_type} onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}>
-                <option value="attack_detected" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Attack Detected</option>
-                <option value="high_threat_score" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>High Threat Score</option>
-                <option value="ml_anomaly" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>ML Anomaly</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Severity</label>
-              <select className="settings-input" value={ruleForm.severity} onChange={(e) => setRuleForm({ ...ruleForm, severity: e.target.value })}>
-                <option value="critical" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Critical</option>
-                <option value="high" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>High</option>
-                <option value="medium" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>Medium</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON</label>
-              <textarea className="settings-input" style={{ minHeight: '60px', fontSize: '11px', fontFamily: 'monospace' }} placeholder='{"threat_score_gt": 80}' onChange={(e) => {
-                try {
-                  const conds = JSON.parse(e.target.value);
-                  setRuleForm({ ...ruleForm, conditions: conds });
-                } catch {}
-              }}></textarea>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Assign to Channels (IDs, e.g. 1,2)</label>
-              <input className="settings-input" type="text" onChange={(e) => {
-                const ids = e.target.value.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x));
-                setRuleForm({ ...ruleForm, channels: ids });
-              }} />
-            </div>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '8px' }}>
-              <button type="button" className="modal-btn secondary" onClick={() => setIsRuleCreateOpen(false)}>Cancel</button>
-              <button type="submit" className="modal-btn primary">Create Rule</button>
-            </div>
-          </form>
         </div>
       )}
     </div>

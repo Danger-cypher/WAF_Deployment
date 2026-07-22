@@ -19,55 +19,75 @@ from app.services.stats_calculator import (
 router = APIRouter()
 
 
+from fastapi import APIRouter, Depends, Query
+
 @router.get("/stats", response_model=StatsResponse)
-async def get_general_stats(current_user: TokenData = Depends(require_any_role)):
+async def get_general_stats(
+    hours: int = Query(None, description="Timeframe in hours"),
+    current_user: TokenData = Depends(require_any_role)
+):
     """
     Get overall WAF statistics.
     """
-    stats = calculate_stats()
+    stats = calculate_stats(hours)
     return StatsResponse(**stats)
 
 
 @router.get("/top-ips", response_model=List[Dict[str, Any]])
-async def get_top_attacking_ips(current_user: TokenData = Depends(require_any_role)):
+async def get_top_attacking_ips(
+    hours: int = Query(None, description="Timeframe in hours"),
+    current_user: TokenData = Depends(require_any_role)
+):
     """
     Get top attacking IPs.
     """
-    return get_top_ips()
+    return get_top_ips(hours=hours)
 
 
 @router.get("/attack-types", response_model=List[Dict[str, Any]])
-async def get_attack_types(current_user: TokenData = Depends(require_any_role)):
+async def get_attack_types(
+    hours: int = Query(None, description="Timeframe in hours"),
+    current_user: TokenData = Depends(require_any_role)
+):
     """
     Get attack category distribution.
     """
-    return get_attack_types_distribution()
+    return get_attack_types_distribution(hours)
 
 
 @router.get("/timeline", response_model=TimelineResponse)
-async def get_attack_timeline(current_user: TokenData = Depends(require_any_role)):
+async def get_attack_timeline(
+    hours: int = Query(None, description="Timeframe in hours"),
+    current_user: TokenData = Depends(require_any_role)
+):
     """
     Get timeline of attacks.
     """
-    data = get_timeline()
+    data = get_timeline(hours)
     entries = [TimelineEntry(**item) for item in data]
     return TimelineResponse(data=entries)
 
 
 @router.get("/top-rules", response_model=List[Dict[str, Any]])
-async def get_top_rules_stats(current_user: TokenData = Depends(require_any_role)):
+async def get_top_rules_stats(
+    hours: int = Query(None, description="Timeframe in hours"),
+    current_user: TokenData = Depends(require_any_role)
+):
     """
     Get most triggered rules.
     """
-    return get_top_rules()
+    return get_top_rules(hours=hours)
 
 
 @router.get("/severity-distribution", response_model=List[Dict[str, Any]])
-async def get_severity_dist(current_user: TokenData = Depends(require_any_role)):
+async def get_severity_dist(
+    hours: int = Query(None, description="Timeframe in hours"),
+    current_user: TokenData = Depends(require_any_role)
+):
     """
     Get severity level distribution.
     """
-    return get_severity_distribution()
+    return get_severity_distribution(hours)
 
 
 @router.get("/stats/export/csv")

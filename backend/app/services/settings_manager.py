@@ -213,6 +213,14 @@ class SettingsManager:
 
 
 
+    def get_auto_learning(self) -> Dict[str, Any]:
+        return self.settings.get("auto_learning", DEFAULT_SETTINGS["auto_learning"])
+
+    def update_auto_learning(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["auto_learning"] = data
+        self.save_settings(self.settings)
+        return self.settings["auto_learning"]
+
     def get_custom_response(self) -> Dict[str, Any]:
         return self.settings.get("custom_response", DEFAULT_SETTINGS["custom_response"])
 

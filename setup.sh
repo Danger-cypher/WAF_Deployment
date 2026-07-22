@@ -439,6 +439,10 @@ if [ -z "$ANALYST_PASS" ]; then
     ANALYST_PASS="analyst123"
 fi
 
+echo -e -n "  ${YELLOW}[?]${NC} Enter AbuseIPDB API Key (press ENTER to skip/configure later): "
+read -r ABUSEIPDB_KEY
+
+
 # ── Step 5b: Initialize OWASP Core Rule Set on Host ────────────────────────
 CRS_DIR="configs/nginx/modsec/coreruleset"
 if [ ! -f "$CRS_DIR/crs-setup.conf" ]; then
@@ -538,6 +542,14 @@ try:
     analyst_hash = bcrypt.hashpw(b'${ANALYST_PASS}', bcrypt.gensalt()).decode('utf-8')
     data['auth']['analyst_password_hash'] = analyst_hash
 
+    # Save AbuseIPDB key if specified during setup
+    abuse_key = '${ABUSEIPDB_KEY}'.strip()
+    if abuse_key:
+        if 'abuseipdb' not in data:
+            data['abuseipdb'] = {}
+        data['abuseipdb']['enabled'] = True
+        data['abuseipdb']['api_key'] = abuse_key
+
     with open(path, 'w') as f:
         json.dump(data, f, indent=2)
     print('SUCCESS')
@@ -574,12 +586,17 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # Installation Complete Banner
 # ─────────────────────────────────────────────────────────────────────────────
+SERVER_IP=$(hostname -I | awk '{print $1}')
+if [ -z "$SERVER_IP" ]; then
+    SERVER_IP="localhost"
+fi
+
 echo ""
 echo -e "${GREEN}=======================================================================${NC}"
 echo -e "${GREEN}             CYBERSENTINEL WAF DEPLOYMENT COMPLETE!                     ${NC}"
 echo -e "${GREEN}=======================================================================${NC}"
 echo ""
-echo -e "  🚀 ${BLUE}WAF Dashboard URL:${NC} http://localhost:3001/"
+echo -e "  🚀 ${BLUE}WAF Dashboard URL:${NC} http://${SERVER_IP}:3001/"
 echo -e "  🔐 ${BLUE}Credentials:${NC}"
 echo -e "     - ${GREEN}Administrator:${NC} admin  /  (your custom password)"
 echo -e "     - ${GREEN}Security Analyst:${NC} analyst  /  (your custom password)"
@@ -589,6 +606,16 @@ echo -e "     - ${CYAN}Port 3001${NC} : Direct Administrative Dashboard Access (
 echo -e "     - ${CYAN}Port 80  ${NC} : HTTP Redirector (Redirects traffic to HTTPS 443)"
 echo -e "     - ${CYAN}Port 443 ${NC} : HTTPS WAF Interception Gateway proxying to your apps"
 echo ""
-echo -e "  For diagnostic log files, inspect: ${BLUE}./logs/nginx/${NC} and ${BLUE}./logs/modsecurity/audit/${NC}"
+echo -e "  📁 ${BLUE}Configuration Paths:${NC}"
+echo -e "     - ${CYAN}Nginx Main Configs:${NC}   ./configs/nginx/"
+echo -e "     - ${CYAN}Protected Apps VHosts:${NC} ./configs/nginx/sites-enabled/"
+echo -e "     - ${CYAN}ModSecurity Rules:${NC}     ./configs/nginx/modsec/main.conf"
+echo -e "     - ${CYAN}WAF UI Configs:${NC}        ./backend/app/config/settings.json"
+echo -e "     - ${CYAN}GeoIP & SQLite Data:${NC}   ./backend/app/data/"
+echo ""
+echo -e "  📜 ${BLUE}Log Directories:${NC}"
+echo -e "     - ${CYAN}Nginx Access & Error Logs:${NC} ./logs/nginx/"
+echo -e "     - ${CYAN}ModSecurity Audit Logs:${NC}    ./logs/modsecurity/audit/"
+echo -e "     - ${CYAN}WAF Dashboard API Logs:${NC}    (View via docker logs: sudo docker compose logs -f waf-backend)"
 echo -e "${GREEN}=======================================================================${NC}"
 echo ""
