@@ -1,7 +1,221 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Trash2, Edit2, Server, Globe, Power, Play, Square, Check, X, Shield, Activity, HelpCircle, ArrowRight } from 'lucide-react';
+import { Plus, Trash2, Edit2, Server, Globe, Power, Play, Square, Check, X, Shield, Activity, HelpCircle, ArrowRight, Wifi, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2 } from 'lucide-react';
 import { getProtectedApps, createProtectedApp, updateProtectedApp, deleteProtectedApp, toggleProtectedApp } from '../services/api';
+
+const PREREQUISITES = [
+  {
+    icon: Zap,
+    color: '#f59e0b',
+    bg: 'rgba(245, 158, 11, 0.1)',
+    border: 'rgba(245, 158, 11, 0.2)',
+    step: '01',
+    title: 'Application Must Be Running',
+    desc: 'Your backend application must already be online and accessible from this server. The WAF acts as a reverse proxy — it forwards traffic to your app. If your app is offline, users will receive a 502 Gateway Error.',
+    tip: 'Test with: curl http://<your-backend-host>:<port>',
+  },
+  {
+    icon: Network,
+    color: '#00d4ff',
+    bg: 'rgba(0, 212, 255, 0.1)',
+    border: 'rgba(0, 212, 255, 0.2)',
+    step: '02',
+    title: 'Know Your Backend Host & Port',
+    desc: 'You need the internal IP address (e.g. 192.168.1.50) or Docker container hostname (e.g. my-app) of your backend, plus the port it listens on (e.g. 8080, 3000, 5000).',
+    tip: 'Example: Host = 192.168.1.50, Port = 8080',
+  },
+  {
+    icon: Globe,
+    color: '#a78bfa',
+    bg: 'rgba(167, 139, 250, 0.1)',
+    border: 'rgba(167, 139, 250, 0.2)',
+    step: '03',
+    title: 'Point Your DNS to This WAF Server',
+    desc: 'In your domain registrar (e.g. GoDaddy, Cloudflare DNS, Route53), create an A Record pointing your domain to this WAF server\'s public IP address — NOT directly to your backend. This forces all traffic through the WAF.',
+    tip: `WAF Server IP: ${window.location.hostname}`,
+  },
+  {
+    icon: Lock,
+    color: '#34d399',
+    bg: 'rgba(52, 211, 153, 0.1)',
+    border: 'rgba(52, 211, 153, 0.2)',
+    step: '04',
+    title: 'Decide on SSL/TLS',
+    desc: 'Choose how HTTPS will be handled. Use "Self-Signed" for internal/test environments, or upload your own certificate for production. The WAF terminates SSL at its edge and proxies plain HTTP to your backend internally.',
+    tip: 'Recommended: Use your own cert for public-facing apps',
+  },
+  {
+    icon: Key,
+    color: '#f87171',
+    bg: 'rgba(248, 113, 113, 0.1)',
+    border: 'rgba(248, 113, 113, 0.2)',
+    step: '05',
+    title: 'Unique Domain Per Application',
+    desc: 'Each application you register must use a unique domain name. The WAF uses the domain (Host header) to route traffic to the correct backend. Two apps cannot share the same domain.',
+    tip: 'e.g. app1.example.com → Backend A, app2.example.com → Backend B',
+  },
+];
+
+function PrerequisitesPanel() {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div style={{
+      background: 'rgba(0, 212, 255, 0.03)',
+      borderRadius: '14px',
+      border: '1px solid rgba(0, 212, 255, 0.15)',
+      marginBottom: '24px',
+      overflow: 'hidden',
+    }}>
+      {/* Header — always visible */}
+      <button
+        onClick={() => setIsOpen(v => !v)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '16px 24px',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          color: '#fff',
+          gap: '12px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{
+            width: '34px', height: '34px', borderRadius: '8px',
+            background: 'rgba(0, 212, 255, 0.12)', border: '1px solid rgba(0, 212, 255, 0.25)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <CheckCircle2 size={18} style={{ color: '#00d4ff' }} />
+          </div>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>
+              Before You Start — Prerequisites Checklist
+            </div>
+            <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', marginTop: '2px' }}>
+              5 things to prepare before configuring WAF protection for any application
+            </div>
+          </div>
+        </div>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '8px',
+          color: 'rgba(0, 212, 255, 0.8)', fontSize: '13px', fontWeight: 500, flexShrink: 0,
+        }}>
+          {isOpen ? 'Hide' : 'Show Guide'}
+          {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </div>
+      </button>
+
+      {/* Collapsible body */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            key="prereq-body"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div style={{
+              padding: '0 24px 24px',
+              borderTop: '1px solid rgba(0, 212, 255, 0.1)',
+            }}>
+              <p style={{ margin: '16px 0 20px', fontSize: '13px', color: 'rgba(255,255,255,0.5)', lineHeight: 1.6 }}>
+                Complete this checklist before clicking <strong style={{ color: '#fff' }}>Add Application</strong>. 
+                The WAF will handle everything automatically once these requirements are in place.
+              </p>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                gap: '14px',
+              }}>
+                {PREREQUISITES.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div
+                      key={item.step}
+                      style={{
+                        background: item.bg,
+                        border: `1px solid ${item.border}`,
+                        borderRadius: '12px',
+                        padding: '16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px',
+                        transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = `0 8px 24px ${item.border}`; }}
+                      onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
+                    >
+                      {/* Step header */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{
+                          width: '36px', height: '36px', borderRadius: '9px',
+                          background: 'rgba(0,0,0,0.2)', border: `1px solid ${item.border}`,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                        }}>
+                          <Icon size={18} style={{ color: item.color }} />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: item.color, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                            Step {item.step}
+                          </div>
+                          <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>
+                            {item.title}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Description */}
+                      <p style={{ margin: 0, fontSize: '13px', color: 'rgba(255,255,255,0.65)', lineHeight: 1.6 }}>
+                        {item.desc}
+                      </p>
+
+                      {/* Tip pill */}
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        background: 'rgba(0,0,0,0.25)', borderRadius: '6px', padding: '7px 10px',
+                        fontSize: '12px', color: item.color, fontFamily: 'monospace',
+                        borderLeft: `3px solid ${item.color}`,
+                      }}>
+                        <Zap size={11} style={{ color: item.color, flexShrink: 0 }} />
+                        {item.tip}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Flow summary */}
+              <div style={{
+                marginTop: '20px', padding: '14px 18px',
+                background: 'rgba(0,0,0,0.2)', borderRadius: '10px',
+                border: '1px solid rgba(255,255,255,0.06)',
+                display: 'flex', alignItems: 'center', gap: '8px',
+                fontSize: '13px', color: 'rgba(255,255,255,0.6)', flexWrap: 'wrap',
+              }}>
+                <Shield size={14} style={{ color: '#00d4ff', flexShrink: 0 }} />
+                <span style={{ fontWeight: 600, color: '#fff' }}>Traffic Flow:</span>
+                {['Internet', 'WAF (Port 80/443)', 'ModSecurity + ML Check', 'Your Backend App'].map((step, i, arr) => (
+                  <span key={step} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ color: i === 0 ? 'rgba(255,255,255,0.6)' : i === arr.length - 1 ? '#34d399' : '#00d4ff', fontWeight: i === arr.length - 1 ? 600 : 400 }}>{step}</span>
+                    {i < arr.length - 1 && <ArrowRight size={12} style={{ color: 'rgba(255,255,255,0.3)' }} />}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+
 
 export default function ProtectedApps({ onOpenWizard }) {
   const [apps, setApps] = useState([]);
@@ -172,21 +386,8 @@ export default function ProtectedApps({ onOpenWizard }) {
         </button>
       </div>
 
-      <div style={{
-        background: 'rgba(255, 255, 255, 0.02)',
-        borderRadius: '12px',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
-        padding: '24px',
-        marginBottom: '24px'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', color: 'rgba(255, 255, 255, 0.7)', fontSize: '14px', lineHeight: '1.5' }}>
-          <Shield size={20} style={{ color: 'var(--accent-color)', flexShrink: 0, marginTop: '2px' }} />
-          <div>
-            <strong>WAF Gateway Multi-Application Routing:</strong> Define virtual hosts to protect multiple separate applications behind CyberSentinel WAF.
-            Traffic matching the specified <strong>Domain Name</strong> will be forwarded to the corresponding internal <strong>Upstream Host & Port</strong> after full ModSecurity & Machine Learning checks.
-          </div>
-        </div>
-      </div>
+      {/* Prerequisites Panel */}
+      <PrerequisitesPanel />
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: '60px', color: 'rgba(255,255,255,0.5)' }}>

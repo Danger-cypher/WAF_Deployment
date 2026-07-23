@@ -339,12 +339,12 @@ def _run_nginx_reload() -> Tuple[bool, str]:
     try:
         # Check config syntax in Docker container
         subprocess.run(
-            ["docker", "exec", "waf-openresty", "nginx", "-t"],
+            ["docker", "exec", "waf-openresty", "nginx", "-c", "/etc/nginx/nginx.conf", "-t"],
             capture_output=True, text=True, check=True
         ) # nosec B603 B607
         # Reload openresty inside Docker container
         subprocess.run(
-            ["docker", "exec", "waf-openresty", "openresty", "-s", "reload"],
+            ["docker", "exec", "waf-openresty", "openresty", "-c", "/etc/nginx/nginx.conf", "-s", "reload"],
             capture_output=True, text=True, check=True
         ) # nosec B603 B607
         return True, "NGINX configuration validated and reloaded successfully in Docker."
@@ -361,7 +361,7 @@ def _run_nginx_reload() -> Tuple[bool, str]:
     try:
         # Check config syntax
         subprocess.run(
-            ["sudo", "-n", "nginx", "-t"], capture_output=True, text=True, check=True
+            ["sudo", "-n", "nginx", "-c", "/etc/nginx/nginx.conf", "-t"], capture_output=True, text=True, check=True
         ) # nosec B603 B607
         # Reload NGINX
         subprocess.run(

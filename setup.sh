@@ -11,7 +11,16 @@
 #   6. Docker Compose build & start with automatic health verification
 # =============================================================================
 
-set -euo pipefail
+# Use set -uo (not -e) so we control error handling explicitly with our own trap
+set -uo pipefail
+
+# ── Global Error Trap ─────────────────────────────────────────────────────────
+# Trap any unexpected error and print a user-friendly message instead of
+# exiting silently. The installer will still abort, but the admin will know
+# exactly where it failed and what to check.
+trap 'echo -e "\n${RED}[x] INSTALLER FAILED at line ${LINENO}.${NC}" \
+     "\n    Check the error above and re-run setup.sh after fixing the issue." \
+     "\n    Tip: Run: sudo docker compose logs -f   to inspect container state." >&2' ERR
 
 # ANSI color codes
 RED='\033[0;31m'
@@ -420,6 +429,34 @@ else
     success "GeoIP database already present: $GEOIP_FILE"
 fi
 
+# ── ASN Database (for ISP/Organization attribution) ──────────────────────────
+ASN_FILE="${GEOIP_DIR}/GeoLite2-ASN.mmdb"
+if [ ! -f "$ASN_FILE" ]; then
+    log "Downloading GeoLite2-ASN database (enables ISP/Organization tracking)..."
+    if [ -n "${LICENSE_KEY:-}" ]; then
+        TEMP_TAR_ASN="/tmp/geoip_asn.tar.gz"
+        if wget -qO "$TEMP_TAR_ASN" "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-ASN&license_key=${LICENSE_KEY}&suffix=tar.gz" 2>/dev/null; then
+            tar -xzf "$TEMP_TAR_ASN" -C /tmp
+            mv /tmp/GeoLite2-ASN_*/GeoLite2-ASN.mmdb "$ASN_FILE" 2>/dev/null || true
+            rm -f "$TEMP_TAR_ASN"
+            success "MaxMind GeoIP ASN Database downloaded successfully."
+        else
+            warn "MaxMind ASN download failed. Attempting public mirror fallback..."
+        fi
+    fi
+    # Fallback to public mirror if MaxMind key was not used or download failed
+    if [ ! -f "$ASN_FILE" ]; then
+        if wget -qO "$ASN_FILE" "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb" 2>/dev/null; then
+            success "Fallback GeoIP ASN Database downloaded successfully."
+        else
+            warn "Failed to download GeoIP ASN database. ISP/Organization metrics will be disabled."
+            touch "$ASN_FILE" || true
+        fi
+    fi
+else
+    success "GeoIP ASN database already present: $ASN_FILE"
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 5: User Credential Setup
 # ─────────────────────────────────────────────────────────────────────────────
@@ -441,6 +478,46 @@ fi
 
 echo -e -n "  ${YELLOW}[?]${NC} Enter AbuseIPDB API Key (press ENTER to skip/configure later): "
 read -r ABUSEIPDB_KEY
+
+# ── SMTP Email Alert Configuration ───────────────────────────────────────────
+echo ""
+echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
+echo -e "${CYAN}               Email Alert Configuration (SMTP)               ${NC}"
+echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
+echo -e "  Configure SMTP to send email alerts when attacks are detected."
+echo -e "  ${BLUE}Common SMTP Hosts:${NC} smtp.gmail.com (587), smtp.office365.com (587)"
+echo ""
+echo -n "  Enter SMTP Host (press ENTER to skip/configure later): "
+read -r SMTP_HOST
+
+SMTP_PORT="587"
+SMTP_USERNAME=""
+SMTP_PASSWORD=""
+SMTP_FROM=""
+SMTP_TO=""
+
+if [ -n "$SMTP_HOST" ]; then
+    echo -n "  Enter SMTP Port (default: 587): "
+    read -r SMTP_PORT_INPUT
+    if [ -n "$SMTP_PORT_INPUT" ]; then SMTP_PORT="$SMTP_PORT_INPUT"; fi
+
+    echo -n "  Enter SMTP Username / Email: "
+    read -r SMTP_USERNAME
+
+    echo -n "  Enter SMTP Password: "
+    read -s SMTP_PASSWORD
+    echo ""
+
+    echo -n "  Enter From Address (e.g. waf@company.com): "
+    read -r SMTP_FROM
+
+    echo -n "  Enter Alert Recipient Email (e.g. security-team@company.com): "
+    read -r SMTP_TO
+
+    success "SMTP configuration collected. Will be saved after containers start."
+else
+    warn "SMTP skipped. You can configure email alerts later from the WAF Dashboard → Alerts tab."
+fi
 
 
 # ── Step 5b: Initialize OWASP Core Rule Set on Host ────────────────────────
@@ -477,7 +554,33 @@ if [ ! -f "$CRS_DIR/crs-setup.conf" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 6: Docker Compose Build & Deploy
+# Step 6: Firewall Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+log "Configuring host firewall rules for WAF service ports..."
+if command -v ufw &>/dev/null; then
+    UFW_STATUS=$(sudo ufw status 2>/dev/null | head -1 || echo "inactive")
+    if echo "$UFW_STATUS" | grep -qi "active"; then
+        log "  UFW firewall is active. Opening required ports..."
+        sudo ufw allow 80/tcp   &>/dev/null && success "  Port 80  (HTTP)       — opened" || warn "  Failed to open port 80"
+        sudo ufw allow 443/tcp  &>/dev/null && success "  Port 443 (HTTPS)      — opened" || warn "  Failed to open port 443"
+        sudo ufw allow 3001/tcp &>/dev/null && success "  Port 3001 (Dashboard) — opened" || warn "  Failed to open port 3001"
+        sudo ufw reload &>/dev/null || true
+    else
+        warn "  UFW is installed but inactive. No firewall rules changed."
+        warn "  If you enable UFW later, manually run: sudo ufw allow 80,443,3001/tcp"
+    fi
+elif command -v firewall-cmd &>/dev/null; then
+    log "  firewalld detected. Opening required ports..."
+    sudo firewall-cmd --permanent --add-port=80/tcp   &>/dev/null && success "  Port 80 opened" || warn "  Failed to open port 80"
+    sudo firewall-cmd --permanent --add-port=443/tcp  &>/dev/null && success "  Port 443 opened" || warn "  Failed to open port 443"
+    sudo firewall-cmd --permanent --add-port=3001/tcp &>/dev/null && success "  Port 3001 opened" || warn "  Failed to open port 3001"
+    sudo firewall-cmd --reload &>/dev/null || true
+else
+    warn "  No known firewall manager (ufw/firewalld) found. Ensure ports 80, 443, 3001 are open manually."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 7: Docker Compose Build & Deploy
 # ─────────────────────────────────────────────────────────────────────────────
 log "Building and starting containerized WAF services..."
 # Clean up log ownership so containers can write immediately
@@ -556,6 +659,55 @@ try:
 except Exception as e:
     print(f'ERROR: {e}')
 " | grep "SUCCESS" &>/dev/null && success "Credentials synchronized successfully." || warn "Could not seed passwords automatically. Default credentials remain."
+
+# ── SMTP Alert Channel Seeding ────────────────────────────────────────────────
+# If SMTP was configured interactively, register it as an alert channel via the
+# backend API so it appears in the dashboard immediately after install.
+if [ -n "${SMTP_HOST:-}" ] && [ -n "${SMTP_TO:-}" ]; then
+    log "Registering SMTP email alert channel in the WAF alert system..."
+    sleep 2  # brief pause to ensure API is fully ready
+
+    # Obtain a session cookie from the login endpoint
+    LOGIN_RESP=$(curl -sc /tmp/waf_setup.cookies -s -X POST \
+        "http://localhost:3001/api/auth/login" \
+        -d "username=admin&password=${ADMIN_PASS}" 2>/dev/null || echo "")
+
+    if echo "$LOGIN_RESP" | grep -q "successful"; then
+        XSRF_TOKEN=$(grep XSRF /tmp/waf_setup.cookies 2>/dev/null | awk '{print $7}' || echo "")
+        CHANNEL_PAYLOAD=$(cat <<PAYLOAD
+{
+  "name": "Setup Email Alerts",
+  "channel_type": "email",
+  "enabled": true,
+  "config": {
+    "smtp_host": "${SMTP_HOST}",
+    "smtp_port": ${SMTP_PORT},
+    "username": "${SMTP_USERNAME}",
+    "password": "${SMTP_PASSWORD}",
+    "from_addr": "${SMTP_FROM}",
+    "to_addrs": ["${SMTP_TO}"],
+    "use_tls": true,
+    "use_ssl": false
+  }
+}
+PAYLOAD
+)
+        CREATE_RESP=$(curl -s -b /tmp/waf_setup.cookies \
+            -H "Content-Type: application/json" \
+            -H "X-XSRF-TOKEN: ${XSRF_TOKEN}" \
+            -X POST "http://localhost:3001/api/alerts/channels" \
+            -d "$CHANNEL_PAYLOAD" 2>/dev/null || echo "")
+        
+        if echo "$CREATE_RESP" | grep -q "\"id\""; then
+            success "SMTP email alert channel registered successfully in the WAF dashboard!"
+        else
+            warn "Could not auto-register SMTP channel. Configure manually in Dashboard → Alerts & Integrations."
+        fi
+        rm -f /tmp/waf_setup.cookies 2>/dev/null || true
+    else
+        warn "Could not login to register SMTP channel automatically. Configure manually in the dashboard."
+    fi
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 8: Health Verification Loop
