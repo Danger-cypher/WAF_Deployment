@@ -75,9 +75,12 @@ def apply_ddos_settings(settings: dict) -> bool:
             "",
         ]
 
-        # Define GeoIP2 databases if they exist on disk.
+        # Define GeoIP2 databases if they exist on disk AND the geoip2 nginx module is loaded.
         # GEOIP_DATA_DIR env var allows portable deployment on client servers.
         # Falls back to the demo-server absolute path when env var is not set.
+        # GEOIP2_MODULE_ENABLED must be set to "true" once OpenResty is rebuilt with the module.
+        geoip2_module_enabled = os.environ.get("GEOIP2_MODULE_ENABLED", "false").lower() == "true"
+
         _geoip_dir = os.environ.get(
             "GEOIP_DATA_DIR",
             os.path.abspath(
@@ -90,15 +93,20 @@ def apply_ddos_settings(settings: dict) -> bool:
         has_country_db = os.path.exists(COUNTRY_DB)
         has_asn_db = os.path.exists(ASN_DB)
 
-        if has_country_db:
+        if geoip2_module_enabled and has_country_db:
             config_lines.append(f"geoip2 {COUNTRY_DB} {{")
             config_lines.append(
                 "    $geoip2_data_country_code source=$remote_addr country iso_code;"
             )
             config_lines.append("}")
             config_lines.append("")
+        elif has_country_db:
+            config_lines.append(
+                "# geoip2 module not loaded — set GEOIP2_MODULE_ENABLED=true after rebuilding OpenResty"
+            )
+            config_lines.append("")
 
-        if has_asn_db:
+        if geoip2_module_enabled and has_asn_db:
             config_lines.append(f"geoip2 {ASN_DB} {{")
             config_lines.append(
                 "    $geoip2_data_asn source=$remote_addr autonomous_system_number;"
@@ -232,16 +240,16 @@ def apply_ddos_settings(settings: dict) -> bool:
                     nginx_var = f"$cookie_{cookie_name.lower().replace('-', '_')}"
                     limit_by_value = True
                 elif param_type == "Country":
-                    if not has_country_db:
+                    if not geoip2_module_enabled or not has_country_db:
                         logger.warning(
-                            f"Skipping Country rate limiting rule '{rule_name}' because Country GeoIP DB is missing."
+                            f"Skipping Country rate limiting rule '{rule_name}' — geoip2 module not enabled or Country GeoIP DB missing."
                         )
                         continue
                     nginx_var = "$geoip2_data_country_code"
                 elif param_type == "ISP/ASN":
-                    if not has_asn_db:
+                    if not geoip2_module_enabled or not has_asn_db:
                         logger.warning(
-                            f"Skipping ISP/ASN rate limiting rule '{rule_name}' because ASN GeoIP DB is missing."
+                            f"Skipping ISP/ASN rate limiting rule '{rule_name}' — geoip2 module not enabled or ASN GeoIP DB missing."
                         )
                         continue
                     # Match ASN (if numeric) or Org name

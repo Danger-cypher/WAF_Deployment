@@ -6,7 +6,6 @@ from typing import Dict, Any
 
 from app.services.settings_manager import settings_manager
 from app.services.auth import verify_password, require_admin, TokenData
-from app.services import log_reader, rule_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -357,127 +356,7 @@ async def change_password(
     settings_manager.update_password(payload.newPassword)
     return {"message": "Password updated successfully!"}
 
+# NOTE: System administrative actions (restart, reload-nginx, purge-cache, sync-signatures)
+# are now exclusively handled by the /system router in app/routes/system.py.
+# Those routes are registered under the '/system' prefix in main.py.
 
-# 5. Danger Zone / System Routes
-@router.post("/system/restart")
-async def restart_system(current_user: TokenData = Depends(require_admin)):
-    logger.info("Restart WAF Engine triggered.")
-    import subprocess
-    try:
-        # Check if Docker is available in the environment
-        docker_available = False
-        try:
-            res = subprocess.run(["docker", "--version"], capture_output=True)  # nosec B603 B607
-            if res.returncode == 0:
-                docker_available = True
-        except Exception:
-            pass
-
-        if docker_available:
-            logger.info("Docker environment detected. Restarting WAF containers...")
-            # Restart openresty (runs ModSecurity)
-            result = subprocess.run(
-                ["docker", "restart", "waf-openresty"],
-                capture_output=True,
-                text=True,
-                timeout=20
-            )  # nosec B603 B607
-            if result.returncode != 0:
-                logger.error(f"Restart waf-openresty container failed: {result.stderr}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to restart waf-openresty container: {result.stderr.strip()}"
-                )
-            
-            # Restart ml container
-            result_ml = subprocess.run(
-                ["docker", "restart", "waf-ml"],
-                capture_output=True,
-                text=True,
-                timeout=20
-            )  # nosec B603 B607
-            if result_ml.returncode != 0:
-                logger.warning(f"Restart waf-ml container failed: {result_ml.stderr}")
-
-            return {"message": "WAF ModSecurity Engine and ML Daemon restarted successfully in Docker."}
-
-        # Fallback to systemctl (host deployments)
-        result = subprocess.run(
-            ["sudo", "/usr/bin/systemctl", "restart", "openresty"],
-            capture_output=True,
-            text=True,
-            timeout=15
-        )  # nosec B603 B607
-        if result.returncode != 0:
-            logger.error(f"Restart openresty failed: {result.stderr}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to restart OpenResty WAF Engine: {result.stderr.strip()}"
-            )
-        
-        # Also restart ml-waf service
-        subprocess.run(
-            ["sudo", "/usr/bin/systemctl", "restart", "ml-waf"],
-            capture_output=True,
-            text=True,
-            timeout=15
-        )  # nosec B603 B607
-        
-        return {"message": "WAF ModSecurity Engine and ML Daemon restarted successfully."}
-    except subprocess.TimeoutExpired:
-        raise HTTPException(
-            status_code=500,
-            detail="Restart command timed out. Please check system status."
-        )
-    except Exception as e:
-        logger.error(f"Error during WAF restart: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"System error during restart: {str(e)}"
-        )
-
-
-@router.post("/system/reload-nginx")
-async def reload_nginx_service(current_user: TokenData = Depends(require_admin)):
-    logger.info("Reload NGINX service triggered.")
-    from app.services import nginx_manager
-    success = nginx_manager.reload_nginx()
-    if not success:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to reload NGINX service. Check system logs and permissions."
-        )
-    return {"message": "NGINX service reloaded gracefully."}
-
-
-@router.post("/system/purge-cache")
-async def purge_cache(current_user: TokenData = Depends(require_admin)):
-    logger.info("Purging local analytics data cache...")
-    try:
-        log_reader.parsed_entries.clear()
-        log_reader.cached_logs.clear()
-        log_reader.last_scan_time = 0.0
-        # Trigger immediate background scan
-        log_reader.scan_log_directory()
-        return {"message": "Dashboard analytics cache purged and rebuilt successfully."}
-    except Exception as e:
-        logger.error(f"Error purging cache: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to purge cache: {str(e)}")
-
-
-@router.post("/system/sync-signatures")
-async def sync_signatures(current_user: TokenData = Depends(require_admin)):
-    logger.info("Syncing OWASP CRS signatures triggered (simulated).")
-    await asyncio.sleep(1.5)  # Simulate download delay
-
-    # Reload NGINX to apply new rules (simulated in our case, but uses the standard reload logic)
-    reload_ok, reload_msg = rule_manager._run_nginx_reload()
-
-    # Record the audit event
-    rule_manager.record_audit_event(
-        action="sync_signatures",
-        details="Successfully downloaded and synchronized latest OWASP Core Rule Set signatures.",
-        username=current_user.username,
-    )
-
-    return {"message": "OWASP CRS signatures synced successfully."}

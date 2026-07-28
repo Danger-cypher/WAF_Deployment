@@ -15,7 +15,19 @@ def classify_attack(rule_id: str) -> Tuple[str, str]:
     except ValueError:
         return "Custom/Unknown", "Low"
 
-    # OWASP CRS rule families
+    # ── ModSecurity Core Rules (200xxx) ─────────────────────────────────────
+    # These are ModSecurity internal engine rules, not OWASP CRS
+    if rule_num == 200002:
+        return "Malformed Request", "Medium"
+    elif 200000 <= rule_num <= 200999:
+        return "Engine Rule Violation", "Medium"
+
+    # ── Custom / Virtual Patch Rules (10000000+) ────────────────────────────
+    # Site-specific rules defined in custom-rules.conf
+    if rule_num >= 10000000:
+        return "Virtual Patch / Custom Rule", "High"
+
+    # ── OWASP CRS rule families ──────────────────────────────────────────────
     # 910xxx - IP reputation, GeoIP blocking
     if 910000 <= rule_num <= 910999:
         return "IP Reputation", "High"
@@ -68,9 +80,15 @@ def classify_attack(rule_id: str) -> Tuple[str, str]:
     # 944xxx - Java injection
     elif 944000 <= rule_num <= 944999:
         return "Java Injection", "High"
-    # 949xxx - Anomaly score threshold (blocking)
+    # 949xxx - Anomaly score threshold (inbound blocking)
     elif 949000 <= rule_num <= 949999:
         return "Anomaly Threshold Exceeded", "High"
+    # 950xxx-958xxx - Data leakage detection rules
+    elif 950000 <= rule_num <= 958999:
+        return "Data Leakage", "High"
+    # 959xxx - Blocking response evaluation
+    elif 959000 <= rule_num <= 959999:
+        return "Anomaly Threshold Exceeded", "Medium"
     # 980xxx - Anomaly score threshold (response)
     elif 980000 <= rule_num <= 980999:
         return "Anomaly Threshold Exceeded", "Medium"

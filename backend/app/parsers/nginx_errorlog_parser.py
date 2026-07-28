@@ -100,18 +100,19 @@ def _parse_modsec_line(line: str) -> Optional[LogEntry]:
         code_match = re.search(r"Access denied with code (\d+)", line)
         http_code = code_match.group(1) if code_match else "403"
 
-        # Extract HTTP method from request line
+        # Extract HTTP method from request line — handles HTTP/1.0, HTTP/1.1 and HTTP/2.0
         method_match = re.search(
-            r'request: "(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH) ', line
+            r'request: "(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE) ', line
         )
-        method = method_match.group(1) if method_match else "GET"
+        # Default to empty string rather than 'GET' to avoid incorrect labelling
+        method = method_match.group(1) if method_match else ""
 
         rule_id = fields.get("id", "")
         message = fields.get("msg", "")
         hostname = fields.get("hostname", "")
         # Prefer URI from the 'request:' line as it contains the full path+query
         request_match = re.search(
-            r'request: "(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH) ([^ ]+) HTTP', line
+            r'request: "(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE) ([^ ]+) HTTP', line
         )
         uri_from_request = request_match.group(1) if request_match else ""
         uri = uri_from_request or fields.get("uri", "")

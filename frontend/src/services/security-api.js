@@ -1,3 +1,13 @@
+const BASE_URL = `${window.location.protocol}//${window.location.host}/api`;
+
+async function handleResponse(response) {
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    throw new Error(`API Error (${response.status}): ${errorText}`);
+  }
+  return response.json();
+}
+
 /**
  * Fetch security audit statistics
  */

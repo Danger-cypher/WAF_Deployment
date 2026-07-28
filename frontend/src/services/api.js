@@ -1302,15 +1302,6 @@ export async function saveCustomRules(rules_content) {
   }
 }
 
-export async function getSecurityStatistics(hours = 24) {
-  try {
-    const response = await fetch(`${BASE_URL}/security/statistics?hours=${hours}`, { cache: 'no-store' });
-    return await handleResponse(response);
-  } catch (error) {
-    console.error("Failed to fetch security audit statistics:", error);
-    return null;
-  }
-}
-
-
-
+// getSecurityStatistics is also available in ./security-api.js (canonical version).
+// Exported here for components that import from api.js directly.
+export { getSecurityStatistics } from './security-api.js';

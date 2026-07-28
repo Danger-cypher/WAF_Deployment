@@ -248,7 +248,7 @@ app.include_router(security_audit.router, prefix="/security", tags=["Security Au
 app.include_router(apps.router, tags=["Protected Apps"], dependencies=csrf_deps)
 app.include_router(alerts.router, tags=["Alerts"], dependencies=csrf_deps)
 app.include_router(alerts.trigger_router, tags=["Alerts"])
-app.include_router(system.router, tags=["System"], prefix="/api/system", dependencies=csrf_deps)
+app.include_router(system.router, tags=["System"], prefix="/system", dependencies=csrf_deps)
 
 if __name__ == "__main__":
     import uvicorn

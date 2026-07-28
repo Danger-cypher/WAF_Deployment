@@ -4,7 +4,7 @@ import secrets
 def verify_csrf_token(request: Request):
     """
     Dependency to verify the Double Submit Cookie CSRF token pattern.
-    Requires that the XSRF-TOKEN-V2 cookie matches the X-XSRF-TOKEN header
+    Requires that the XSRF-TOKEN-V3 cookie matches the X-XSRF-TOKEN header
     for state-changing methods (POST, PUT, DELETE, PATCH).
     """
     if request.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
