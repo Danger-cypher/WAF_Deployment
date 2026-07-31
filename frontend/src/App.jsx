@@ -320,7 +320,6 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
                 ) : (
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
                     {Object.entries(reqHeaders)
-                      .filter(([k]) => !['user-agent', 'referer', 'host'].includes(k.toLowerCase()))
                       .map(([k, v]) => (
                         <tr key={k} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
                           <td style={{ color: '#a1a1aa', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
@@ -339,7 +338,12 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
             {showResHeaders && (
               <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid rgba(255,255,255,0.05)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
                 {Object.keys(log.response_headers || {}).length === 0 ? (
-                  <div style={{ color: '#a1a1aa', fontSize: '12px', textAlign: 'center', padding: '10px' }}>No response headers recorded.</div>
+                  <div style={{ color: '#a1a1aa', fontSize: '12px', textAlign: 'center', padding: '10px' }}>
+                    No response headers recorded.
+                    {log.http_code && (log.http_code.startsWith('4') || log.http_code.startsWith('5')) && (
+                      <div style={{ marginTop: '6px', fontSize: '11px', color: '#71717a' }}>ℹ️ Blocked requests (HTTP {log.http_code}) may not log backend response headers.</div>
+                    )}
+                  </div>
                 ) : (
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
                     {Object.entries(log.response_headers || {}).map(([k, v]) => (

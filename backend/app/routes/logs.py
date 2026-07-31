@@ -1,10 +1,22 @@
+"""
+routes/logs.py — CyberSentinel WAF
+=====================================
+WAF log endpoints. All reads now query ClickHouse directly via
+clickhouse_service for paginated, filtered results.
+
+All URL paths and response schemas are unchanged — frontend needs no updates.
+"""
+
 import os
 import stat
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from typing import Optional
+
 from app.models.response_models import PaginatedLogs
+from app.models.log_model import LogEntry
 from app.services.auth import require_any_role, require_admin, TokenData
-from app.services.log_reader import get_all_logs, get_blocked_logs_only, list_newest_log_files
+from app.services import clickhouse_service
+from app.services.log_reader import list_newest_log_files, _row_to_log_entry
 from app.config.settings import settings
 from app.websocket.connection_manager import manager
 
@@ -23,88 +35,60 @@ async def get_logs(
     status_code: Optional[str] = None,
     search: Optional[str] = None,
     uri_type: Optional[str] = None,
+    hours: Optional[int] = None,
     current_user: TokenData = Depends(require_any_role),
 ):
     """
-    Fetch paginated, filtered logs showing ONLY blocked threats (not all analyzed traffic).
+    Fetch paginated, filtered security events from ClickHouse.
+    Only returns blocked threats (4xx/5xx http_code or events with violations).
 
+    Filters:
     - severity: exact match (e.g. 'High')
-    - min_severity: threshold match — returns events at or above this level.
-      Order: Critical (4) > High (3) > Medium (2) > Low (1).
-      e.g. min_severity=High returns both Critical and High events.
+    - min_severity: threshold — returns this level and above (Critical > High > Medium > Low)
+    - rule_id, ip, attack_type, status_code: exact match filters
+    - search: full-text search across message, uri, client_ip, rule_id, attack_type
+    - uri_type: 'web' (non-/api) or 'api' (/api/*)
+    - hours: restrict to last N hours
     """
-    # Severity ordering used for min_severity threshold filtering
-    SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+    rows, total = clickhouse_service.query_waf_events(
+        page=page,
+        size=size,
+        severity=severity,
+        min_severity=min_severity,
+        rule_id=rule_id,
+        ip=ip,
+        attack_type=attack_type,
+        status_code=status_code,
+        search=search,
+        uri_type=uri_type,
+        hours=hours,
+        blocked_only=True,
+    )
 
-    # Get ONLY blocked logs (4xx/5xx status codes)
-    logs = get_blocked_logs_only()
+    # Convert raw dicts to LogEntry models
+    data = [_row_to_log_entry(r) for r in rows]
 
-    # Apply filters
-    if severity:
-        logs = [log for log in logs if log.severity.lower() == severity.lower()]
-    if min_severity:
-        threshold = SEVERITY_ORDER.get(min_severity.lower(), 0)
-        logs = [log for log in logs if SEVERITY_ORDER.get(log.severity.lower(), 0) >= threshold]
-    if rule_id:
-        logs = [log for log in logs if log.rule_id == rule_id]
-    if ip:
-        logs = [log for log in logs if log.client_ip == ip]
-    if attack_type:
-        logs = [log for log in logs if log.attack_type.lower() == attack_type.lower()]
-    if status_code:
-        logs = [log for log in logs if log.http_code == status_code]
-    if search:
-        s_lower = search.lower()
-        logs = [
-            log
-            for log in logs
-            if (log.message and s_lower in log.message.lower())
-            or (log.uri and s_lower in log.uri.lower())
-            or (log.client_ip and s_lower in log.client_ip.lower())
-            or (log.rule_id and s_lower in log.rule_id.lower())
-            or (log.attack_type and s_lower in log.attack_type.lower())
-        ]
-    # Traffic source tab: 'web' = non-API URIs, 'api' = /api/* URIs, anything else = all
-    if uri_type == 'web':
-        logs = [log for log in logs if log.uri and not log.uri.startswith('/api')]
-    elif uri_type == 'api':
-        logs = [log for log in logs if log.uri and log.uri.startswith('/api')]
+    return PaginatedLogs(data=data, total=total, page=page, size=size)
 
-    total = len(logs)
-
-    # Pagination
-    start = (page - 1) * size
-    end = start + size
-    paginated_data = logs[start:end]
-
-    return PaginatedLogs(data=paginated_data, total=total, page=page, size=size)
-
-
-from fastapi import HTTPException
-from app.models.log_model import LogEntry
 
 @router.get("/logs/{log_id}", response_model=LogEntry)
-async def get_log_by_id(log_id: str, current_user: TokenData = Depends(require_any_role)):
-    """
-    Fetch a single WAF log entry by its unique transaction ID.
-    Searches in blocked logs only (threats that were actually blocked).
-    """
-    logs = get_blocked_logs_only()
-    for log in logs:
-        if log.id == log_id:
-            return log
-    raise HTTPException(status_code=404, detail="Log entry not found")
+async def get_log_by_id(
+    log_id: str,
+    current_user: TokenData = Depends(require_any_role),
+):
+    """Fetch a single WAF log entry by its unique transaction ID from ClickHouse."""
+    row = clickhouse_service.get_waf_event_by_id(log_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Log entry not found")
+    return _row_to_log_entry(row)
 
 
 @router.websocket("/logs/stream")
 async def websocket_endpoint(websocket: WebSocket):
-    """
-    WebSocket endpoint for real-time log streaming.
-    """
+    """WebSocket endpoint for real-time log streaming."""
     await manager.connect(websocket)
     try:
         while True:
-            # We don't expect messages from the client, just keep the connection open
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
@@ -113,30 +97,30 @@ async def websocket_endpoint(websocket: WebSocket):
 @router.get("/debug/logs")
 async def debug_logs(current_user: TokenData = Depends(require_admin)):
     """
-    Debug endpoint: lists all discovered log files, their permissions, and readability.
-    Use this to diagnose why logs may not be appearing. Requires admin role.
+    Debug endpoint: audit log directory status + ClickHouse connectivity.
+    Requires admin role.
     """
     files = list_newest_log_files(limit=50)
 
-    results = []
+    file_results = []
     for f in files[:50]:
         try:
             file_stat = os.stat(f)
             mode = oct(stat.S_IMODE(file_stat.st_mode))
             readable = os.access(f, os.R_OK)
-            owner_uid = file_stat.st_uid
-            results.append(
-                {
-                    "path": f,
-                    "readable": readable,
-                    "mode": mode,
-                    "owner_uid": owner_uid,
-                    "size_bytes": file_stat.st_size,
-                    "mtime": file_stat.st_mtime,
-                }
-            )
+            file_results.append({
+                "path": f,
+                "readable": readable,
+                "mode": mode,
+                "owner_uid": file_stat.st_uid,
+                "size_bytes": file_stat.st_size,
+                "mtime": file_stat.st_mtime,
+            })
         except Exception as e:
-            results.append({"path": f, "error": str(e)})
+            file_results.append({"path": f, "error": str(e)})
+
+    ch_available = clickhouse_service.is_available()
+    ch_count = clickhouse_service.get_total_blocked_count() if ch_available else -1
 
     return {
         "log_dir": settings.LOG_DIR,
@@ -145,5 +129,7 @@ async def debug_logs(current_user: TokenData = Depends(require_admin)):
         "backend_user_uid": os.getuid(),
         "backend_user_gid": os.getgid(),
         "total_files_found": len(files),
-        "files": results,
+        "clickhouse_available": ch_available,
+        "clickhouse_total_events": ch_count,
+        "files": file_results,
     }

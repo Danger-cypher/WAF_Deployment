@@ -24,6 +24,7 @@ from app.routes import (
     system,
 )
 from app.services.log_reader import scan_log_directory
+from app.services.log_ingestor import backfill_logs, start_ingestor, start_ingestor_tasks
 from app.websocket.connection_manager import start_log_watcher
 from app.services.log_retention_service import start_log_retention_service
 
@@ -43,8 +44,17 @@ async def lifespan(app: FastAPI):
 
     # Initialize SQLite Database
     from app.services.db_service import init_db
-
     init_db()
+
+    # Initialize ClickHouse connection (log availability — non-fatal if unavailable)
+    from app.services import clickhouse_service
+    if clickhouse_service.is_available():
+        logger.info("ClickHouse is available — using as primary log store")
+    else:
+        logger.warning(
+            "ClickHouse is NOT available at startup. "
+            "Dashboard will show empty logs until ClickHouse is reachable."
+        )
 
     # Sync protected apps to Nginx configuration on startup
     try:
@@ -60,17 +70,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to sync ModSecurity rules to NGINX on startup: {e}")
 
-    # Initial scan of the log directory
-    scan_log_directory()
-
-    # Start the background file watcher
+    # Start watchdog file observer for new audit JSON files
     global observer
     loop = asyncio.get_running_loop()
-    observer = start_log_watcher(loop)
+    observer = start_ingestor(loop)
+
+    # Start async flush loop + nginx poller (non-blocking background tasks)
+    await start_ingestor_tasks()
+
+    # Backfill: ingest existing audit files not yet in ClickHouse (async, yields to event loop)
+    asyncio.ensure_future(backfill_logs())
 
     # Start the anti-defacement monitor background task
     from app.services.anti_defacement import start_defacement_monitor
-
     defacement_task = asyncio.create_task(start_defacement_monitor())
 
     # Start the log retention enforcement background task

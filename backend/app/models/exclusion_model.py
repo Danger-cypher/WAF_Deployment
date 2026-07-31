@@ -1,9 +1,9 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Union
 
 
 class ExclusionCreateRequest(BaseModel):
-    false_positive_id: Optional[int] = None
+    false_positive_id: Optional[Union[int, str]] = None
     rule_id: str
     exclusion_type: (
         str  # 'uri', 'parameter', 'uri_parameter', 'endpoint_method', 'ip_suppression'
@@ -34,7 +34,7 @@ class ExclusionNoteUpdateRequest(BaseModel):
 
 class ExclusionResponse(BaseModel):
     id: int
-    false_positive_id: Optional[int] = None
+    false_positive_id: Optional[Union[int, str]] = None
     rule_id: str
     exclusion_type: str
     uri: Optional[str] = None

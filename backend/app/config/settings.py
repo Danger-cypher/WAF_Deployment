@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
+    # ClickHouse — Log Storage
+    CLICKHOUSE_HOST: str = "waf-clickhouse"
+    CLICKHOUSE_PORT: int = 8123
+    CLICKHOUSE_USER: str = "wafuser"
+    CLICKHOUSE_PASSWORD: str = ""
+    CLICKHOUSE_DB: str = "cybersentinel"
+
     class Config:
         case_sensitive = True
         env_file = ".env"

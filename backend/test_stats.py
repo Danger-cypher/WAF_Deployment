@@ -1,7 +1,6 @@
-from app.services.stats_calculator import _get_total_nginx_requests, get_total_blocked_count
+from app.services.stats_calculator import calculate_stats, get_top_ips
 from datetime import datetime
 print("Now:", datetime.now())
-print("Total 24h:", _get_total_nginx_requests(24))
-print("Total 168h:", _get_total_nginx_requests(168))
-print("Total None:", _get_total_nginx_requests(None))
-print("Blocked 24h:", get_total_blocked_count(24))
+print("Stats 24h:", calculate_stats(24))
+print("Stats 168h:", calculate_stats(168))
+print("Top IPs:", get_top_ips(5, 24))

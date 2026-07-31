@@ -10,6 +10,8 @@ from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 import logging
 
+from app.services import clickhouse_service
+
 logger = logging.getLogger(__name__)
 
 # Database path
@@ -359,6 +361,7 @@ class AlertDatabaseService:
                             event_data: Dict[str, Any], message: str,
                             status: str, error_message: str = None) -> int:
         """Create alert history entry"""
+        new_id = 0
         conn = self._get_connection()
         cursor = conn.cursor()
         
@@ -373,14 +376,52 @@ class AlertDatabaseService:
                   message, status, error_message))
             
             conn.commit()
-            return cursor.lastrowid
+            new_id = cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Error creating alert history in SQLite: {e}")
         finally:
             conn.close()
+
+        if clickhouse_service.is_available() and new_id > 0:
+            record = {
+                "id": new_id,
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "event_type": event_type,
+                "severity": severity,
+                "channels_notified": json.dumps(channels_notified),
+                "event_data": json.dumps(event_data),
+                "message": message,
+                "status": status,
+                "error_message": error_message or "",
+                "acknowledged_by": "",
+                "acknowledged_at": None,
+            }
+            clickhouse_service.insert_alert_history(record)
+            
+        return new_id
     
     def get_alert_history(self, limit: int = 100, offset: int = 0,
                           event_type: str = None, severity: str = None, status: str = None,
                           start_date: datetime = None, end_date: datetime = None) -> List[Dict[str, Any]]:
         """Get alert history with filtering and pagination"""
+        if clickhouse_service.is_available():
+            res = clickhouse_service.query_alert_history(
+                limit=limit, offset=offset, event_type=event_type, severity=severity, status=status,
+                start_date=start_date, end_date=end_date
+            )
+            if res:
+                for d in res:
+                    try:
+                        d["channels_notified"] = json.loads(d["channels_notified"])
+                    except Exception:
+                        pass
+                    try:
+                        d["event_data"] = json.loads(d["event_data"])
+                    except Exception:
+                        pass
+                return res
+
         conn = self._get_connection()
         cursor = conn.cursor()
         
@@ -417,6 +458,10 @@ class AlertDatabaseService:
     
     def acknowledge_alert(self, alert_id: int, acknowledged_by: str) -> bool:
         """Mark alert as acknowledged"""
+        ch_ok = False
+        if clickhouse_service.is_available():
+            ch_ok = clickhouse_service.acknowledge_alert(alert_id, acknowledged_by)
+
         conn = self._get_connection()
         cursor = conn.cursor()
         
@@ -428,7 +473,7 @@ class AlertDatabaseService:
             """, (acknowledged_by, alert_id))
             
             conn.commit()
-            return cursor.rowcount > 0
+            return cursor.rowcount > 0 or ch_ok
         finally:
             conn.close()
     
@@ -523,6 +568,21 @@ class AlertDatabaseService:
     
     def get_alert_stats(self, days: int = 30) -> Dict[str, Any]:
         """Get alert statistics"""
+        if clickhouse_service.is_available():
+            stats = clickhouse_service.get_alert_stats(days)
+            if stats:
+                stats["period_days"] = days
+                for d in stats.get("recent_alerts", []):
+                    try:
+                        d["channels_notified"] = json.loads(d["channels_notified"])
+                    except Exception:
+                        pass
+                    try:
+                        d["event_data"] = json.loads(d["event_data"])
+                    except Exception:
+                        pass
+                return stats
+
         conn = self._get_connection()
         cursor = conn.cursor()
         

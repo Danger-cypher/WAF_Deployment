@@ -16,7 +16,7 @@ class FalsePositiveNoteUpdateRequest(BaseModel):
 
 
 class FalsePositiveResponse(BaseModel):
-    id: int
+    id: str
     log_id: str
     rule_id: str
     client_ip: str

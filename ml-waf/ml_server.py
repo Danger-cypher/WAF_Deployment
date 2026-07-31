@@ -15,6 +15,37 @@ import feature_pipeline
 import redis_features
 import threat_score
 
+# ClickHouse client for ML event persistence
+try:
+    import clickhouse_connect as _ch_connect
+    _CH_HOST = os.environ.get("CLICKHOUSE_HOST", "waf-clickhouse")
+    _CH_PORT = int(os.environ.get("CLICKHOUSE_PORT", "8123"))
+    _CH_USER = os.environ.get("CLICKHOUSE_USER", "wafuser")
+    _CH_PASS = os.environ.get("CLICKHOUSE_PASSWORD", "")
+    _CH_DB   = os.environ.get("CLICKHOUSE_DB", "cybersentinel")
+    _ch_client = None
+    def _get_ch_client():
+        global _ch_client
+        try:
+            if _ch_client:
+                _ch_client.ping()
+                return _ch_client
+        except Exception:
+            _ch_client = None
+        try:
+            _ch_client = _ch_connect.get_client(
+                host=_CH_HOST, port=_CH_PORT,
+                username=_CH_USER, password=_CH_PASS,
+                database=_CH_DB, connect_timeout=5,
+            )
+            return _ch_client
+        except Exception as exc:
+            return None
+    _CLICKHOUSE_AVAILABLE = True
+except ImportError:
+    _CLICKHOUSE_AVAILABLE = False
+    def _get_ch_client(): return None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -160,8 +191,52 @@ class RequestTelemetry(BaseModel):
     ua: str = Field(default="", description="User-Agent header value")
     remote_addr: str = Field(default="", description="IP address of the client")
 
+def write_to_clickhouse(event: dict):
+    """Primary ML event persistence — writes to ClickHouse cybersentinel.ml_events."""
+    client = _get_ch_client()
+    if client is None:
+        logger.warning("ClickHouse unavailable — ML event not persisted to ClickHouse")
+        write_to_sqlite(event)   # fallback
+        return
+    try:
+        ts = event.get("timestamp", "")
+        if isinstance(ts, str):
+            try:
+                ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                ts = datetime.utcnow()
+        row = [[
+            str(event.get("unique_id", "")),
+            ts,
+            str(event.get("remote_addr", "")),
+            str(event.get("method", "")),
+            str(event.get("uri", "")),
+            str(event.get("args", "")),
+            str(event.get("ct", "")),
+            str(event.get("ua", "")),
+            float(event.get("body_len", 0.0)),
+            float(event.get("crs_score", 0.0)),
+            str(event.get("matched_vars", "")),
+            float(event.get("redis_rpm", 0.0)),
+            float(event.get("redis_rep", 0.0)),
+            float(event.get("abuse_score", 0.0)),
+            float(event.get("xgb_prob", 0.0)),
+            float(event.get("iso_score", 0.0)),
+            float(event.get("threat_score", 0.0)),
+            str(event.get("decision", "")),
+        ]]
+        client.insert("ml_events", row, column_names=[
+            "unique_id", "timestamp", "remote_addr", "method", "uri", "args",
+            "ct", "ua", "body_len", "crs_score", "matched_vars",
+            "redis_rpm", "redis_rep", "abuse_score",
+            "xgb_prob", "iso_score", "threat_score", "decision",
+        ])
+    except Exception as e:
+        logger.error(f"ClickHouse ML event write failed: {e} — falling back to SQLite")
+        write_to_sqlite(event)
+
 def write_to_sqlite(event: dict):
-    """Asynchronous analytics ingestion handler using SQLite."""
+    """Fallback ML event persistence to SQLite (used when ClickHouse is unavailable)."""
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30.0)
         cursor = conn.cursor()
@@ -610,7 +685,7 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
         "decision": decision,
         "abuse_score": abuse_score
     }
-    background_tasks.add_task(write_to_sqlite, event_data)
+    background_tasks.add_task(write_to_clickhouse, event_data)
 
     # 8. Trigger WAF Alerting Engine for high threat or anomaly detected
     if decision == "block":

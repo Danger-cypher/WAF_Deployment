@@ -106,6 +106,11 @@ REDIS_PASSWORD=
 JWT_SECRET_KEY=
 BACKEND_CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001
 GEOIP_DATA_DIR=/etc/nginx/geoip
+CLICKHOUSE_HOST=waf-clickhouse
+CLICKHOUSE_PORT=8123
+CLICKHOUSE_USER=wafuser
+CLICKHOUSE_PASSWORD=
+CLICKHOUSE_DB=cybersentinel
 EOF
     fi
 fi
@@ -249,6 +254,7 @@ EOF
 # Set default values if not defined or empty
 REDIS_PW=$(grep -E "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 JWT_KEY=$(grep -E "^JWT_SECRET_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
+CH_PW=$(grep -E "^CLICKHOUSE_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 CORS_ORIGINS=$(grep -E "^BACKEND_CORS_ORIGINS=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 
 if [ -z "$REDIS_PW" ]; then
@@ -264,6 +270,13 @@ if [ -z "$JWT_KEY" ]; then
     JWT_KEY=$(openssl rand -hex 16)
     sed -i "s|^JWT_SECRET_KEY=.*|JWT_SECRET_KEY=${JWT_KEY}|" "$ENV_FILE"
 fi
+
+if [ -z "$CH_PW" ] || [ "$CH_PW" = "CHANGE_ME_TO_STRONG_RANDOM_PASSWORD" ]; then
+    log "Generating cryptographically secure password for ClickHouse..."
+    CH_PW=$(openssl rand -hex 32)
+    sed -i "s|^CLICKHOUSE_PASSWORD=.*|CLICKHOUSE_PASSWORD=${CH_PW}|" "$ENV_FILE"
+fi
+
 
 if [ -z "$CORS_ORIGINS" ]; then
     echo ""
@@ -476,8 +489,23 @@ if [ -z "$ANALYST_PASS" ]; then
     ANALYST_PASS="analyst123"
 fi
 
+echo -n "  Enter ClickHouse username (default: wafuser): "
+read -r CH_USER_INPUT
+if [ -n "$CH_USER_INPUT" ]; then
+    sed -i "s|^CLICKHOUSE_USER=.*|CLICKHOUSE_USER=${CH_USER_INPUT}|" "$ENV_FILE"
+fi
+
+echo -n "  Enter ClickHouse password (default: auto-generated secure key): "
+read -s CH_PASS_INPUT
+echo ""
+if [ -n "$CH_PASS_INPUT" ]; then
+    CH_PW="$CH_PASS_INPUT"
+    sed -i "s|^CLICKHOUSE_PASSWORD=.*|CLICKHOUSE_PASSWORD=${CH_PW}|" "$ENV_FILE"
+fi
+
 echo -e -n "  ${YELLOW}[?]${NC} Enter AbuseIPDB API Key (press ENTER to skip/configure later): "
 read -r ABUSEIPDB_KEY
+
 
 # ── SMTP Email Alert Configuration ───────────────────────────────────────────
 echo ""
@@ -660,6 +688,15 @@ except Exception as e:
     print(f'ERROR: {e}')
 " | grep "SUCCESS" &>/dev/null && success "Credentials synchronized successfully." || warn "Could not seed passwords automatically. Default credentials remain."
 
+# Run one-time database migration from SQLite to ClickHouse
+log "Running SQLite to ClickHouse data migration script..."
+sudo docker exec waf-backend python3 /app/scripts/migrate_sqlite_to_clickhouse.py \
+    --ch-host waf-clickhouse \
+    --ch-user wafuser \
+    --ch-password "${CH_PW}" \
+    --ch-db cybersentinel || warn "ClickHouse database migration failed to run automatically."
+
+
 # ── SMTP Alert Channel Seeding ────────────────────────────────────────────────
 # If SMTP was configured interactively, register it as an alert channel via the
 # backend API so it appears in the dashboard immediately after install.
@@ -749,14 +786,20 @@ echo -e "${GREEN}             CYBERSENTINEL WAF DEPLOYMENT COMPLETE!            
 echo -e "${GREEN}=======================================================================${NC}"
 echo ""
 echo -e "  🚀 ${BLUE}WAF Dashboard URL:${NC} http://${SERVER_IP}:3001/"
+echo -e "  📊 ${BLUE}ClickHouse Play Console:${NC} http://localhost:8123/play"
+echo -e "     - ${YELLOW}Note:${NC} To connect, open an SSH Tunnel from your local terminal:"
+echo -e "       ${CYAN}ssh -L 8123:127.0.0.1:8123 soc@${SERVER_IP}${NC}"
 echo -e "  🔐 ${BLUE}Credentials:${NC}"
 echo -e "     - ${GREEN}Administrator:${NC} admin  /  (your custom password)"
 echo -e "     - ${GREEN}Security Analyst:${NC} analyst  /  (your custom password)"
+echo -e "     - ${GREEN}ClickHouse Database:${NC} Username: (custom username, default: wafuser) / Password: (check your .env file)"
 echo ""
 echo -e "  🌐 ${BLUE}Port Mapping Structure:${NC}"
 echo -e "     - ${CYAN}Port 3001${NC} : Direct Administrative Dashboard Access (WAF-Inspected)"
 echo -e "     - ${CYAN}Port 80  ${NC} : HTTP Redirector (Redirects traffic to HTTPS 443)"
 echo -e "     - ${CYAN}Port 443 ${NC} : HTTPS WAF Interception Gateway proxying to your apps"
+echo -e "     - ${CYAN}Port 8123${NC} : ClickHouse HTTP Interface (Bound to 127.0.0.1 for security)"
+
 echo ""
 echo -e "  📁 ${BLUE}Configuration Paths:${NC}"
 echo -e "     - ${CYAN}Nginx Main Configs:${NC}   ./configs/nginx/"

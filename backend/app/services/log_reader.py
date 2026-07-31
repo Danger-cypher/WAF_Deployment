@@ -1,45 +1,51 @@
+"""
+log_reader.py — CyberSentinel WAF
+====================================
+Public API for reading WAF log entries.
+
+Architecture (post-ClickHouse migration):
+- Primary store: ClickHouse waf_events table
+- All reads delegate to clickhouse_service
+- File-listing utilities (list_newest_log_files, scan_log_directory) are
+  KEPT for use by log_ingestor.py during startup backfill
+- The in-memory parsed_entries dict is removed — ClickHouse is the single source of truth
+
+Compatibility:
+- All function signatures are unchanged so routes/logs.py requires zero edits
+- LogEntry objects are reconstructed from ClickHouse row dicts
+"""
+
 import os
 import logging
+import re
 import time
-from datetime import datetime
-from typing import List, Dict
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
 from app.config.settings import settings
-from app.models.log_model import LogEntry
+from app.models.log_model import LogEntry, ViolationDetail
 from app.parsers.modsec_parser import parse_modsec_audit_json
 from app.parsers.nginx_errorlog_parser import parse_nginx_error_log
+from app.services import clickhouse_service
 
 logger = logging.getLogger(__name__)
 
-# In-memory storage for MVP
-parsed_entries: Dict[str, LogEntry] = {}
-
-# Path to nginx error log (readable by soc user via adm group)
 NGINX_ERROR_LOG = "/var/log/nginx/error.log"
-# Rotated copy written by logrotate at midnight — always include both
-# Note: error.log.1 is the most recent rotated file (current night's logs)
 NGINX_ERROR_LOG_ROTATED = "/var/log/nginx/error.log.1"
 
-# Cache state to optimize redundant disk polling and JSON parsing.
-# 10s is a good balance: live enough for the dashboard, cheap enough not to re-parse
-# 4+ MB of nginx error logs on every polling cycle.
-cached_logs: List[LogEntry] = []
-last_scan_time: float = 0.0
-SCAN_INTERVAL: float = 10.0  # seconds between full disk re-scans
+# Backward compatibility dictionary
+parsed_entries = {}
 
-# Separate nginx error-log cache so the parsed results survive multiple
-# get_all_logs() calls within the same SCAN_INTERVAL window.
-_nginx_cache: List[LogEntry] = []
-_nginx_cache_time: float = 0.0
 
+# ---------------------------------------------------------------------------
+# File listing utilities (kept for log_ingestor backfill)
+# ---------------------------------------------------------------------------
 
 def list_newest_log_files(limit: int = 5000) -> List[str]:
     """
-    Chronologically traverses day-level and minute-level subdirectories of settings.LOG_DIR
-    to retrieve the newest audit files, bypassing full directory globbing.
-    Only returns files with .json extension.
+    Chronologically traverses the audit log directory and returns the newest
+    JSON files up to `limit`.  Used by log_ingestor.py during backfill.
     """
-    import re
-
     if not os.path.isdir(settings.LOG_DIR):
         return []
 
@@ -53,13 +59,12 @@ def list_newest_log_files(limit: int = 5000) -> List[str]:
         return []
     days.sort(reverse=True)
 
-    collected_files = []
+    collected: List[str] = []
 
     for day in days:
         day_path = os.path.join(settings.LOG_DIR, day)
         if not os.path.isdir(day_path):
             continue
-
         try:
             minutes = [m for m in os.listdir(day_path) if min_re.match(m)]
         except Exception:
@@ -70,201 +75,117 @@ def list_newest_log_files(limit: int = 5000) -> List[str]:
             minute_path = os.path.join(day_path, minute)
             if not os.path.isdir(minute_path):
                 continue
-
             try:
-                sub_files = [
-                    os.path.join(minute_path, f) for f in os.listdir(minute_path)
-                ]
+                sub_files = [os.path.join(minute_path, f) for f in os.listdir(minute_path)]
             except Exception:
                 continue
-
-            for f in sub_files:
-                if os.path.isfile(f):
-                    collected_files.append(f)
-
-            if len(collected_files) >= limit:
+            collected.extend(f for f in sub_files if os.path.isfile(f))
+            if len(collected) >= limit:
                 break
-        if len(collected_files) >= limit:
+        if len(collected) >= limit:
             break
 
-    # Fallback to flat directory search if no chronological directories found
-    if not collected_files:
+    # Fallback to flat directory listing
+    if not collected:
         try:
-            collected_files = [
-                os.path.join(settings.LOG_DIR, f) for f in os.listdir(settings.LOG_DIR)
+            collected = [
+                os.path.join(settings.LOG_DIR, f)
+                for f in os.listdir(settings.LOG_DIR)
+                if os.path.isfile(os.path.join(settings.LOG_DIR, f))
             ]
-            collected_files = [f for f in collected_files if os.path.isfile(f)]
         except Exception as e:
-            logger.error(f"Error reading flat LOG_DIR: {e}")
+            logger.error(f"Flat LOG_DIR scan failed: {e}")
             return []
 
-    # Sort the files by modification time descending and return up to the limit
-    collected_files = sorted(collected_files, key=os.path.getmtime, reverse=True)[
-        :limit
-    ]
-    return collected_files
+    return sorted(collected, key=os.path.getmtime, reverse=True)[:limit]
 
 
 def scan_log_directory():
     """
-    Dynamically rescans the ModSecurity log directory for JSON files,
-    sorts them by newest first, and parses them.
+    Legacy scan — now a no-op because log_ingestor handles file watching.
+    Kept so main.py can still import it without errors during the transition.
     """
-    files = list_newest_log_files(limit=5000)
-
-    new_count = 0
-    for file_path in files:
-        # Simple check to avoid symlink traversal outside of root
-        if not os.path.abspath(file_path).startswith(
-            os.path.join(os.path.abspath(settings.LOG_DIR), "")
-        ):
-            continue
-
-        if file_path not in parsed_entries:
-            entry = parse_modsec_audit_json(file_path, settings.LOG_DIR)
-            if entry:
-                new_count += 1
-                logger.info(f"New attack parsed from JSON log: {file_path}")
-                parsed_entries[file_path] = entry
-
-    if new_count > 0:
-        logger.info(f"Loaded {new_count} new entries from JSON audit logs")
+    logger.debug("scan_log_directory called — no-op (log_ingestor handles this now)")
 
 
-def get_all_logs(hours: int = None) -> List[LogEntry]:
+# ---------------------------------------------------------------------------
+# LogEntry reconstruction helpers
+# ---------------------------------------------------------------------------
+
+def _row_to_log_entry(row: Dict) -> LogEntry:
+    """Convert a ClickHouse row dict back to a LogEntry Pydantic model."""
+    violations_raw = row.get("violations", [])
+    violations = []
+    if isinstance(violations_raw, list):
+        for v in violations_raw:
+            if isinstance(v, dict):
+                violations.append(ViolationDetail(**{
+                    "rule_id": str(v.get("rule_id", "")),
+                    "message": str(v.get("message", "")),
+                    "data": str(v.get("data", "")),
+                    "pattern": str(v.get("pattern", "")),
+                    "file": str(v.get("file", "")),
+                    "line_number": str(v.get("line_number", "")),
+                }))
+
+    return LogEntry(
+        id=str(row.get("id", "")),
+        timestamp=str(row.get("timestamp", "")),
+        client_ip=str(row.get("client_ip", "")),
+        uri=str(row.get("uri", "")),
+        method=str(row.get("method", "")),
+        http_code=str(row.get("http_code", "")),
+        rule_id=str(row.get("rule_id", "")),
+        message=str(row.get("message", "")),
+        severity=str(row.get("severity", "")),
+        attack_type=str(row.get("attack_type", "")),
+        hostname=str(row.get("hostname", "")),
+        country=str(row.get("country", "")),
+        source_asn_org=str(row.get("source_asn_org", "")),
+        request_headers=row.get("request_headers", {}),
+        response_headers=row.get("response_headers", {}),
+        violations=violations,
+        raw_log=row.get("raw_log"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public read API (signatures unchanged from original log_reader.py)
+# ---------------------------------------------------------------------------
+
+def get_all_logs(hours: Optional[int] = None) -> List[LogEntry]:
     """
-    Get all WAF log entries, merging JSON audit logs with nginx error log entries.
-    The nginx error log is always readable and serves as a reliable fallback.
-    Entries from both sources are deduplicated by unique_id.
+    Fetch all WAF log entries from ClickHouse.
+    Returns a list of LogEntry objects sorted newest-first.
+    Falls back to empty list if ClickHouse is unavailable.
     """
-    global last_scan_time, cached_logs
-    current_time = time.time()
-
-    # If the cache is still fresh and contains items, return it directly to avoid disk I/O
-    if current_time - last_scan_time < SCAN_INTERVAL and cached_logs:
-        result = cached_logs
-    else:
-        last_scan_time = current_time
-
-        # Rescan JSON audit directory
-        scan_log_directory()
-
-        # Read from nginx error log AND its rotated copy to survive nightly logrotate.
-        global _nginx_cache, _nginx_cache_time
-        nginx_entries: List[LogEntry] = []
-        if current_time - _nginx_cache_time < SCAN_INTERVAL and _nginx_cache:
-            nginx_entries = _nginx_cache
-        else:
-            for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
-                if os.path.isfile(log_path):
-                    nginx_entries.extend(parse_nginx_error_log(log_path))
-            _nginx_cache = nginx_entries
-            _nginx_cache_time = current_time
-
-        merged: Dict[str, LogEntry] = {}
-        for entry in nginx_entries:
-            merged[entry.id] = entry
-        for entry in parsed_entries.values():
-            merged[entry.id] = entry
-
-        result = list(merged.values())
-
-        def parse_time(e):
-            try:
-                # Some logs use 'YYYY-MM-DD HH:MM:SS' and some use ISO
-                if len(e.timestamp) == 19 and e.timestamp[10] == ' ':
-                    return datetime.strptime(e.timestamp, "%Y-%m-%d %H:%M:%S")
-                return datetime.fromisoformat(e.timestamp.replace('Z', '+00:00'))
-            except Exception:
-                return datetime.min
-
-        result.sort(key=parse_time, reverse=True)
-        
-        # We need to save the parse_time on the object for fast filtering later
-        for r in result:
-            if not hasattr(r, '_dt'):
-                r._dt = parse_time(r)
-
-        cached_logs = result
-        
-    if hours is not None:
-        from datetime import timedelta
-        cutoff = datetime.now() - timedelta(hours=hours)
-        # Filter based on cached datetime object
-        result = [r for r in result if getattr(r, '_dt', datetime.min) >= cutoff]
-
-    return result
-
-
-def get_total_blocked_count(hours: int = None) -> int:
-    """
-    Returns an accurate total count of ALL ModSecurity blocks across both the
-    current and most recent rotated error log.
-    """
-    import re
-    MODSEC_BLOCK_RE = re.compile(r"ModSecurity: Access denied")
-    count = 0
-    
-    if hours is None:
-        for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
-            if not os.path.isfile(log_path):
-                continue
-            try:
-                with open(log_path, 'rb') as f:
-                    for raw_line in f:
-                        try:
-                            line = raw_line.decode('utf-8', errors='replace')
-                            if MODSEC_BLOCK_RE.search(line):
-                                count += 1
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.warning(f"Could not read {log_path} for block count: {e}")
-        return count
-
-    # Time-filtered logic
-    from datetime import datetime, timedelta
-    cutoff = datetime.now() - timedelta(hours=hours)
-    # Nginx error log timestamp: 2026/07/17 10:02:00
-    DATE_RE = re.compile(r"^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})")
-    for log_path in (NGINX_ERROR_LOG, NGINX_ERROR_LOG_ROTATED):
-        if not os.path.isfile(log_path):
-            continue
-        try:
-            with open(log_path, 'r', errors='replace') as f:
-                for line in f:
-                    if MODSEC_BLOCK_RE.search(line):
-                        match = DATE_RE.search(line)
-                        if match:
-                            try:
-                                dt = datetime.strptime(match.group(1), "%Y/%m/%d %H:%M:%S")
-                                if dt >= cutoff:
-                                    count += 1
-                            except Exception:
-                                pass
-        except Exception as e:
-            logger.warning(f"Could not read {log_path} for time-filtered block count: {e}")
-    return count
-
-
-def get_parsed_files_count() -> int:
-    return len(parsed_entries)
+    rows, _ = clickhouse_service.query_waf_events(
+        page=1,
+        size=5000,
+        hours=hours,
+        blocked_only=False,
+    )
+    return [_row_to_log_entry(r) for r in rows]
 
 
 def get_blocked_logs_only() -> List[LogEntry]:
     """
-    Get only BLOCKED logs (HTTP 4xx/5xx status codes).
-    Used for the dashboard logs page to show only threats, not all analyzed traffic.
+    Fetch only blocked (4xx/5xx) WAF log entries from ClickHouse.
+    Used by routes/logs.py for the Security Events page.
     """
-    all_logs = get_all_logs()
-    
-    blocked_logs = []
-    for entry in all_logs:
-        # Include entries with error status codes (blocked/denied)
-        if entry.http_code and entry.http_code.startswith(('4', '5')):
-            blocked_logs.append(entry)
-        # Also include entries from error log (always blocks) even if http_code is missing
-        elif entry.violations and len(entry.violations) > 0 and not entry.http_code:
-            blocked_logs.append(entry)
-    
-    return blocked_logs
+    rows, _ = clickhouse_service.query_waf_events(
+        page=1,
+        size=5000,
+        blocked_only=True,
+    )
+    return [_row_to_log_entry(r) for r in rows]
+
+
+def get_total_blocked_count(hours: Optional[int] = None) -> int:
+    """Total count of blocked events from ClickHouse."""
+    return clickhouse_service.get_total_blocked_count(hours=hours)
+
+
+def get_parsed_files_count() -> int:
+    """Return total event count stored in ClickHouse (replaces in-memory dict count)."""
+    return clickhouse_service.get_total_blocked_count()

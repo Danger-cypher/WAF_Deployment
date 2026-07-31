@@ -19,6 +19,8 @@ services:
       - ./backend/app/data:/etc/nginx/geoip:ro
       # Docker control interface (for service state discovery)
       - /var/run/docker.sock:/var/run/docker.sock
+      # Scripts directory mount for migration
+      - ./scripts:/app/scripts:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     expose:
@@ -29,13 +31,21 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       GEOIP_DATA_DIR: /etc/nginx/geoip
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      CLICKHOUSE_HOST: waf-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       ml-engine:
         condition: service_started
       redis:
+        condition: service_healthy
+      clickhouse:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -69,6 +79,11 @@ services:
       REDIS_HOST: waf-redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       ML_DB_PATH: /opt/ModSecurity/WAF_GUI/backend/app/data/ml_events.db
+      CLICKHOUSE_HOST: waf-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
 
     depends_on:
       redis:
@@ -87,6 +102,47 @@ services:
         reservations:
           cpus: ${ML_CPU_RESERVE:-1}
           memory: ${ML_MEM_RESERVE:-512M}
+    networks:
+      - waf-network
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.6-alpine
+    container_name: waf-clickhouse
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8123:8123"
+    expose:
+      - "8123"   # HTTP interface (clickhouse-connect)
+      - "9000"   # Native TCP interface
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      - ./configs/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "${CLICKHOUSE_USER}", "--password", "${CLICKHOUSE_PASSWORD}", "--query", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
     networks:
       - waf-network
 
@@ -239,3 +295,8 @@ networks:
         - subnet: "172.20.0.0/16"
         - subnet: "fd00::/80"
 
+volumes:
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local

@@ -12,3 +12,4 @@ requests==2.32.3
 pyotp
 qrcode
 pytz
+clickhouse-connect>=0.7.19

@@ -111,7 +111,7 @@ async def list_false_positives(
 
 @router.post("/false-positives/{id}/status", response_model=FalsePositiveResponse)
 async def update_status(
-    id: int,
+    id: str,
     request: FalsePositiveStatusUpdateRequest,
     current_user: TokenData = Depends(require_any_role),
 ):
@@ -146,7 +146,7 @@ async def update_status(
 
 @router.post("/false-positives/{id}/note", response_model=FalsePositiveResponse)
 async def update_note(
-    id: int,
+    id: str,
     request: FalsePositiveNoteUpdateRequest,
     current_user: TokenData = Depends(require_any_role),
 ):
@@ -169,7 +169,7 @@ async def update_note(
 # FIX 3: Use proper HTTP DELETE method with standard REST URL pattern
 @router.delete("/false-positives/{id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_false_positive(
-    id: int, current_user: TokenData = Depends(require_any_role)
+    id: str, current_user: TokenData = Depends(require_any_role)
 ):
     """Removes a log from the false positive registry."""
     # FIX 10: Only admin or the original creator can delete a false positive record

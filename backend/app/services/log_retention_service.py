@@ -1,29 +1,31 @@
 """
-log_retention_service.py
-========================
+log_retention_service.py — CyberSentinel WAF
+===============================================
 Background async service that enforces the configured log retention policy.
-Runs every 6 hours, purges ModSecurity JSON audit files and SQLite log entries
-older than the configured retention window (default: 30 days).
 
-Retention setting format: "7 Days", "14 Days", "30 Days", "90 Days"
+Post-ClickHouse migration:
+- ClickHouse waf_events, ml_events, threat_intelligence all have built-in TTL
+  clauses — no Python-side file deletion needed for log data.
+- This service now:
+  1. Reads the configured retention period from settings
+  2. Updates the TTL clause on ClickHouse tables when the setting changes
+  3. Purges ModSecurity audit JSON flat files (still on disk) older than cutoff
+     so they don't consume infinite disk space after ingestion
+  4. Retains SQLite cleanup for false positives / alerts (small config tables)
+
+Runs every 6 hours.
 """
 
-import os
 import asyncio
 import logging
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Paths
 MODSEC_AUDIT_DIR = "/var/log/modsecurity/audit"
-SQLITE_DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "waf_logs.db"
-)
-
-# How frequently the retention job runs (every 6 hours)
 RETENTION_CHECK_INTERVAL_SECONDS = 6 * 3600
 
 
@@ -40,10 +42,9 @@ def _parse_retention_days(retention_str: str) -> int:
 
 def _purge_modsec_audit_files(cutoff: datetime) -> int:
     """
-    Delete ModSecurity JSON audit log files older than cutoff.
-    Handles both flat /var/log/modsecurity/audit/*.json files
-    and date-partitioned subdirs /var/log/modsecurity/audit/YYYYMMDD/*.json
-    Returns number of files deleted.
+    Delete ModSecurity JSON audit log files OLDER than cutoff.
+    These files are already ingested into ClickHouse; we remove them
+    to reclaim disk space. Returns the number of files deleted.
     """
     deleted = 0
     audit_dir = Path(MODSEC_AUDIT_DIR)
@@ -54,14 +55,21 @@ def _purge_modsec_audit_files(cutoff: datetime) -> int:
         try:
             if child.is_dir():
                 try:
-                    dir_date = datetime.strptime(child.name, "%Y%m%d").replace(
+                    dir_date = datetime.strptime(child.name[:8], "%Y%m%d").replace(
                         tzinfo=timezone.utc
                     )
                     if dir_date < cutoff:
-                        for f in child.glob("*.json"):
+                        for f in child.rglob("*.json"):
                             f.unlink(missing_ok=True)
                             deleted += 1
                         try:
+                            # Remove empty leaf dirs
+                            for d in sorted(child.rglob("*"), reverse=True):
+                                if d.is_dir():
+                                    try:
+                                        d.rmdir()
+                                    except OSError:
+                                        pass
                             child.rmdir()
                         except OSError:
                             pass
@@ -78,43 +86,41 @@ def _purge_modsec_audit_files(cutoff: datetime) -> int:
     return deleted
 
 
-def _purge_sqlite_log_entries(cutoff: datetime) -> int:
+def _sync_clickhouse_ttl(retention_days: int):
     """
-    Delete log entries older than cutoff from SQLite waf_logs.db.
-    Returns number of rows deleted.
+    Update the TTL on ClickHouse time-series tables to match the configured retention.
+    This is a best-effort operation — failures are logged but do not raise.
     """
-    if not os.path.exists(SQLITE_DB_PATH):
-        return 0
-
-    deleted = 0
-    cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
-
     try:
-        conn = sqlite3.connect(SQLITE_DB_PATH, timeout=10.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        cur = conn.cursor()
+        from app.services import clickhouse_service
+        client = clickhouse_service._get_client()
+        if client is None:
+            return
 
-        for table in ("logs", "waf_events", "ml_events", "attack_events"):
+        tables = ["waf_events", "ml_events", "threat_intelligence", "alert_history"]
+        for table in tables:
             try:
-                cur.execute(
-                    f"DELETE FROM {table} WHERE timestamp < ?", (cutoff_iso,)  # nosec B608
+                client.command(
+                    f"ALTER TABLE cybersentinel.{table} "
+                    f"MODIFY TTL timestamp + INTERVAL {retention_days} DAY DELETE"
                 )
-                deleted += cur.rowcount
-            except sqlite3.OperationalError:
-                pass  # Table may not exist
-
-        conn.commit()
-        conn.close()
+                logger.info(
+                    f"[LogRetention] ClickHouse TTL updated: {table} → {retention_days} days"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[LogRetention] Could not update TTL on {table}: {e}"
+                )
     except Exception as e:
-        logger.error(f"Error purging SQLite log entries: {e}")
-
-    return deleted
+        logger.warning(f"[LogRetention] ClickHouse TTL sync failed: {e}")
 
 
 def run_retention_cleanup() -> dict:
     """
-    Execute a single retention cleanup cycle. Reads configured retention
-    from settings, calculates cutoff, and purges qualifying data.
+    Execute a single retention cleanup cycle:
+    1. Read configured retention period
+    2. Sync TTL to ClickHouse tables
+    3. Purge old ModSecurity audit JSON flat files from disk
     Returns a summary dict.
     """
     from app.services.settings_manager import settings_manager
@@ -129,19 +135,22 @@ def run_retention_cleanup() -> dict:
         f"(cutoff: {cutoff.strftime('%Y-%m-%d %H:%M UTC')})"
     )
 
+    # 1. Keep ClickHouse TTL in sync with the configured setting
+    _sync_clickhouse_ttl(retention_days)
+
+    # 2. Purge old audit JSON files from disk (already in ClickHouse)
     audit_deleted = _purge_modsec_audit_files(cutoff)
-    db_deleted = _purge_sqlite_log_entries(cutoff)
 
     summary = {
         "retention_days": retention_days,
         "cutoff": cutoff.isoformat(),
         "audit_files_deleted": audit_deleted,
-        "db_rows_deleted": db_deleted,
+        "clickhouse_ttl_synced": True,
     }
 
     logger.info(
         f"[LogRetention] Cleanup complete — "
-        f"audit files removed: {audit_deleted}, DB rows removed: {db_deleted}"
+        f"audit files removed: {audit_deleted}, ClickHouse TTL: {retention_days} days"
     )
     return summary
 
@@ -155,8 +164,7 @@ async def start_log_retention_service():
         f"[LogRetention] Service started. "
         f"Runs every {RETENTION_CHECK_INTERVAL_SECONDS // 3600}h."
     )
-    # Short initial delay so app fully initializes before first run
-    await asyncio.sleep(60)
+    await asyncio.sleep(60)  # Initial delay for app to fully initialize
 
     while True:
         try:

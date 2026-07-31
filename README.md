@@ -26,7 +26,8 @@ To run, compile, or develop CyberSentinel WAF, your environment must meet the fo
 * **WAF Library:** ModSecurity (v3.0.0+) dynamic security library (`libmodsecurity`)
 * **Ruleset:** OWASP Core Rule Set (CRS v3.3+)
 * **In-Memory Cache:** Redis Server (v6.0+) running on port `6379` (essential for real-time request-per-minute limits and reputation tracking)
-* **SQL Database:** SQLite3 (standard system library)
+* **Log & Analytical Database:** ClickHouse (v24.6+ alpine) server (primary high-throughput log store); SQLite3 (local synchronization fallback for configurations)
+
 
 ### Development Runtimes
 * **Backend Subsystem:** Python (v3.10+) and `pip3` package manager
@@ -79,14 +80,21 @@ Here is an overview of the directory structure of the CyberSentinel WAF reposito
 │   ├── package-lock.json         # Pinned packages dependency tree
 │   ├── vite.config.js            # Vite build environment configuration
 │   └── eslint.config.js          # ESLint code style syntax rules config
+├── configs/                      # Configuration files folder
+│   ├── nginx/                    # Nginx reverse proxy & ModSecurity CRS rules
+│   └── clickhouse/               # ClickHouse schema scripts
+│       └── init.sql              # Automated DB table schemas initialization
 ├── scripts/                      # System administration & deployment scripts
 │   ├── compile-nginx-lua.sh      # Compiles Nginx / OpenResty Lua modules
 │   ├── rebuild-modsecurity-nginx.sh # Dynamic compilation of WAF engine modules
 │   ├── update-crs.sh             # Core Rule Set updater script
 │   ├── deploy-frontend.sh        # Frontend distribution builder and deployment script
 │   ├── modsec-clamscan.sh        # ClamAV malware scanning script
-│   └── setup_ddos_kernel.sh      # Kernel DDoS tuning configuration script
+│   ├── setup_ddos_kernel.sh      # Kernel DDoS tuning configuration script
+│   ├── migrate_sqlite_to_clickhouse.py # One-time SQLite to ClickHouse database migrator
+│   └── verify_clickhouse_db.py   # Diagnostic script verifying ClickHouse logging pipeline
 └── dist/                         # Compiled production distribution directory (served by Nginx)
+
 ```
 
 ---
@@ -99,13 +107,14 @@ Quick reference mapping of important files, configuration, and log paths:
 |---|---|---|
 | **System Settings** | `backend/app/config/settings.json` | Stores WAF modes, IP blacklists/whitelists, and DDoS thresholds |
 | **CRS Rule States** | `backend/app/config/rule_states.json` | JSON list of active/inactive Core Rule Set rules |
-| **False Positives** | `backend/app/config/false_positives.db` | SQLite database storing exceptions & analyst justification notes |
-| **ML Inference DB** | `ml-waf/ml_events.db` | SQLite database logging threat evaluations, decisions, and scores |
+| **Analytical Database** | ClickHouse `cybersentinel` | Central analytical store containing `waf_events`, `ml_events`, `analyst_feedback`, `api_discovery`, `alert_history` tables |
+| **Local Configurations DB** | `backend/app/config/false_positives.db` | Local SQLite database fallback storing exclusions, rule states, and analyst overrides |
 | **ML Lua Integration**| `ml-waf/ml_check.lua` | Request inspection script loaded inside OpenResty request cycles |
 | **Nginx Config** | `/etc/nginx/nginx.conf` | Primary configuration mapping request proxies |
 | **ModSecurity Config**| `/etc/nginx/modsec/main.conf` | Core configurations file listing WAF rules and OWASP CRS rules |
 | **WAF Audit Log** | `/var/log/nginx/modsec_audit.log` | ModSecurity transactional audit log read by the backend parser |
-| **Backend Service Log**| `backend/backend.log` | Standard output log for the backend FastAPI application |
+| **Backend Service Log**| (Container stdout logs) | View via docker logs: `sudo docker compose logs -f waf-backend` |
+
 
 ---
 
@@ -133,15 +142,17 @@ CyberSentinel WAF operates as a multi-layered shield between the public internet
 graph TD
     Client[🌐 Internet / Client Request] --> Gate[🛡️ OpenResty / Nginx + ModSecurity WAF]
     Gate -->|Blocked Attacks| LocalLogs[📁 ModSecurity Logs]
-    Gate -->|Allowed Traffic Telemetry| Backend[⚙️ FastAPI Backend]
+    Gate -->|Allowed Request Telemetry| MLEngine[🤖 AI/ML Security Engine]
     
-    Backend -->|Live Log Parsing| MainDB[(🗄️ SQLite: false_positives.db, WAF state)]
-    Backend -->|Request Attributes| MLEngine[🤖 AI/ML Security Engine]
+    LocalLogs -->|Directory Watcher Ingestion| Ingestor[⚙️ log_ingestor.py Backend Watcher]
+    Ingestor -->|Batch Inserts| ClickHouse[(🗄️ ClickHouse DB: cybersentinel)]
     
     MLEngine -->|Real-Time Rate & Reputation Tracking| Redis[(⚡ Redis Cache)]
-    MLEngine -->|Log Predictions & Scores| MLDB[(🗄️ SQLite: ml_events.db)]
+    MLEngine -->|Log Predictions & Scores| ClickHouse
     
-    Backend <-->|API Endpoints / Configuration| Dashboard[💻 React Frontend Dashboard]
+    Backend[⚙️ FastAPI Backend] -->|Analytical Queries| ClickHouse
+    Backend <-->|Local Sync Configurations| SQLite[(🗄️ SQLite: false_positives.db)]
+    Backend <-->|API Endpoints / Settings| Dashboard[💻 React Frontend Dashboard]
 ```
 
 ### 1. The Gateway (Nginx / OpenResty + ModSecurity)
@@ -187,13 +198,21 @@ Used for **instant, high-speed telemetry tracking**. It acts as the engine's sho
 * **`redis_rpm` (Requests Per Minute):** Counts how fast a specific IP address is sending traffic.
 * **`redis_rep` (Reputation Score):** Tracks how many times a specific IP has triggered security rules. If an IP behaves poorly, its reputation score rises. If it behaves well, its bad reputation score decays over time.
 
-### 2. SQLite Databases
-Used for **permanent, structured storage**:
-* **`ml_events.db`**: Stores all ML logs, threat evaluations, decisions, and scores. This data is used to populate charts and feed future model training sessions.
-* **`false_positives.db`**: Stores custom rules and exceptions created by administrators when they flag that an alert was a "false alarm."
-* **`waf_gui.db` / `waf_dashboard.db`**: Stores user accounts, dashboard states, and log summaries.
+### 2. ClickHouse Analytical Log Database
+Used as the central, high-performance database for all analytical threat telemetry and log data:
+* **`waf_events`**: Stores ModSecurity audit events and blocked requests (partitioned monthly by timestamp).
+* **`ml_events`**: Stores threat classifications, XGBoost probabilities, and Isolation Forest anomaly scores.
+* **`analyst_feedback`**: Stores SOC analyst actions (marking false positives, resolved exception overrides).
+* **`api_discovery`**: Tracks discovered endpoints, HTTP response latencies, and hit count statistics.
+* **`alert_history`**: Tracks triggered custom alerts, notification channels status, and acknowledgements.
 
-### 3. JSON Configuration File (`settings.json`)
+### 3. Local SQLite Synchronization Fallback
+Used as a local, lightweight configuration cache for fallback operations:
+* **`false_positives.db`**: Stores exclusions, whitelist exception configurations, and analyst justification notes.
+* **`alerts.db`**: Stores SMTP alerts connectors, custom alert rule parameters, and notification channel definitions.
+
+
+### 4. JSON Configuration File (`settings.json`)
 The application core configurations—such as WAF rule adjustments, DDoS settings, whitelist/blacklist IPs, and mail alerts—are stored in a plain text file at `backend/app/config/settings.json`.
 
 ---

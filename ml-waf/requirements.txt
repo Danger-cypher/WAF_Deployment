@@ -4,6 +4,7 @@ redis>=5.0.0
 numpy>=1.26.0
 xgboost>=2.0.0
 scikit-learn>=1.4.0
-opensearch-py>=2.4.0
+clickhouse-connect>=0.7.19
 pytest>=8.0.0
 pytz
+requests

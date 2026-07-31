@@ -1,7 +1,11 @@
 import os
 import sqlite3
 import logging
-from typing import Optional
+import json
+import uuid
+from typing import Optional, Any, Union
+
+from app.services import clickhouse_service
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +161,10 @@ def init_db():
 
 
 def get_false_positive_by_log_id(log_id: str):
+    if clickhouse_service.is_available():
+        res = clickhouse_service.get_false_positive_by_log_id(log_id)
+        if res is not None:
+            return res
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -168,7 +176,11 @@ def get_false_positive_by_log_id(log_id: str):
         return None
 
 
-def get_false_positive_by_id(entry_id: int):
+def get_false_positive_by_id(entry_id: Any):
+    if clickhouse_service.is_available():
+        res = clickhouse_service.get_false_positive_by_id(str(entry_id))
+        if res is not None:
+            return res
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -192,6 +204,32 @@ def create_false_positive(
     raw_log: str,
     created_by: str = "system",
 ):
+    import uuid
+    ch_ok = False
+    new_uuid = str(uuid.uuid4())
+    
+    if clickhouse_service.is_available():
+        try:
+            record_raw_log = json.loads(raw_log) if isinstance(raw_log, str) and (raw_log.startswith("{") or raw_log.startswith("[")) else raw_log
+        except Exception:
+            record_raw_log = raw_log
+        
+        record = {
+            "id": new_uuid,
+            "log_id": log_id,
+            "rule_id": rule_id,
+            "client_ip": client_ip,
+            "uri": uri,
+            "timestamp": timestamp,
+            "severity": severity,
+            "attack_type": attack_type,
+            "status": "Pending",
+            "analyst_note": analyst_note,
+            "created_by": created_by,
+            "raw_log": record_raw_log,
+        }
+        ch_ok = clickhouse_service.insert_analyst_feedback(record)
+        
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -215,16 +253,25 @@ def create_false_positive(
             )
             conn.commit()
             new_id = cursor.lastrowid
-
+            
+            if ch_ok:
+                return clickhouse_service.get_false_positive_by_id(new_uuid)
+            
             cursor.execute("SELECT * FROM false_positives WHERE id = ?", (new_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
     except Exception as e:
         logger.error(f"Error creating false positive: {e}")
+        if ch_ok:
+            return clickhouse_service.get_false_positive_by_id(new_uuid)
         return None
 
 
 def get_all_false_positives(status=None, severity=None, rule_id=None, search=None):
+    if clickhouse_service.is_available():
+        return clickhouse_service.get_all_false_positives(
+            status=status, severity=severity, rule_id=rule_id, search=search
+        )
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -254,16 +301,30 @@ def get_all_false_positives(status=None, severity=None, rule_id=None, search=Non
         return []
 
 
-def update_false_positive_status(entry_id: int, status: str):
+def update_false_positive_status(entry_id: Any, status: str):
+    if clickhouse_service.is_available():
+        res = clickhouse_service.update_false_positive_status(str(entry_id), status)
+        if res is not None:
+            try:
+                with get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE false_positives SET status = ? WHERE id = ? OR log_id = ?", (status, entry_id, entry_id)
+                    )
+                    conn.commit()
+            except Exception:
+                pass
+            return res
+
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE false_positives SET status = ? WHERE id = ?", (status, entry_id)
+                "UPDATE false_positives SET status = ? WHERE id = ? OR log_id = ?", (status, entry_id, entry_id)
             )
             conn.commit()
 
-            cursor.execute("SELECT * FROM false_positives WHERE id = ?", (entry_id,))
+            cursor.execute("SELECT * FROM false_positives WHERE id = ? OR log_id = ?", (entry_id, entry_id))
             row = cursor.fetchone()
             return dict(row) if row else None
     except Exception as e:
@@ -271,17 +332,32 @@ def update_false_positive_status(entry_id: int, status: str):
         return None
 
 
-def update_false_positive_note(entry_id: int, analyst_note: str):
+def update_false_positive_note(entry_id: Any, analyst_note: str):
+    if clickhouse_service.is_available():
+        res = clickhouse_service.update_false_positive_note(str(entry_id), analyst_note)
+        if res is not None:
+            try:
+                with get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE false_positives SET analyst_note = ? WHERE id = ? OR log_id = ?",
+                        (analyst_note, entry_id, entry_id),
+                    )
+                    conn.commit()
+            except Exception:
+                pass
+            return res
+
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE false_positives SET analyst_note = ? WHERE id = ?",
-                (analyst_note, entry_id),
+                "UPDATE false_positives SET analyst_note = ? WHERE id = ? OR log_id = ?",
+                (analyst_note, entry_id, entry_id),
             )
             conn.commit()
 
-            cursor.execute("SELECT * FROM false_positives WHERE id = ?", (entry_id,))
+            cursor.execute("SELECT * FROM false_positives WHERE id = ? OR log_id = ?", (entry_id, entry_id))
             row = cursor.fetchone()
             return dict(row) if row else None
     except Exception as e:
@@ -289,16 +365,20 @@ def update_false_positive_note(entry_id: int, analyst_note: str):
         return None
 
 
-def delete_false_positive(entry_id: int):
+def delete_false_positive(entry_id: Any):
+    ch_ok = False
+    if clickhouse_service.is_available():
+        ch_ok = clickhouse_service.delete_false_positive(str(entry_id))
+
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM false_positives WHERE id = ?", (entry_id,))
+            cursor.execute("DELETE FROM false_positives WHERE id = ? OR log_id = ?", (entry_id, entry_id))
             conn.commit()
-            return cursor.rowcount > 0
+            return cursor.rowcount > 0 or ch_ok
     except Exception as e:
         logger.error(f"Error deleting false positive {entry_id}: {e}")
-        return False
+        return ch_ok
 
 
 # ========================================================
@@ -307,7 +387,7 @@ def delete_false_positive(entry_id: int):
 
 
 def create_exclusion(
-    false_positive_id: Optional[int],
+    false_positive_id: Optional[Union[int, str]],
     rule_id: str,
     exclusion_type: str,
     uri: Optional[str],
@@ -344,7 +424,9 @@ def create_exclusion(
             conn.commit()
             new_id = cursor.lastrowid
 
-            # Log to audit history
+            details_text = f"Created exclusion policy of type '{exclusion_type}' for Rule {rule_id}."
+
+            # Log to SQLite audit history
             cursor.execute(
                 """
                 INSERT INTO exclusion_audit_history (exclusion_id, action, username, timestamp, details)
@@ -355,10 +437,20 @@ def create_exclusion(
                     "Create",
                     created_by,
                     timestamp,
-                    f"Created exclusion policy of type '{exclusion_type}' for Rule {rule_id}.",
+                    details_text,
                 ),
             )
             conn.commit()
+
+            # Log to ClickHouse audit_log
+            if clickhouse_service.is_available():
+                clickhouse_service.insert_audit_log(
+                    entity_type="exclusion",
+                    entity_id=str(new_id),
+                    action="Create",
+                    username=created_by,
+                    details={"notes": details_text},
+                )
 
             cursor.execute("SELECT * FROM exclusions WHERE id = ?", (new_id,))
             row = cursor.fetchone()
@@ -458,7 +550,9 @@ def update_exclusion_status(entry_id: int, status: str, username: str, timestamp
                 "UPDATE exclusions SET status = ? WHERE id = ?", (status, entry_id)
             )
 
-            # Log audit
+            details_text = f"Status updated from '{old['status']}' to '{status}'."
+
+            # Log audit to SQLite
             cursor.execute(
                 """
                 INSERT INTO exclusion_audit_history (exclusion_id, action, username, timestamp, details)
@@ -469,10 +563,20 @@ def update_exclusion_status(entry_id: int, status: str, username: str, timestamp
                     "Toggle Status",
                     username,
                     timestamp,
-                    f"Status updated from '{old['status']}' to '{status}'.",
+                    details_text,
                 ),
             )
             conn.commit()
+
+            # Log audit to ClickHouse
+            if clickhouse_service.is_available():
+                clickhouse_service.insert_audit_log(
+                    entity_type="exclusion",
+                    entity_id=str(entry_id),
+                    action="Toggle Status",
+                    username=username,
+                    details={"notes": details_text},
+                )
 
             cursor.execute("SELECT * FROM exclusions WHERE id = ?", (entry_id,))
             row = cursor.fetchone()
@@ -490,7 +594,9 @@ def update_exclusion_note(entry_id: int, notes: str, username: str, timestamp: s
                 "UPDATE exclusions SET notes = ? WHERE id = ?", (notes, entry_id)
             )
 
-            # Log audit
+            details_text = "Analyst justification notes updated."
+
+            # Log audit to SQLite
             cursor.execute(
                 """
                 INSERT INTO exclusion_audit_history (exclusion_id, action, username, timestamp, details)
@@ -501,10 +607,20 @@ def update_exclusion_note(entry_id: int, notes: str, username: str, timestamp: s
                     "Update Note",
                     username,
                     timestamp,
-                    "Analyst justification notes updated.",
+                    details_text,
                 ),
             )
             conn.commit()
+
+            # Log audit to ClickHouse
+            if clickhouse_service.is_available():
+                clickhouse_service.insert_audit_log(
+                    entity_type="exclusion",
+                    entity_id=str(entry_id),
+                    action="Update Note",
+                    username=username,
+                    details={"notes": details_text},
+                )
 
             cursor.execute("SELECT * FROM exclusions WHERE id = ?", (entry_id,))
             row = cursor.fetchone()
@@ -526,7 +642,9 @@ def delete_exclusion(entry_id: int, username: str, timestamp: str):
 
             cursor.execute("DELETE FROM exclusions WHERE id = ?", (entry_id,))
 
-            # Insert audit record (orphaned but kept for historical context)
+            details_text = f"Exclusion policy for Rule {row['rule_id']} deleted from registry."
+
+            # Insert audit record to SQLite (orphaned but kept for historical context)
             cursor.execute(
                 """
                 INSERT INTO exclusion_audit_history (exclusion_id, action, username, timestamp, details)
@@ -537,10 +655,21 @@ def delete_exclusion(entry_id: int, username: str, timestamp: str):
                     "Delete",
                     username,
                     timestamp,
-                    f"Exclusion policy for Rule {row['rule_id']} deleted from registry.",
+                    details_text,
                 ),
             )
             conn.commit()
+
+            # Log audit to ClickHouse
+            if clickhouse_service.is_available():
+                clickhouse_service.insert_audit_log(
+                    entity_type="exclusion",
+                    entity_id=str(entry_id),
+                    action="Delete",
+                    username=username,
+                    details={"notes": details_text},
+                )
+
             return True
     except Exception as e:
         logger.error(f"Error deleting exclusion {entry_id}: {e}")
@@ -647,6 +776,10 @@ def get_exclusions_analytics():
 
 
 def get_all_discovered_endpoints():
+    if clickhouse_service.is_available():
+        res = clickhouse_service.get_all_discovered_endpoints()
+        if res:
+            return res
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -658,12 +791,13 @@ def get_all_discovered_endpoints():
 
 
 def get_recently_discovered_endpoints(hours: int = 48):
+    if clickhouse_service.is_available():
+        res = clickhouse_service.get_recently_discovered_endpoints(hours)
+        if res:
+            return res
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            # SQLite does datetime comparisons.
-            # We select endpoints where first_seen is within the last 'hours' hours.
-            # first_seen is saved in ISO format: 'YYYY-MM-DD HH:MM:SS' or similar
             cursor.execute(
                 """
                 SELECT * FROM discovered_endpoints 
@@ -674,7 +808,6 @@ def get_recently_discovered_endpoints(hours: int = 48):
             )
             return [dict(row) for row in cursor.fetchall()]
     except Exception:
-        # Fallback to simple sorting if datetime parsing fails
         try:
             with get_connection() as conn:
                 cursor = conn.cursor()
@@ -688,29 +821,31 @@ def get_recently_discovered_endpoints(hours: int = 48):
 
 
 def bulk_upsert_discovered_endpoints(endpoints_data: dict):
-    """
-    Upserts multiple endpoints in a single database transaction.
-    endpoints_data format:
-    {
-        (uri, method): {
-            "response_time_ms_sum": float,
-            "hit_count": int,
-            "external_hit_count": int,
-            "internal_hit_count": int,
-            "error_count": int,
-            "malicious_count": int,
-            "suspicious_count": int,
-            "has_https": int,
-            "has_versioning": int,
-            "content_encoding": str,
-            "timestamp": str,
-        },
-        ...
-    }
-    """
     if not endpoints_data:
         return
 
+    # 1. Ingest to ClickHouse
+    if clickhouse_service.is_available():
+        records = []
+        for (uri, method), data in endpoints_data.items():
+            records.append({
+                "uri": uri,
+                "method": method,
+                "timestamp": data["timestamp"],
+                "hit_count": data["hit_count"],
+                "error_count": data["error_count"],
+                "malicious_count": data["malicious_count"],
+                "suspicious_count": data["suspicious_count"],
+                "external_hit_count": data.get("external_hit_count", 0),
+                "internal_hit_count": data.get("internal_hit_count", 0),
+                "has_https": data["has_https"],
+                "has_versioning": data["has_versioning"],
+                "content_encoding": data["content_encoding"],
+                "avg_response_time_ms": data["response_time_ms_sum"] / data["hit_count"] if data["hit_count"] > 0 else 0.0,
+            })
+        clickhouse_service.insert_api_discovery(records)
+
+    # 2. Sync to SQLite (always as local/redundant fallback store)
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -728,7 +863,6 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                     new_external_hit_count = row_dict.get("external_hit_count", 0) + data.get("external_hit_count", 0)
                     new_internal_hit_count = row_dict.get("internal_hit_count", 0) + data.get("internal_hit_count", 0)
                     
-                    # Calculate new average
                     total_time_existing = row_dict["avg_response_time_ms"] * row_dict["hit_count"]
                     new_avg = (total_time_existing + data["response_time_ms_sum"]) / new_hit_count
                     
@@ -791,7 +925,6 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                             data["content_encoding"] or "",
                         ),
                     )
-            # Commit all changes in one atomic transaction
             conn.commit()
     except Exception as e:
         logger.error(f"Error in bulk upserting discovered endpoints: {e}")
