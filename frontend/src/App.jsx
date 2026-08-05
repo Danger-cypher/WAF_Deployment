@@ -411,96 +411,139 @@ function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
   );
 }
 
-function Sidebar({ activeTab, setActiveTab, handleLogout, userRole, collapsed, setCollapsed }) {
-  // Streamlined 5-tab navigation
-  const navItems = [
-    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { id: 'protection', label: 'Protection Status', icon: ShieldCheck },
-    { id: 'events', label: 'Security Events', icon: Activity },
-    { id: 'ml_engine', label: 'AI/ML Engine', icon: Brain },
-    { id: 'advanced', label: 'Advanced', icon: SettingsIcon }
+function Sidebar({ activeTab, setActiveTab, handleLogout, userRole, collapsed, setCollapsed, recentThreats = 0 }) {
+  const [currentTime, setCurrentTime] = React.useState(new Date());
+
+  React.useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const isAdmin = userRole === 'admin';
+
+  const navGroups = [
+    {
+      label: 'MONITORING',
+      items: [
+        { id: 'overview',  label: 'Overview',        icon: LayoutDashboard },
+        { id: 'events',    label: 'Security Events',  icon: Activity, badge: recentThreats > 0 ? recentThreats : null },
+      ]
+    },
+    {
+      label: 'PROTECTION',
+      items: [
+        { id: 'protection',      label: 'Protection Status', icon: ShieldCheck },
+        { id: 'false_positives', label: 'False Positives',   icon: ShieldAlert },
+        { id: 'exceptions',      label: 'Exceptions',        icon: AlertTriangle },
+      ]
+    },
+    {
+      label: 'ANALYSIS',
+      items: [
+        { id: 'ml_engine',      label: 'AI / ML Engine',    icon: Brain },
+        { id: 'rules',          label: 'WAF Rules',          icon: FileText },
+        { id: 'api_protection', label: 'API Protection',     icon: Globe },
+        { id: 'reports',        label: 'Security Reports',   icon: BarChart2 },
+      ]
+    },
+    {
+      label: 'SYSTEM',
+      items: [
+        { id: 'integrations',    label: 'Alerts & Integrations', icon: Bell },
+        ...(isAdmin ? [
+          { id: 'virtual_patching', label: 'Virtual Patching', icon: Code, adminOnly: true },
+          { id: 'settings',         label: 'Settings',          icon: SettingsIcon, adminOnly: true },
+        ] : []),
+      ]
+    }
   ];
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronLeft;
 
   return (
     <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
+      {/* Brand */}
       <div className="sidebar-brand">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <img
-            src="/WAFlogo.ico"
-            alt="WAF Logo"
-            style={{
-              height: collapsed ? '28px' : '46px',
-              width: collapsed ? '28px' : '46px',
-              objectFit: 'contain',
-              filter: 'drop-shadow(0 0 8px rgba(0, 212, 255, 0.4))'
-            }}
-            className="brand-icon"
-          />
-          {!collapsed && (
-            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <span className="brand-text">
-                CyberSentinel
-              </span>
-              <span className="sidebar-brand-subtitle">
-                WAF ENGINE
-              </span>
-            </div>
-          )}
-        </div>
+        <img
+          src="/WAFlogo.ico"
+          alt="WAF Logo"
+          style={{ height: collapsed ? '26px' : '34px', width: collapsed ? '26px' : '34px', objectFit: 'contain', flexShrink: 0 }}
+          className="brand-icon"
+        />
+        {!collapsed && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+            <span className="brand-text">CyberSentinel</span>
+            <span className="sidebar-brand-subtitle">WAF ENGINE · v2.0</span>
+          </div>
+        )}
         <div
           onClick={() => setCollapsed(!collapsed)}
           className="sidebar-toggle"
-          title={collapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+          title={collapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
         >
-          <ToggleIcon size={14} />
+          <ToggleIcon size={12} />
         </div>
       </div>
 
+      {/* Navigation Groups */}
       <div className="nav-menu nav-menu-scroll">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <div
-              key={item.id}
-              className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
-              onClick={() => setActiveTab(item.id)}
-            >
-              <Icon size={20} />
-              <span>{item.label}</span>
-            </div>
-          );
-        })}
+        {navGroups.map((group) => (
+          <div key={group.label}>
+            {!collapsed && (
+              <div className="sidebar-section-label">{group.label}</div>
+            )}
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              return (
+                <div
+                  key={item.id}
+                  className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
+                  onClick={() => setActiveTab(item.id)}
+                  title={collapsed ? item.label : undefined}
+                >
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                  {/* Threat count badge */}
+                  {item.badge && !collapsed && (
+                    <span className="nav-badge">{item.badge > 99 ? '99+' : item.badge}</span>
+                  )}
+                  {/* Admin-only amber badge */}
+                  {item.adminOnly && !collapsed && (
+                    <span style={{
+                      fontSize: '9px', fontWeight: 700, padding: '1px 5px',
+                      borderRadius: '4px', background: 'rgba(245,158,11,0.15)',
+                      color: '#f59e0b', border: '1px solid rgba(245,158,11,0.25)',
+                      fontFamily: 'var(--font-mono)', letterSpacing: '0.5px',
+                      marginLeft: 'auto', flexShrink: 0
+                    }}>ADM</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
 
-      {/* System Status Mini-panel */}
-      {!collapsed && (
-        <div className="sidebar-status-panel animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <div className="sidebar-status-item">
-            <div className="pulse-dot"></div>
-            <span>WAF: ACTIVE</span>
-          </div>
-          <div className="sidebar-status-item">
-            <div className="pulse-dot"></div>
-            <span>AI: ONLINE</span>
-          </div>
-          <div className="sidebar-status-item">
-            <div className="pulse-dot"></div>
-            <span>REDIS: CONNECTED</span>
-          </div>
-        </div>
-      )}
 
+      {/* Footer */}
       <div className="sidebar-footer">
-        <div className="nav-item" onClick={handleLogout}>
-          <LogOut size={20} />
+        {!collapsed && (
+          <div style={{ padding: '6px 20px 2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Clock size={11} color="#334155" />
+            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#334155' }}>
+              {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          </div>
+        )}
+        <div className="nav-item" onClick={handleLogout} title={collapsed ? 'Logout' : undefined}>
+          <LogOut size={16} />
           <span>Logout</span>
         </div>
       </div>
     </div>
   );
 }
+
 
 function AnimatedNumber({ value = 0 }) {
   const safeValue = value || 0;
@@ -731,351 +774,278 @@ function ThreatAnalytics() {
       fill: COLORS[s.name] || '#3b82f6'
     }));
 
-  const CustomTimelineTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{
-          background: 'rgba(6, 13, 23, 0.95)',
-          border: '1px solid rgba(0, 212, 255, 0.2)',
-          borderRadius: '8px',
-          padding: '10px 14px',
-          boxShadow: '0 8px 30px rgba(0,0,0,0.6)',
-          backdropFilter: 'blur(8px)'
-        }}>
-          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', marginBottom: '4px' }}>
-            TIME: {label}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--danger-color)' }} />
-            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-              Attacks: {payload[0].value}
-            </span>
-          </div>
-        </div>
-      );
-    }
-    return null;
+  const SIEM_COLORS = {
+    'SQL Injection': '#fb923c',
+    'XSS': '#f472b6',
+    'RCE': '#ef4444',
+    'Protocol Violation': '#818cf8',
+    'LFI/RFI': '#a78bfa',
+    'PHP Injection': '#f43f5e',
+    'Scanner/Recon': '#eab308',
+    'Anomaly Detected': '#64748b',
+    'Anomaly Threshold Exceeded': '#64748b',
   };
+
+  const SEV_COLORS = { Critical: '#f43f5e', High: '#f97316', Medium: '#eab308', Low: '#3b82f6' };
+
+  const blockedPct = stats.total_requests > 0
+    ? ((stats.total_blocked / stats.total_requests) * 100).toFixed(1)
+    : '0.0';
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div style={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '10px 14px', fontSize: '12px' }}>
+        <div style={{ color: '#64748b', fontFamily: 'var(--font-mono)', marginBottom: '6px' }}>{label}</div>
+        {payload.map((p, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: p.color }} />
+            <span style={{ color: '#f1f5f9', fontWeight: 600 }}>{p.name}: {p.value?.toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const getFlagEmoji = (code) => {
+    if (!code || code === 'Unknown' || code === 'Internal') return '🌐';
+    try {
+      return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt(0)));
+    } catch { return '🌐'; }
+  };
+
+  const maxIP = topIPs[0]?.count || 1;
 
   return (
     <motion.div
       className="dashboard-grid animate-fade-in"
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
+      transition={{ duration: 0.3 }}
     >
-      {/* Metric Cards */}
-      <div className="metric-card glass-panel" style={{ gridColumn: 'span 2' }}>
+      {/* Row 1: 6 KPI Stat Cards */}
+
+      {/* Total Requests */}
+      <div className="metric-card cyan" style={{ gridColumn: 'span 2' }}>
         <div className="metric-header">
-          <span>Total Requests Analyzed</span>
-          <div className="metric-icon-wrapper blue"><Activity size={18} /></div>
+          <span className="metric-header-label">Total Requests</span>
+          <div className="metric-icon-wrapper cyan"><Activity size={14} /></div>
         </div>
-        <div className="metric-value"><AnimatedNumber value={stats.total_requests} /></div>
-        <div className="metric-trend trend-down">
-          <span className="trend-arrow">↓</span> <Clock size={12} /> <span>Real-time capture</span>
+        <div className="metric-value" style={{ color: '#22d3ee' }}><AnimatedNumber value={stats.total_requests} /></div>
+        <div className="metric-sublabel">All analyzed traffic</div>
+        <div className="metric-trend">
+          <div className="pulse-dot" style={{ width: '6px', height: '6px' }} />
+          <span>Live capture</span>
         </div>
       </div>
 
-      <div className="metric-card glass-panel danger" style={{ gridColumn: 'span 3', animation: stats.recent_threats > 0 ? 'dangerPulse 2s infinite' : 'none' }}>
+      {/* Blocked Threats */}
+      <div className="metric-card danger" style={{ gridColumn: 'span 2', animation: stats.recent_threats > 0 ? 'dangerPulse 2s infinite' : 'none' }}>
         <div className="metric-header">
-          <span>Blocked WAF Threats <span style={{ fontSize: '10px', opacity: 0.8, marginLeft: '4px', fontWeight: 'bold', color: 'var(--danger-color)' }}>(Cumulative)</span></span>
-          <div className="metric-icon-wrapper red"><AlertIcon size={18} /></div>
+          <span className="metric-header-label">Blocked Threats</span>
+          <div className="metric-icon-wrapper red"><ShieldAlert size={14} /></div>
         </div>
-        <div className="metric-value" style={{ color: 'var(--danger-color)' }}><AnimatedNumber value={stats.total_blocked} /></div>
+        <div className="metric-value" style={{ color: '#f43f5e' }}><AnimatedNumber value={stats.total_blocked} /></div>
+        <div className="metric-sublabel">HTTP 403 responses</div>
         <div className="metric-trend trend-up">
-          <span className="trend-arrow">↑</span> <span>Real-time threat monitoring active</span>
+          <span className="trend-arrow">↑</span>
+          <span>Active blocking</span>
         </div>
       </div>
 
-      <div className="metric-card glass-panel warning" style={{ gridColumn: 'span 2' }}>
+      {/* Block Rate */}
+      <div className="metric-card" style={{ gridColumn: 'span 2' }}>
         <div className="metric-header">
-          <span>SQL Injection Count</span>
-          <div className="metric-icon-wrapper orange"><Database size={18} /></div>
+          <span className="metric-header-label">Block Rate</span>
+          <div className="metric-icon-wrapper purple"><Lock size={14} /></div>
         </div>
-        <div className="metric-value" style={{ color: 'var(--warning-color)' }}><AnimatedNumber value={stats.sqli_count} /></div>
+        <div className="metric-value" style={{ color: '#a78bfa' }}>
+          {blockedPct}<span style={{ fontSize: '18px', fontWeight: 400, opacity: 0.7 }}>%</span>
+        </div>
+        <div className="metric-sublabel">Of all requests blocked</div>
+        <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+          <div style={{ width: `${Math.min(parseFloat(blockedPct), 100)}%`, height: '100%', background: '#a78bfa', borderRadius: '2px', transition: 'width 0.8s ease' }} />
+        </div>
+      </div>
+
+      {/* SQL Injection */}
+      <div className="metric-card warning" style={{ gridColumn: 'span 2' }}>
+        <div className="metric-header">
+          <span className="metric-header-label">SQL Injection</span>
+          <div className="metric-icon-wrapper orange"><Database size={14} /></div>
+        </div>
+        <div className="metric-value" style={{ color: '#f59e0b' }}><AnimatedNumber value={stats.sqli_count} /></div>
+        <div className="metric-sublabel">Blocked SQLi attempts</div>
         <div className="metric-trend trend-down">
-          <span className="trend-arrow">↓</span> <span>Inbound vectors</span>
+          <span className="trend-arrow">↓</span>
+          <span>Inbound vectors</span>
         </div>
       </div>
 
-      <div className="metric-card glass-panel" style={{ gridColumn: 'span 2' }}>
+      {/* XSS */}
+      <div className="metric-card pink" style={{ gridColumn: 'span 2' }}>
         <div className="metric-header">
-          <span>Cross-Site Scripting (XSS)</span>
-          <div className="metric-icon-wrapper orange" style={{ color: '#ec4899', background: 'rgba(236,72,153,0.1)', boxShadow: '0 0 12px rgba(236, 72, 153, 0.15)' }}><Code size={18} /></div>
+          <span className="metric-header-label">Cross-Site Scripting</span>
+          <div className="metric-icon-wrapper pink"><Code size={14} /></div>
         </div>
-        <div className="metric-value" style={{ color: '#ec4899' }}><AnimatedNumber value={stats.xss_count} /></div>
+        <div className="metric-value" style={{ color: '#f472b6' }}><AnimatedNumber value={stats.xss_count} /></div>
+        <div className="metric-sublabel">Blocked XSS attacks</div>
         <div className="metric-trend trend-down">
-          <span className="trend-arrow">↓</span> <span>Application shields</span>
+          <span className="trend-arrow">↓</span>
+          <span>App shields active</span>
         </div>
       </div>
 
-      <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
+      {/* Unique Attackers */}
+      <div className="metric-card" style={{ gridColumn: 'span 2' }}>
         <div className="metric-header">
-          <span>Unique Attacking IPs</span>
-          <div className="metric-icon-wrapper blue"><Globe size={18} /></div>
+          <span className="metric-header-label">Unique Attackers</span>
+          <div className="metric-icon-wrapper blue"><Globe size={14} /></div>
         </div>
-        <div className="metric-value" style={{ color: 'var(--accent-color)' }}><AnimatedNumber value={stats.total_unique_ips} /></div>
+        <div className="metric-value" style={{ color: '#818cf8' }}><AnimatedNumber value={stats.total_unique_ips} /></div>
+        <div className="metric-sublabel">Distinct source IPs blocked</div>
         <div className="metric-trend trend-up">
-          <span className="trend-arrow">↑</span> <Globe size={12} /> <span>Globally distributed attackers</span>
+          <span className="trend-arrow">↑</span>
+          <Globe size={10} />
+          <span>Global distribution</span>
         </div>
       </div>
 
-      {/* Main Timeline Chart */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 8', position: 'relative' }}>
+      {/* Row 2: Timeline + Severity */}
+
+      <div className="chart-card" style={{ gridColumn: 'span 8', position: 'relative' }}>
         {showFlash && (
-          <div style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'rgba(255, 59, 92, 0.08)',
-            border: '2px solid var(--danger-color)',
-            boxShadow: 'inset 0 0 20px rgba(255, 59, 92, 0.3)',
-            borderRadius: '16px',
-            pointerEvents: 'none',
-            zIndex: 10,
-            transition: 'all 0.1s ease-in-out'
-          }} />
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(244,63,94,0.06)', border: '1px solid #f43f5e', borderRadius: '10px', pointerEvents: 'none', zIndex: 10 }} />
         )}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>
-            <Activity size={18} color="var(--accent-color)" />
-            Attack Timeline / Inbound Threats Over Time
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div className="pulse-container">
-              <div className="pulse-dot"></div>
-              <span>Live Sync</span>
-            </div>
+        <div className="card-title">
+          <Activity size={14} color="#818cf8" />
+          Attack Timeline
+          <div className="card-title-right">
+            <div className="pulse-container"><div className="pulse-dot" /><span>Live Sync</span></div>
           </div>
         </div>
-        <div className="chart-container" style={{ minHeight: '300px' }}>
+        <div className="chart-container" style={{ minHeight: '260px' }}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={timelineData}>
+            <AreaChart data={timelineData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
               <defs>
-                <linearGradient id="colorAttacks" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--danger-color)" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="var(--danger-color)" stopOpacity={0.0} />
+                <linearGradient id="gradBlocked" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.35} />
+                  <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
-              <XAxis dataKey="time" stroke="#a1a1aa" fontSize={11} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={50} />
-              <YAxis stroke="#a1a1aa" fontSize={11} tickLine={false} axisLine={false} />
-              <RechartsTooltip content={<CustomTimelineTooltip />} />
-              <Area type="monotone" dataKey="attacks" name="Triggered Events" stroke="var(--danger-color)" strokeWidth={2} fillOpacity={1} fill="url(#colorAttacks)" />
+              <XAxis dataKey="time" stroke="#334155" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={60} />
+              <YAxis stroke="#334155" fontSize={10} tickLine={false} axisLine={false} />
+              <RechartsTooltip content={<CustomTooltip />} />
+              <Area type="monotone" dataKey="attacks" name="Blocked" stroke="#f43f5e" strokeWidth={2} fillOpacity={1} fill="url(#gradBlocked)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* Severity Distribution RadialBarChart */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 4', position: 'relative' }}>
+      {/* Severity Distribution */}
+      <div className="chart-card" style={{ gridColumn: 'span 4' }}>
         <div className="card-title">
-          <AlertIcon size={18} color="var(--danger-color)" />
-          Severity Distribution
+          <AlertTriangleIcon size={14} color="#f59e0b" />
+          Threat Severity
         </div>
-        <div className="chart-container" style={{ minHeight: '300px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
-          {radialData.length === 0 ? (
-            <div style={{ color: '#a1a1aa', fontSize: '13px' }}>No severity data recorded</div>
-          ) : (
-            <>
-              <ResponsiveContainer width="100%" height="70%">
-                <RadialBarChart
-                  cx="50%"
-                  cy="50%"
-                  innerRadius="35%"
-                  outerRadius="95%"
-                  barSize={10}
-                  data={radialData}
-                  startAngle={180}
-                  endAngle={-180}
-                >
-                  <RadialBar
-                    minAngle={15}
-                    background={{ fill: 'rgba(255, 255, 255, 0.02)' }}
-                    clockWise
-                    dataKey="value"
-                    cornerRadius={5}
-                  />
-                  <RechartsTooltip
-                    contentStyle={{ backgroundColor: 'rgba(15, 16, 22, 0.95)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px' }}
-                    itemStyle={{ color: '#fff' }}
-                  />
-                </RadialBarChart>
-              </ResponsiveContainer>
-
-              {/* Centered label inside the radial rings */}
-              <div style={{
-                position: 'absolute',
-                top: '35%',
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-                textAlign: 'center',
-                pointerEvents: 'none'
-              }}>
-                <div style={{ fontSize: '24px', fontWeight: '800', color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
-                  {totalSeverityCount}
+        <div className="chart-container" style={{ minHeight: '260px', display: 'flex', flexDirection: 'column', gap: '14px', justifyContent: 'center' }}>
+          {severityDistribution.length === 0 ? (
+            <div style={{ color: '#64748b', fontSize: '13px', textAlign: 'center' }}>No data</div>
+          ) : (() => {
+            const maxSev = Math.max(...severityDistribution.map(s => s.value), 1);
+            return severityDistribution.map((s) => {
+              const pct = ((s.value / maxSev) * 100).toFixed(0);
+              const color = SEV_COLORS[s.name] || '#818cf8';
+              return (
+                <div key={s.name}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0 }} />
+                      <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>{s.name}</span>
+                    </div>
+                    <span style={{ fontSize: '12px', fontFamily: 'var(--font-mono)', fontWeight: 700, color }}>{s.value.toLocaleString()}</span>
+                  </div>
+                  <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: '3px', transition: 'width 0.7s ease', opacity: 0.85 }} />
+                  </div>
                 </div>
-                <div style={{ fontSize: '9px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '1px' }}>
-                  TOTAL HITS
-                </div>
-              </div>
-            </>
+              );
+            });
+          })()}
+          {severityDistribution.length > 0 && (
+            <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Blocked</span>
+              <span style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#f1f5f9' }}>
+                {severityDistribution.reduce((a, s) => a + s.value, 0).toLocaleString()}
+              </span>
+            </div>
           )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 12px', width: '100%', padding: '12px 24px' }}>
-            {severityDistribution.map((entry) => (
-              <div key={entry.name} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }}>
-                <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: COLORS[entry.name] || '#3b82f6' }}></div>
-                <span style={{ color: '#a1a1aa' }}>{entry.name}:</span>
-                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{entry.value}</span>
-              </div>
-            ))}
-          </div>
         </div>
       </div>
 
-      {/* Attack Categories Distribution (Premium Donut Chart) */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 5' }}>
+      {/* Row 3: Attack Vectors + Top IPs + Top Rules */}
+
+      {/* Attack Vector Distribution */}
+      <div className="chart-card" style={{ gridColumn: 'span 4' }}>
         <div className="card-title">
-          <ShieldAlert size={18} color="#f97316" />
-          Attack Vector Distribution
+          <ShieldAlert size={14} color="#f97316" />
+          Attack Vectors
         </div>
-        <div className="chart-container" style={{ minHeight: '320px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '8px 16px 16px' }}>
+        <div className="chart-container" style={{ minHeight: '280px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           {attackDistribution.length === 0 ? (
-            <div style={{ color: '#a1a1aa', fontSize: '13px' }}>No categories data recorded</div>
+            <div style={{ color: '#64748b', fontSize: '13px', textAlign: 'center' }}>No data</div>
           ) : (() => {
-            const totalVectors = attackDistribution.reduce((s, d) => s + d.value, 0);
-            const activeEntry = activeVectorIndex != null ? attackDistribution[activeVectorIndex] : null;
-            const activeColor = activeEntry ? (COLORS[activeEntry.name] || severityColors[activeVectorIndex % severityColors.length]) : null;
-
-            const renderActiveShape = (props) => {
-              const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props;
-              return (
-                <g>
-                  <path
-                    d={`M ${cx},${cy} L ${cx + (outerRadius + 8) * Math.cos(-startAngle * Math.PI / 180)},${cy + (outerRadius + 8) * Math.sin(-startAngle * Math.PI / 180)}`}
-                    stroke="none" fill="none"
-                  />
-                  <Sector
-                    cx={cx} cy={cy}
-                    innerRadius={innerRadius - 4}
-                    outerRadius={outerRadius + 10}
-                    startAngle={startAngle}
-                    endAngle={endAngle}
-                    fill={fill}
-                    style={{ filter: `drop-shadow(0 0 12px ${fill}99)` }}
-                  />
-                  <Sector
-                    cx={cx} cy={cy}
-                    innerRadius={outerRadius + 14}
-                    outerRadius={outerRadius + 17}
-                    startAngle={startAngle}
-                    endAngle={endAngle}
-                    fill={fill}
-                    opacity={0.5}
-                  />
-                </g>
-              );
-            };
-
+            const total = attackDistribution.reduce((s, d) => s + d.value, 0);
+            const aColors = ['#f43f5e','#f97316','#f59e0b','#818cf8','#a78bfa','#22d3ee','#f472b6','#64748b'];
             return (
               <>
-                <div style={{ position: 'relative', width: '100%', height: '200px' }}>
+                <div style={{ height: '150px', width: '100%', position: 'relative' }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
                         data={attackDistribution}
                         cx="50%" cy="50%"
-                        innerRadius={58} outerRadius={82}
-                        paddingAngle={3}
+                        innerRadius={44} outerRadius={68}
+                        paddingAngle={2}
                         dataKey="value"
                         activeIndex={activeVectorIndex}
-                        activeShape={renderActiveShape}
-                        onMouseEnter={(_, index) => setActiveVectorIndex(index)}
+                        activeShape={(props) => {
+                          const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props;
+                          return (
+                            <g>
+                              <Sector cx={cx} cy={cy} innerRadius={innerRadius - 3} outerRadius={outerRadius + 8} startAngle={startAngle} endAngle={endAngle} fill={fill} style={{ filter: `drop-shadow(0 0 8px ${fill}88)` }} />
+                              <Sector cx={cx} cy={cy} innerRadius={outerRadius + 12} outerRadius={outerRadius + 14} startAngle={startAngle} endAngle={endAngle} fill={fill} opacity={0.4} />
+                            </g>
+                          );
+                        }}
+                        onMouseEnter={(_, i) => setActiveVectorIndex(i)}
                         onMouseLeave={() => setActiveVectorIndex(null)}
                         strokeWidth={0}
                       >
                         {attackDistribution.map((entry, index) => (
-                          <Cell
-                            key={`cell-${index}`}
-                            fill={COLORS[entry.name] || severityColors[index % severityColors.length]}
-                            opacity={activeVectorIndex != null && activeVectorIndex !== index ? 0.45 : 1}
-                          />
+                          <Cell key={index} fill={SIEM_COLORS[entry.name] || aColors[index % aColors.length]} opacity={activeVectorIndex != null && activeVectorIndex !== index ? 0.4 : 1} />
                         ))}
                       </Pie>
-                      <RechartsTooltip
-                        contentStyle={{ backgroundColor: 'rgba(9, 9, 11, 0.97)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '10px 14px' }}
-                        itemStyle={{ color: '#fff', fontWeight: 600, fontSize: '13px' }}
-                        formatter={(value, name) => [`${value} events (${((value / totalVectors) * 100).toFixed(1)}%)`, name]}
-                      />
+                      <RechartsTooltip contentStyle={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: '#f1f5f9' }} formatter={(v, n) => [`${v} (${((v/total)*100).toFixed(1)}%)`, n]} />
                     </PieChart>
                   </ResponsiveContainer>
-
-                  {/* Center label */}
-                  <div style={{
-                    position: 'absolute', top: '50%', left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    textAlign: 'center', pointerEvents: 'none'
-                  }}>
-                    {activeEntry ? (
-                      <>
-                        <div style={{ fontSize: '20px', fontWeight: 800, color: activeColor, lineHeight: 1.1, fontFamily: 'var(--font-mono)' }}>
-                          {activeEntry.value}
-                        </div>
-                        <div style={{ fontSize: '9px', color: '#71717a', textTransform: 'uppercase', letterSpacing: '0.8px', marginTop: '2px' }}>
-                          {((activeEntry.value / totalVectors) * 100).toFixed(0)}%
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div style={{ fontSize: '22px', fontWeight: 800, color: '#f4f4f5', lineHeight: 1.1, fontFamily: 'var(--font-mono)' }}>
-                          {totalVectors.toLocaleString()}
-                        </div>
-                        <div style={{ fontSize: '9px', color: '#71717a', textTransform: 'uppercase', letterSpacing: '0.8px', marginTop: '2px' }}>
-                          Total Attacks
-                        </div>
-                      </>
-                    )}
+                  <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#f1f5f9', fontFamily: 'var(--font-mono)' }}>{total.toLocaleString()}</div>
+                    <div style={{ fontSize: '9px', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.8px' }}>blocked</div>
                   </div>
                 </div>
-
-                {/* Legend grid */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 16px', width: '100%', padding: '4px 8px 0' }}>
-                  {attackDistribution.map((entry, index) => {
-                    const color = COLORS[entry.name] || severityColors[index % severityColors.length];
-                    const pct = ((entry.value / totalVectors) * 100).toFixed(0);
-                    const isActive = activeVectorIndex === index;
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '10px' }}>
+                  {attackDistribution.slice(0, 5).map((entry, index) => {
+                    const color = SIEM_COLORS[entry.name] || aColors[index % aColors.length];
+                    const pct = ((entry.value / total) * 100).toFixed(0);
                     return (
-                      <div
-                        key={entry.name}
-                        onMouseEnter={() => setActiveVectorIndex(index)}
-                        onMouseLeave={() => setActiveVectorIndex(null)}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          gap: '6px', fontSize: '11px', cursor: 'pointer',
-                          padding: '5px 8px', borderRadius: '7px',
-                          background: isActive ? `${color}12` : 'transparent',
-                          border: `1px solid ${isActive ? color + '40' : 'transparent'}`,
-                          transition: 'all 0.2s ease'
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-                          <div style={{
-                            width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-                            backgroundColor: color,
-                            boxShadow: isActive ? `0 0 8px ${color}` : 'none',
-                            transition: 'box-shadow 0.2s'
-                          }} />
-                          <span style={{ color: isActive ? '#e4e4e7' : '#a1a1aa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: isActive ? 600 : 400 }}>
-                            {entry.name}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                          <span style={{
-                            fontFamily: 'var(--font-mono)', fontSize: '10px', fontWeight: 700,
-                            color: color, background: `${color}18`,
-                            padding: '1px 6px', borderRadius: '4px', border: `1px solid ${color}30`
-                          }}>{pct}%</span>
-                        </div>
+                      <div key={entry.name} onMouseEnter={() => setActiveVectorIndex(index)} onMouseLeave={() => setActiveVectorIndex(null)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', borderRadius: '5px', cursor: 'default', background: activeVectorIndex === index ? `${color}12` : 'transparent', transition: 'background 0.15s' }}>
+                        <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: color, flexShrink: 0 }} />
+                        <span style={{ flex: 1, fontSize: '11.5px', color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.name}</span>
+                        <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color }}>{pct}%</span>
+                        <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#475569', minWidth: '40px', textAlign: 'right' }}>{entry.value.toLocaleString()}</span>
                       </div>
                     );
                   })}
@@ -1086,109 +1056,85 @@ function ThreatAnalytics() {
         </div>
       </div>
 
-      {/* Top Attacking IPs List */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 4' }}>
+      {/* Top Attacking IPs */}
+      <div className="chart-card" style={{ gridColumn: 'span 4' }}>
         <div className="card-title">
-          <Globe size={18} color="var(--accent-color)" />
-          Top Threat Origin IPs
+          <Globe size={14} color="#22d3ee" />
+          Top Attackers
         </div>
-        <div className="chart-container" style={{ minHeight: '320px', padding: '10px 0' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', height: '100%', justifyContent: 'center' }}>
-            {topIPs.length === 0 ? (
-              <div style={{ textAlign: 'center', color: '#a1a1aa', fontSize: '13px' }}>No malicious IPs recorded yet.</div>
-            ) : (
-              topIPs.map((ipObj, index) => {
-                const getFlagEmoji = (countryCode) => {
-                  if (!countryCode || countryCode === 'Unknown' || countryCode === 'Internal') return '🌐';
-                  const codePoints = countryCode
-                    .toUpperCase()
-                    .split('')
-                    .map(char => 127397 + char.charCodeAt(0));
-                  try {
-                    return String.fromCodePoint(...codePoints);
-                  } catch (e) {
-                    return '🌐';
-                  }
-                };
-
-                return (
-                  <div
-                    key={ipObj.ip || index}
-                    className="ip-row-glow"
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '6px',
-                      padding: '8px 12px',
-                      borderRadius: '8px',
-                      transition: 'all 0.2s ease-in-out',
-                      background: 'rgba(255, 255, 255, 0.01)',
-                      border: '1px solid rgba(255, 255, 255, 0.02)'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ color: '#a1a1aa', fontWeight: 600, fontSize: '11px', width: '16px' }}>#{index + 1}</span>
-                        <span style={{ fontSize: '14px' }} title={ipObj.country || 'Unknown'}>
-                          {getFlagEmoji(ipObj.country)}
-                        </span>
-                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 600 }}>{ipObj.ip}</span>
-                        {ipObj.abuse_score > 0 && (
-                          <span style={{
-                            fontSize: '9px',
-                            fontWeight: 'bold',
-                            color: 'var(--danger-color)',
-                            border: '1px solid rgba(255, 59, 92, 0.3)',
-                            background: 'rgba(255, 59, 92, 0.1)',
-                            padding: '1px 5px',
-                            borderRadius: '3px',
-                            fontFamily: 'var(--font-mono)'
-                          }}>
-                            CONF: {ipObj.abuse_score}%
-                          </span>
-                        )}
+        <div className="chart-container" style={{ minHeight: '280px' }}>
+          {topIPs.length === 0 ? (
+            <div style={{ color: '#64748b', fontSize: '13px', textAlign: 'center', paddingTop: '40px' }}>No malicious IPs recorded.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ fontSize: '10px', color: '#334155', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', textAlign: 'left', padding: '0 0 10px 0', letterSpacing: '0.6px', fontWeight: 600 }}>#</th>
+                  <th style={{ fontSize: '10px', color: '#334155', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', textAlign: 'left', padding: '0 0 10px 8px', letterSpacing: '0.6px', fontWeight: 600 }}>IP Address</th>
+                  <th style={{ fontSize: '10px', color: '#334155', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', textAlign: 'right', padding: '0 0 10px 0', letterSpacing: '0.6px', fontWeight: 600 }}>Hits</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topIPs.map((ip, idx) => (
+                  <tr key={ip.ip || idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                    <td style={{ padding: '7px 0', fontSize: '11px', color: '#334155', fontFamily: 'var(--font-mono)', width: '20px', verticalAlign: 'top' }}>{idx + 1}</td>
+                    <td style={{ padding: '7px 8px', verticalAlign: 'top' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '13px' }} title={ip.country}>{getFlagEmoji(ip.country)}</span>
+                        <span style={{ fontSize: '12px', fontFamily: 'var(--font-mono)', color: '#22d3ee', fontWeight: 600 }}>{ip.ip}</span>
                       </div>
-                      <span style={{ fontWeight: 700, color: 'var(--danger-color)', fontFamily: 'var(--font-mono)' }}>{ipObj.count} hits</span>
-                    </div>
-                    <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.03)', borderRadius: '3px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.05)' }}>
-                      <div style={{
-                        width: `${Math.min((ipObj.count / (topIPs[0]?.count || 1)) * 100, 100)}%`,
-                        height: '100%',
-                        background: 'linear-gradient(90deg, var(--accent-color), var(--danger-color))',
-                        borderRadius: '3px',
-                        boxShadow: '0 0 8px rgba(0, 212, 255, 0.4)'
-                      }}></div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+                      <div style={{ width: '100%', height: '3px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min((ip.count / maxIP) * 100, 100)}%`, height: '100%', background: '#f43f5e', borderRadius: '2px', opacity: 0.75 }} />
+                      </div>
+                    </td>
+                    <td style={{ padding: '7px 0', textAlign: 'right', fontSize: '12px', fontFamily: 'var(--font-mono)', color: '#f43f5e', fontWeight: 700, verticalAlign: 'top' }}>{ip.count.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
-      {/* Most Triggered OWASP Rules */}
-      <div className="chart-card glass-panel" style={{ gridColumn: 'span 3' }}>
+      {/* Most Active OWASP Rules */}
+      <div className="chart-card" style={{ gridColumn: 'span 4' }}>
         <div className="card-title">
-          <ShieldAlert size={18} color="var(--danger-color)" />
-          Most Active OWASP Rules
+          <ShieldAlert size={14} color="#f43f5e" />
+          Top OWASP Rules
         </div>
-        <div className="chart-container" style={{ minHeight: '320px' }}>
-          <div className="rules-triggered-list" style={{ height: '100%', justifyContent: 'center', display: 'flex', flexDirection: 'column' }}>
-            {topRules.length === 0 ? (
-              <div style={{ textAlign: 'center', color: '#a1a1aa', fontSize: '13px' }}>No rules triggered yet.</div>
-            ) : (
-              topRules.map((ruleObj) => (
-                <div key={ruleObj.rule_id} className="rule-triggered-item">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className="rule-badge">{ruleObj.rule_id}</span>
-                    <span style={{ fontSize: '12px', color: '#a1a1aa' }}>OWASP CRS</span>
-                  </div>
-                  <span style={{ fontWeight: 600, fontSize: '13px', color: '#fde047' }}>{ruleObj.count} hits</span>
-                </div>
-              ))
-            )}
-          </div>
+        <div className="chart-container" style={{ minHeight: '280px' }}>
+          {topRules.length === 0 ? (
+            <div style={{ color: '#64748b', fontSize: '13px', textAlign: 'center', paddingTop: '40px' }}>No rules triggered.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ fontSize: '10px', color: '#334155', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', textAlign: 'left', padding: '0 0 10px 0', letterSpacing: '0.6px', fontWeight: 600 }}>Rule ID</th>
+                  <th style={{ fontSize: '10px', color: '#334155', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', textAlign: 'right', padding: '0 0 10px 0', letterSpacing: '0.6px', fontWeight: 600 }}>Triggers</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topRules.map((rule) => {
+                  const maxCount = topRules[0]?.count || 1;
+                  const pct = ((rule.count / maxCount) * 100).toFixed(0);
+                  return (
+                    <tr key={rule.rule_id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <td style={{ padding: '7px 0', verticalAlign: 'top' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                          <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#a78bfa', fontWeight: 700, background: 'rgba(167,139,250,0.1)', padding: '2px 6px', borderRadius: '4px' }}>{rule.rule_id}</span>
+                          <span style={{ fontSize: '11px', color: '#475569' }}>OWASP CRS</span>
+                        </div>
+                        <div style={{ width: '100%', height: '3px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${pct}%`, height: '100%', background: '#a78bfa', borderRadius: '2px', opacity: 0.7 }} />
+                        </div>
+                      </td>
+                      <td style={{ padding: '7px 0', textAlign: 'right', fontSize: '12px', fontFamily: 'var(--font-mono)', color: '#f59e0b', fontWeight: 700, verticalAlign: 'top' }}>{rule.count.toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </motion.div>
@@ -5357,7 +5303,7 @@ function AlertsIntegrations({ userRole }) {
                 <span className="status-badge green"><span className="status-dot"></span> Active</span>
               </div>
               <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div><strong style={{ color: '#d4d4d8' }}>Engine:</strong> v3.0.12 (libmodsecurity)</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Engine:</strong> CyberSentinel Engine v2.0</div>
                 <div><strong style={{ color: '#d4d4d8' }}>Type:</strong> Web Application Firewall</div>
                 <div><strong style={{ color: '#d4d4d8' }}>Scope:</strong> Connection Filtering</div>
               </div>
@@ -5382,7 +5328,7 @@ function AlertsIntegrations({ userRole }) {
               </div>
               <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <div><strong style={{ color: '#d4d4d8' }}>Version:</strong> nginx/1.24.0</div>
-                <div><strong style={{ color: '#d4d4d8' }}>ModSec Connector:</strong> Enabled</div>
+                <div><strong style={{ color: '#d4d4d8' }}>Engine Connector:</strong> Enabled</div>
                 <div><strong style={{ color: '#d4d4d8' }}>Reverse Proxy:</strong> Active</div>
               </div>
             </div>
@@ -6916,10 +6862,10 @@ function CustomRulesEditor({ userRole }) {
         <div>
           <h3 style={{ margin: 0, color: '#f4f4f5', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Code size={20} color="#3b82f6" />
-            Virtual Patching (Custom ModSecurity Rules)
+            Virtual Patching (Custom CyberSentinel Engine Rules)
           </h3>
           <p style={{ margin: '4px 0 0 0', color: '#71717a', fontSize: '13px' }}>
-            Write custom ModSecurity SecRules to mitigate zero-day vulnerabilities in real time. Rules are validated for syntax before reload.
+            Write custom CyberSentinel Engine rules to mitigate zero-day vulnerabilities in real time. Rules are validated for syntax before reload.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
@@ -7000,14 +6946,14 @@ function CustomRulesEditor({ userRole }) {
             <span style={{ fontSize: '11px', color: '#34d399', background: 'rgba(52, 211, 153, 0.1)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
               {rulesContent.split('\n').filter(line => line.trim().startsWith('SecRule')).length} Active Custom Rules
             </span>
-            <span style={{ fontSize: '11px', color: '#52525b' }}>ModSecurity v3 Engine</span>
+            <span style={{ fontSize: '11px', color: '#52525b' }}>CyberSentinel Engine v2.0</span>
           </div>
         </div>
         <textarea
           value={rulesContent}
           onChange={(e) => setRulesContent(e.target.value)}
           disabled={loading || userRole !== 'admin'}
-          placeholder="# Write custom ModSecurity SecRules here...&#10;&#10;# Example:&#10;SecRule REQUEST_URI &quot;@contains /vulnerable-api&quot; &quot;id:1000001,phase:1,deny,status:403,msg:'Zero-day Virtual Patch'&quot;"
+          placeholder="# Write custom CyberSentinel Engine rules here...&#10;&#10;# Example:&#10;SecRule REQUEST_URI &quot;@contains /vulnerable-api&quot; &quot;id:1000001,phase:1,deny,status:403,msg:'Zero-day Virtual Patch'&quot;"
           rows={18}
           style={{
             width: '100%',
@@ -7028,78 +6974,21 @@ function CustomRulesEditor({ userRole }) {
   );
 }
 
-// Advanced Settings Section Component - Collapsible subsections
-function AdvancedSection({ userRole, onMarkFalsePositive, onCreateException, onLogout, initialSubTab = 'false_positives' }) {
-  const [activeSubTab, setActiveSubTab] = useState(initialSubTab);
-
-  useEffect(() => {
-    setActiveSubTab(initialSubTab);
-  }, [initialSubTab]);
-
-  const subTabs = [
-    { id: 'false_positives', label: 'False Positives', icon: ShieldCheck },
-    { id: 'exceptions', label: 'Exceptions', icon: AlertTriangle },
-    { id: 'rules', label: 'Rules', icon: ShieldAlert },
-    { id: 'api_protection', label: 'API Protection', icon: Globe },
-    { id: 'integrations', label: 'Alerts & Integrations', icon: Server },
-    { id: 'reports', label: 'Security Reports', icon: FileText },
-    ...(userRole === 'admin' ? [
-      { id: 'custom_rules', label: 'Virtual Patching (Custom Rules)', icon: Code },
-      { id: 'settings', label: 'Settings', icon: SettingsIcon }
-    ] : []),
-  ];
-
-  return (
-    <div className="advanced-section">
-      {/* Sub-navigation tabs */}
-      <div className="subtabs-container" style={{ marginBottom: '24px' }}>
-        {subTabs.map((tab) => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.id}
-              className={`subtab-btn ${activeSubTab === tab.id ? 'active' : ''}`}
-              onClick={() => setActiveSubTab(tab.id)}
-            >
-              <Icon size={16} />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Content for each sub-tab */}
-      <motion.div
-        key={activeSubTab}
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-      >
-        {activeSubTab === 'false_positives' && (
-          <FalsePositives userRole={userRole} onCreateException={onCreateException} />
-        )}
-        {activeSubTab === 'exceptions' && <Exceptions />}
-        {activeSubTab === 'rules' && <Rules userRole={userRole} />}
-        {activeSubTab === 'api_protection' && <ApiProtection />}
-        {activeSubTab === 'integrations' && <AlertsIntegrations userRole={userRole} />}
-        {activeSubTab === 'reports' && <SecurityReports />}
-        {activeSubTab === 'custom_rules' && userRole === 'admin' && (
-          <CustomRulesEditor userRole={userRole} />
-        )}
-        {activeSubTab === 'settings' && userRole === 'admin' && (
-          <Settings onLogout={onLogout} />
-        )}
-      </motion.div>
-    </div>
-  );
-}
 
 const TAB_ROUTES = {
-  overview:   '/dashboard',
-  protection: '/protection',
-  events:     '/events',
-  ml_engine:  '/ml-engine',
-  advanced:   '/advanced',
+  overview:         '/dashboard',
+  protection:       '/protection',
+  events:           '/events',
+  ml_engine:        '/ml-engine',
+  // Former Advanced sub-tabs — now direct routes
+  false_positives:  '/false-positives',
+  exceptions:       '/exceptions',
+  rules:            '/rules',
+  api_protection:   '/api-protection',
+  reports:          '/reports',
+  integrations:     '/integrations',
+  virtual_patching: '/virtual-patching',
+  settings:         '/settings',
 };
 const ROUTE_TABS = Object.fromEntries(
   Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab])
@@ -7291,60 +7180,50 @@ function App() {
     <>
     <div className="app-container">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} handleLogout={handleLogout} userRole={userRole} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} />
-      <div className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`} style={{ paddingBottom: '44px' }}>
-        <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-          <h1 className="page-title">
-            {activeTab === 'overview' && 'Security Overview'}
-            {activeTab === 'protection' && 'Protection Status'}
-            {activeTab === 'events' && 'Security Events'}
-            {activeTab === 'ml_engine' && 'AI/ML Engine'}
-            {activeTab === 'advanced' && 'Advanced Settings'}
-          </h1>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            {/* WAF Active — compact inline pill, dashboard only */}
-            {activeTab === 'overview' && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: '6px',
-                padding: '4px 10px', borderRadius: '20px',
-                background: 'rgba(16,185,129,0.08)',
-                border: '1px solid rgba(16,185,129,0.2)',
-                fontSize: '11px', fontWeight: 600, color: '#34d399',
-                whiteSpace: 'nowrap',
-              }}>
-                <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981' }} />
-                WAF Active
-              </div>
-            )}
-            <NotificationBell 
-              userRole={userRole} 
-              onOpenHistory={() => setIsAlertHistoryModalOpen(true)} 
-              onOpenSettings={() => {
-                setAdvancedInitialTab('integrations');
-                setActiveTab('advanced');
-              }}
+      <div className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`}>
+        {/* SIEM Professional Top Bar */}
+        <div className="siem-topbar">
+          <div className="siem-topbar-left">
+            <span className="siem-breadcrumb-sep">■</span>
+            <span className="siem-breadcrumb">
+              {activeTab === 'overview' && 'Security Overview'}
+              {activeTab === 'protection' && 'Protection Status'}
+              {activeTab === 'events' && 'Security Events'}
+              {activeTab === 'ml_engine' && 'AI / ML Engine'}
+              {activeTab === 'false_positives' && 'False Positives'}
+              {activeTab === 'exceptions' && 'WAF Exceptions'}
+              {activeTab === 'rules' && 'WAF Rules & CRS'}
+              {activeTab === 'api_protection' && 'API Protection'}
+              {activeTab === 'reports' && 'Security Reports'}
+              {activeTab === 'integrations' && 'Alerts & Integrations'}
+              {activeTab === 'virtual_patching' && 'Virtual Patching'}
+              {activeTab === 'settings' && 'System Settings'}
+            </span>
+          </div>
+          <div className="siem-topbar-right">
+            {/* WAF Active status badge */}
+            <div className="siem-status-badge active">
+              <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981' }} />
+              WAF Active
+            </div>
+            <NotificationBell
+              userRole={userRole}
+              onOpenHistory={() => setIsAlertHistoryModalOpen(true)}
+              onOpenSettings={() => setActiveTab('integrations')}
             />
-            <div className="user-profile-badge" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', padding: '6px 14px', borderRadius: '20px' }}>
-              <span style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 500 }}>@{username}</span>
-              <span className={`role-badge role-${(userRole || 'analyst').toLowerCase()}`} style={{
-                fontSize: '10px',
-                fontWeight: 700,
-                padding: '2px 8px',
-                borderRadius: '10px',
-                textTransform: 'uppercase',
-                background: userRole === 'admin' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                color: userRole === 'admin' ? '#fca5a5' : '#93c5fd',
-                border: userRole === 'admin' ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(59, 130, 246, 0.3)'
-              }}>
-                {userRole}
-              </span>
+            <div className="user-profile-badge" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', padding: '5px 12px', borderRadius: '20px' }}>
+              <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>@{username}</span>
+              <span style={{
+                fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '10px', textTransform: 'uppercase',
+                background: userRole === 'admin' ? 'rgba(244,63,94,0.15)' : 'rgba(99,102,241,0.15)',
+                color: userRole === 'admin' ? '#fca5a5' : '#a5b4fc',
+                border: userRole === 'admin' ? '1px solid rgba(244,63,94,0.3)' : '1px solid rgba(99,102,241,0.3)'
+              }}>{userRole}</span>
             </div>
           </div>
         </div>
-
-
-
-
+        {/* Scrollable page content area */}
+        <div className="main-scroll-area">
         <motion.div
           style={{ flex: 1, minHeight: 0 }}
           key={activeTab}
@@ -7353,10 +7232,10 @@ function App() {
           exit={{ opacity: 0, x: -15 }}
           transition={{ duration: 0.2, ease: 'easeOut' }}
         >
-          {/* Overview Tab - Shows ThreatAnalytics dashboard */}
+          {/* Overview Tab */}
           {activeTab === 'overview' && <ThreatAnalytics key="overview" />}
 
-          {/* Protection Tab - Sub-tabbed: Virtual Hosts | DDoS & Bot Shield */}
+          {/* Protection Status Tab */}
           {activeTab === 'protection' && (
             <ProtectionSection
               key="protection"
@@ -7365,22 +7244,40 @@ function App() {
             />
           )}
           
-          {/* Security Events Tab - Renamed from Live Logs */}
+          {/* Security Events Tab */}
           {activeTab === 'events' && <LiveLogs key="events" onMarkFalsePositive={handleTriggerMarkFp} />}
           
-          {/* AI/ML Engine Tab - Keep as is */}
+          {/* AI/ML Engine Tab */}
           {activeTab === 'ml_engine' && <MLAnalytics key="ml_engine" />}
-          
-          {/* Advanced Tab - Collapsed section with: False Positives, Exceptions, Rules, API Protection, Integrations, Settings */}
-          {activeTab === 'advanced' && (
-            <AdvancedSection 
-              key="advanced" 
-              userRole={userRole} 
-              onMarkFalsePositive={handleTriggerMarkFp}
-              onCreateException={handleTriggerCreateException}
-              onLogout={handleLogout}
-              initialSubTab={advancedInitialTab}
-            />
+
+          {/* False Positives Tab */}
+          {activeTab === 'false_positives' && (
+            <FalsePositives key="false_positives" userRole={userRole} onCreateException={handleTriggerCreateException} />
+          )}
+
+          {/* Exceptions Tab */}
+          {activeTab === 'exceptions' && <Exceptions key="exceptions" />}
+
+          {/* WAF Rules Tab */}
+          {activeTab === 'rules' && <Rules key="rules" userRole={userRole} />}
+
+          {/* API Protection Tab */}
+          {activeTab === 'api_protection' && <ApiProtection key="api_protection" />}
+
+          {/* Security Reports Tab */}
+          {activeTab === 'reports' && <SecurityReports key="reports" />}
+
+          {/* Alerts & Integrations Tab */}
+          {activeTab === 'integrations' && <AlertsIntegrations key="integrations" userRole={userRole} />}
+
+          {/* Virtual Patching (Custom Rules) Tab - Admin only */}
+          {activeTab === 'virtual_patching' && userRole === 'admin' && (
+            <CustomRulesEditor key="virtual_patching" userRole={userRole} />
+          )}
+
+          {/* Settings Tab - Admin only */}
+          {activeTab === 'settings' && userRole === 'admin' && (
+            <Settings key="settings" onLogout={handleLogout} />
           )}
         </motion.div>
 
@@ -7441,8 +7338,10 @@ function App() {
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
-    </div>
+
+      </div>{/* end main-scroll-area */}
+      </div>{/* end main-content */}
+    </div>{/* end app-container */}
 
     {/* App-wide fixed footer */}
     <footer className="app-footer">

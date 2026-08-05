@@ -200,7 +200,7 @@ function PrerequisitesPanel() {
               }}>
                 <Shield size={14} style={{ color: '#00d4ff', flexShrink: 0 }} />
                 <span style={{ fontWeight: 600, color: '#fff' }}>Traffic Flow:</span>
-                {['Internet', 'WAF (Port 80/443)', 'ModSecurity + ML Check', 'Your Backend App'].map((step, i, arr) => (
+                {['Internet', 'WAF (Port 80/443)', 'CyberSentinel Engine + ML Check', 'Your Backend App'].map((step, i, arr) => (
                   <span key={step} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span style={{ color: i === 0 ? 'rgba(255,255,255,0.6)' : i === arr.length - 1 ? '#34d399' : '#00d4ff', fontWeight: i === arr.length - 1 ? 600 : 400 }}>{step}</span>
                     {i < arr.length - 1 && <ArrowRight size={12} style={{ color: 'rgba(255,255,255,0.3)' }} />}

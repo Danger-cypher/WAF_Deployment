@@ -230,7 +230,7 @@ if [ "$UPDATE_CORS" = true ]; then
             fi
             
             # Generate CORS origins for both HTTP and HTTPS
-            NEW_CORS="https://${PROD_DOMAIN},http://${PROD_DOMAIN},https://${PROD_DOMAIN}:3001,http://${PROD_DOMAIN}:3001"
+            NEW_CORS="https://${PROD_DOMAIN},http://${PROD_DOMAIN},https://${PROD_DOMAIN}:3020,http://${PROD_DOMAIN}:3020"
             
             log "Generated CORS origins:"
             echo -e "  ${CYAN}$NEW_CORS${NC}"
@@ -306,7 +306,7 @@ if [ "$UPDATE_SSL" = true ] || [ "$UPDATE_CORS" = true ]; then
         
         # Health check
         log "Verifying health status..."
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:3001/api/health || echo "000")
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:3020/api/health || echo "000")
         
         if [ "$HTTP_CODE" = "200" ]; then
             success "Services restarted successfully and are healthy!"

@@ -132,6 +132,6 @@ RUN mkdir -p \
 
 ENV PATH="/usr/local/openresty/bin:/usr/local/openresty/nginx/sbin:${PATH}"
 
-EXPOSE 80 443 3001
+EXPOSE 80 443 3020
 
 CMD ["openresty", "-c", "/etc/nginx/nginx.conf", "-g", "daemon off;"]

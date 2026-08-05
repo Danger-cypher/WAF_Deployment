@@ -178,8 +178,8 @@ services:
     container_name: waf-openresty
     restart: unless-stopped
     ports:
-      # Port 3001 — direct WAF Dashboard access (HTTP, WAF-inspected)
-      - "3001:3001"
+      # Port 3020 — direct WAF Dashboard access (HTTP, WAF-inspected)
+      - "3020:3020"
       # Port 80 — intercepts all plain HTTP, redirects to HTTPS 443
       - "80:80"
       # Port 443 — HTTPS WAF gateway (TLS + ModSecurity + ML-WAF)
@@ -213,7 +213,7 @@ services:
       frontend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3020/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

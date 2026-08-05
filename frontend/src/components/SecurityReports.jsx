@@ -66,7 +66,7 @@ export default function SecurityReports() {
         health: {
           status: health?.status || 'HEALTHY',
           version: 'v2.0.0-2026',
-          engine: 'ModSecurity v3.0.12',
+          engine: 'CyberSentinel Engine v2.0',
           antiDefacement: health?.anti_defacement?.status || 'ACTIVE'
         },
         audit: auditStatsRes || {
@@ -353,7 +353,7 @@ export default function SecurityReports() {
               <div className="report-section-box" style={{ gridColumn: 'span 2' }}>
                 <h3>🔍 Threat Intelligence & Signatures</h3>
                 <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                  Signature-based detections and ModSecurity Core Rule Set (CRS) triggers recorded for this timeframe.
+                  Signature-based detections and CyberSentinel Engine Core Rule Set (CRS) triggers recorded for this timeframe.
                 </p>
                 <div className="report-grid-3" style={{ margin: '0 0 20px 0', padding: 0, border: 'none', background: 'transparent' }}>
                   <div className="report-metric-card" style={{ background: 'rgba(255,255,255,0.01)' }}>
@@ -419,7 +419,7 @@ export default function SecurityReports() {
                     </thead>
                     <tbody>
                       <tr>
-                        <td>ModSecurity Engine Enforcement</td>
+                        <td>CyberSentinel Engine Enforcement</td>
                         <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>ENFORCING</td>
                       </tr>
                       <tr>

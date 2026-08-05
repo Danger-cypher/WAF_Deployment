@@ -354,32 +354,17 @@ def get_stats(hours: Optional[int] = None) -> Dict[str, Any]:
     try:
         result = client.query(f"""
             SELECT
-                -- Blocked = requests that returned HTTP 403
                 countIf(http_code = '403')                                           AS total_blocked,
-                -- SQLi events that were blocked
                 countIf(lower(attack_type) = 'sql injection' AND http_code = '403') AS sqli_count,
-                -- XSS events that were blocked
                 countIf(lower(attack_type) = 'xss' AND http_code = '403')           AS xss_count,
-                -- Unique attacker IPs among blocked events
                 uniqExactIf(client_ip, http_code = '403')                           AS unique_ips,
-                -- Recent blocked threats in last 1 minute
-                countIf(http_code = '403' AND timestamp >= now() - INTERVAL 1 MINUTE) AS recent_threats
+                countIf(http_code = '403' AND timestamp >= now() - INTERVAL 1 MINUTE) AS recent_threats,
+                argMaxIf(attack_type, 1, http_code = '403' AND attack_type != '' AND attack_type != 'Unknown') AS top_attack
             FROM waf_events
             WHERE 1=1 {time_filter}
         """)
-        row = result.result_rows[0] if result.result_rows else (0, 0, 0, 0, 0)
-
-        # Most common attack type
-        top_result = client.query(f"""
-            SELECT attack_type, count() AS c
-            FROM waf_events
-            WHERE http_code = '403'
-              AND attack_type != '' AND attack_type != 'Unknown' {time_filter}
-            GROUP BY attack_type
-            ORDER BY c DESC
-            LIMIT 1
-        """)
-        top_attack = top_result.result_rows[0][0] if top_result.result_rows else "None"
+        row = result.result_rows[0] if result.result_rows else (0, 0, 0, 0, 0, "None")
+        top_attack = row[5] if row[5] else "None"
 
         return {
             "total_requests": int(row[0]),   # will be supplemented by nginx access log count
@@ -1022,28 +1007,37 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
     try:
         result = client.query(
             """
-            SELECT uri, method,
-                   min(first_seen) as first_seen,
-                   max(timestamp) as last_seen,
-                   sum(hit_count) as hit_count,
-                   sum(error_count) as error_count,
-                   sum(malicious_count) as malicious_count,
-                   sum(suspicious_count) as suspicious_count,
-                   sum(external_hit_count) as external_hit_count,
-                   sum(internal_hit_count) as internal_hit_count,
-                   max(has_https) as has_https,
-                   max(has_versioning) as has_versioning,
-                   any(content_encoding) as content_encoding,
-                   round(sum(avg_response_time_ms * hit_count) / max(sum(hit_count), 1), 2) as avg_response_time_ms
-            FROM api_discovery
-            GROUP BY uri, method
-            ORDER BY hit_count DESC
+            SELECT
+                uri, method, first_seen, last_seen,
+                total_hits,
+                error_count, malicious_count, suspicious_count,
+                external_hit_count, internal_hit_count,
+                has_https, has_versioning, content_encoding,
+                weighted_response_sum
+            FROM (
+                SELECT uri, method,
+                       min(first_seen)  AS first_seen,
+                       max(timestamp)   AS last_seen,
+                       sum(hit_count)   AS total_hits,
+                       sum(error_count) AS error_count,
+                       sum(malicious_count)    AS malicious_count,
+                       sum(suspicious_count)   AS suspicious_count,
+                       sum(external_hit_count) AS external_hit_count,
+                       sum(internal_hit_count) AS internal_hit_count,
+                       max(has_https)       AS has_https,
+                       max(has_versioning)  AS has_versioning,
+                       any(content_encoding) AS content_encoding,
+                       sum(avg_response_time_ms * hit_count) AS weighted_response_sum
+                FROM api_discovery
+                GROUP BY uri, method
+            )
+            ORDER BY total_hits DESC
             """
         )
         columns = [
             "uri", "method", "first_seen", "last_seen", "hit_count", "error_count",
             "malicious_count", "suspicious_count", "external_hit_count", "internal_hit_count",
-            "has_https", "has_versioning", "content_encoding", "avg_response_time_ms"
+            "has_https", "has_versioning", "content_encoding", "weighted_response_sum"
         ]
         rows = []
         for row in result.result_rows:
@@ -1051,6 +1045,10 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
             for f in ("first_seen", "last_seen"):
                 if isinstance(d[f], datetime):
                     d[f] = d[f].strftime("%Y-%m-%d %H:%M:%S")
+            # Compute weighted average in Python to avoid nested-aggregate SQL error
+            wsum = d.pop("weighted_response_sum", 0) or 0
+            hits = d.get("hit_count", 0) or 0
+            d["avg_response_time_ms"] = round(wsum / hits, 2) if hits > 0 else 0.0
             rows.append(d)
         return rows
     except Exception as e:

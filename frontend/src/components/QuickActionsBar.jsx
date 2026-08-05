@@ -57,7 +57,7 @@ const QuickActionsBar = ({ activeTab, onAddApp, onViewBlocks, onRefresh }) => {
           <div
             className="quick-action-status"
             style={{ marginLeft: 'auto' }}
-            title="ModSecurity WAF engine is running and enforcing policies"
+            title="CyberSentinel WAF Engine is running and enforcing policies"
           >
             <Activity size={13} style={{ color: '#10b981' }} />
             <div className="pulse-dot" style={{ marginLeft: '4px', marginRight: '4px' }} />

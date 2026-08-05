@@ -1,4 +1,5 @@
 import os
+import time
 import pathlib
 import sqlite3
 from fastapi import APIRouter, HTTPException, Depends
@@ -15,6 +16,11 @@ router = APIRouter()
 # Track if database was initialized successfully
 _db_initialized = False
 _db_init_error = None
+
+# Cache for health check — avoid ClickHouse and Redis pings on every request
+_health_cache: dict = {}
+_HEALTH_CACHE_TTL = 60  # seconds for parsed_files count
+_REDIS_CHECK_TTL = 15   # seconds for Redis connectivity check
 
 
 def check_db_initialized():
@@ -42,37 +48,40 @@ def check_db_initialized():
 async def health_check():
     """
     Get API health status and log directory info.
+    parsed_files count and Redis check are cached to avoid 1.4s ClickHouse scan
+    on every health poll.
     """
     global _db_initialized, _db_init_error
-    
+    now = time.monotonic()
+
     log_dir_exists = os.path.exists(settings.LOG_DIR) and os.path.isdir(
         settings.LOG_DIR
     )
-    parsed_files = get_parsed_files_count()
-    
-    # Check database initialization
+
+    # Cache the expensive ClickHouse count (SELECT count() FROM waf_events)
+    if "parsed_files" not in _health_cache or (now - _health_cache.get("parsed_files_ts", 0)) > _HEALTH_CACHE_TTL:
+        _health_cache["parsed_files"] = get_parsed_files_count()
+        _health_cache["parsed_files_ts"] = now
+    parsed_files = _health_cache["parsed_files"]
+
+    # Check database initialization (uses in-memory flag after first success)
     db_ok = check_db_initialized()
     if not db_ok and not _db_initialized:
-        # Try one more time to initialize
         try:
             from app.services.db_service import init_db
             init_db()
             db_ok = check_db_initialized()
         except Exception as e:
             _db_init_error = str(e)
-    
-    # Check Redis connectivity
-    redis_ok = validate_redis_connection()
-    
-    # Check ML engine availability
-    ml_enabled = False
-    try:
-        ml_server_available = os.environ.get("ML_HOST", "127.0.0.1")
-        # Simple check - if we can reach ML server, it's enabled
-        ml_enabled = True
-    except Exception:
-        ml_enabled = False
 
+    # Cache Redis connectivity check
+    if "redis_ok" not in _health_cache or (now - _health_cache.get("redis_ts", 0)) > _REDIS_CHECK_TTL:
+        _health_cache["redis_ok"] = validate_redis_connection()
+        _health_cache["redis_ts"] = now
+    redis_ok = _health_cache["redis_ok"]
+
+    # ML engine availability (env var check — instant)
+    ml_enabled = bool(os.environ.get("ML_HOST", ""))
 
     return HealthResponse(
         status="ok" if db_ok else "warning",

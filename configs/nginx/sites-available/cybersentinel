@@ -1,11 +1,11 @@
 # =============================================================================
 # CyberSentinel WAF — Dashboard Virtual Host Configuration
-# Port 3001  → Direct WAF Dashboard access (HTTP, WAF-inspected, no redirect)
+# Port 3020  → Direct WAF Dashboard access (HTTP, WAF-inspected, no redirect)
 # =============================================================================
 
 server {
-    listen 3001;
-    listen [::]:3001;
+    listen 3020;
+    listen [::]:3020;
     server_name 192.168.2.70 localhost _;
     resolver 127.0.0.11 valid=30s ipv6=off;
     

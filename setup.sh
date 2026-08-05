@@ -104,7 +104,7 @@ if [ ! -f "$ENV_FILE" ]; then
         cat > "$ENV_FILE" <<EOF
 REDIS_PASSWORD=
 JWT_SECRET_KEY=
-BACKEND_CORS_ORIGINS=http://localhost:3001,http://127.0.0.1:3001
+BACKEND_CORS_ORIGINS=http://localhost:3020,http://127.0.0.1:3020
 GEOIP_DATA_DIR=/etc/nginx/geoip
 CLICKHOUSE_HOST=waf-clickhouse
 CLICKHOUSE_PORT=8123
@@ -125,53 +125,27 @@ MEM_TOTAL_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}' 2>/dev/null || ech
 MEM_TOTAL_MB=$((MEM_TOTAL_KB / 1024))
 log "  Total Memory detected: ${MEM_TOTAL_MB}MB"
 
-# Calculate CPU limits and reservations based on detected cores
-if [ "$CORES" -le 1 ]; then
-    BACKEND_CPU_LIMIT="1.0"
-    BACKEND_CPU_RESERVE="0.1"
-    ML_CPU_LIMIT="1.0"
-    ML_CPU_RESERVE="0.1"
-    REDIS_CPU_LIMIT="1.0"
-    REDIS_CPU_RESERVE="0.1"
-    OPENRESTY_CPU_LIMIT="1.0"
-    OPENRESTY_CPU_RESERVE="0.1"
-    FRONTEND_CPU_LIMIT="1.0"
-    FRONTEND_CPU_RESERVE="0.1"
-elif [ "$CORES" -eq 2 ]; then
-    BACKEND_CPU_LIMIT="1.0"
-    BACKEND_CPU_RESERVE="0.2"
-    ML_CPU_LIMIT="1.0"
-    ML_CPU_RESERVE="0.2"
-    REDIS_CPU_LIMIT="1.0"
-    REDIS_CPU_RESERVE="0.2"
-    OPENRESTY_CPU_LIMIT="1.0"
-    OPENRESTY_CPU_RESERVE="0.2"
-    FRONTEND_CPU_LIMIT="0.5"
-    FRONTEND_CPU_RESERVE="0.1"
-elif [ "$CORES" -eq 4 ]; then
-    BACKEND_CPU_LIMIT="2.0"
-    BACKEND_CPU_RESERVE="0.5"
-    ML_CPU_LIMIT="2.0"
-    ML_CPU_RESERVE="1.0"
-    REDIS_CPU_LIMIT="1.0"
-    REDIS_CPU_RESERVE="0.25"
-    OPENRESTY_CPU_LIMIT="2.0"
-    OPENRESTY_CPU_RESERVE="0.5"
-    FRONTEND_CPU_LIMIT="0.5"
-    FRONTEND_CPU_RESERVE="0.1"
-else
-    # 8+ cores
-    BACKEND_CPU_LIMIT="4.0"
-    BACKEND_CPU_RESERVE="1.0"
-    ML_CPU_LIMIT="4.0"
-    ML_CPU_RESERVE="1.0"
-    REDIS_CPU_LIMIT="2.0"
-    REDIS_CPU_RESERVE="0.5"
-    OPENRESTY_CPU_LIMIT="4.0"
-    OPENRESTY_CPU_RESERVE="1.0"
-    FRONTEND_CPU_LIMIT="1.0"
-    FRONTEND_CPU_RESERVE="0.2"
-fi
+# Calculate dynamic CPU limits and reservations based on detected cores
+# OpenResty WAF can scale to utilize all host cores during traffic spikes
+OPENRESTY_CPU_LIMIT=$(python3 -c "print(round(max(1.0, float($CORES)), 1))")
+OPENRESTY_CPU_RESERVE=$(python3 -c "print(round(max(0.25, $CORES * 0.25), 2))")
+
+# Backend application (up to 75% of host cores, minimum 1)
+BACKEND_CPU_LIMIT=$(python3 -c "print(round(max(1.0, $CORES * 0.75), 1))")
+BACKEND_CPU_RESERVE=$(python3 -c "print(round(max(0.25, $CORES * 0.15), 2))")
+
+# ML Engine (up to 75% of host cores, minimum 1)
+ML_CPU_LIMIT=$BACKEND_CPU_LIMIT
+ML_CPU_RESERVE=$BACKEND_CPU_RESERVE
+
+# Redis cache (low overhead, up to 25% of host cores, minimum 0.5)
+REDIS_CPU_LIMIT=$(python3 -c "print(round(max(0.5, $CORES * 0.25), 1))")
+REDIS_CPU_RESERVE=$(python3 -c "print(round(max(0.1, $CORES * 0.05), 2))")
+
+# Frontend SPA server (low overhead, up to 25% of host cores, minimum 0.5)
+FRONTEND_CPU_LIMIT=$REDIS_CPU_LIMIT
+FRONTEND_CPU_RESERVE=$REDIS_CPU_RESERVE
+
 
 # Calculate Memory limits and reservations based on total memory
 if [ "$MEM_TOTAL_MB" -lt 3000 ]; then
@@ -290,11 +264,11 @@ if [ -z "$CORS_ORIGINS" ]; then
     
     if [ -n "$PROD_DOMAIN" ]; then
         # Production deployment with custom domain
-        CORS_ORIGINS="https://${PROD_DOMAIN},http://${PROD_DOMAIN},https://${PROD_DOMAIN}:3001,http://${PROD_DOMAIN}:3001"
+        CORS_ORIGINS="https://${PROD_DOMAIN},http://${PROD_DOMAIN},https://${PROD_DOMAIN}:3020,http://${PROD_DOMAIN}:3020"
         log "Production CORS configured for: $PROD_DOMAIN"
     else
         # Local development deployment
-        CORS_ORIGINS="http://localhost:3001,http://127.0.0.1:3001,https://localhost,https://127.0.0.1"
+        CORS_ORIGINS="http://localhost:3020,http://127.0.0.1:3020,https://localhost,https://127.0.0.1"
         log "Development CORS configured for localhost"
     fi
     
@@ -591,20 +565,20 @@ if command -v ufw &>/dev/null; then
         log "  UFW firewall is active. Opening required ports..."
         sudo ufw allow 80/tcp   &>/dev/null && success "  Port 80  (HTTP)       — opened" || warn "  Failed to open port 80"
         sudo ufw allow 443/tcp  &>/dev/null && success "  Port 443 (HTTPS)      — opened" || warn "  Failed to open port 443"
-        sudo ufw allow 3001/tcp &>/dev/null && success "  Port 3001 (Dashboard) — opened" || warn "  Failed to open port 3001"
+        sudo ufw allow 3020/tcp &>/dev/null && success "  Port 3020 (Dashboard) — opened" || warn "  Failed to open port 3020"
         sudo ufw reload &>/dev/null || true
     else
         warn "  UFW is installed but inactive. No firewall rules changed."
-        warn "  If you enable UFW later, manually run: sudo ufw allow 80,443,3001/tcp"
+        warn "  If you enable UFW later, manually run: sudo ufw allow 80,443,3020/tcp"
     fi
 elif command -v firewall-cmd &>/dev/null; then
     log "  firewalld detected. Opening required ports..."
     sudo firewall-cmd --permanent --add-port=80/tcp   &>/dev/null && success "  Port 80 opened" || warn "  Failed to open port 80"
     sudo firewall-cmd --permanent --add-port=443/tcp  &>/dev/null && success "  Port 443 opened" || warn "  Failed to open port 443"
-    sudo firewall-cmd --permanent --add-port=3001/tcp &>/dev/null && success "  Port 3001 opened" || warn "  Failed to open port 3001"
+    sudo firewall-cmd --permanent --add-port=3020/tcp &>/dev/null && success "  Port 3020 opened" || warn "  Failed to open port 3020"
     sudo firewall-cmd --reload &>/dev/null || true
 else
-    warn "  No known firewall manager (ufw/firewalld) found. Ensure ports 80, 443, 3001 are open manually."
+    warn "  No known firewall manager (ufw/firewalld) found. Ensure ports 80, 443, 3020 are open manually."
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -706,7 +680,7 @@ if [ -n "${SMTP_HOST:-}" ] && [ -n "${SMTP_TO:-}" ]; then
 
     # Obtain a session cookie from the login endpoint
     LOGIN_RESP=$(curl -sc /tmp/waf_setup.cookies -s -X POST \
-        "http://localhost:3001/api/auth/login" \
+        "http://localhost:3020/api/auth/login" \
         -d "username=admin&password=${ADMIN_PASS}" 2>/dev/null || echo "")
 
     if echo "$LOGIN_RESP" | grep -q "successful"; then
@@ -732,7 +706,7 @@ PAYLOAD
         CREATE_RESP=$(curl -s -b /tmp/waf_setup.cookies \
             -H "Content-Type: application/json" \
             -H "X-XSRF-TOKEN: ${XSRF_TOKEN}" \
-            -X POST "http://localhost:3001/api/alerts/channels" \
+            -X POST "http://localhost:3020/api/alerts/channels" \
             -d "$CHANNEL_PAYLOAD" 2>/dev/null || echo "")
         
         if echo "$CREATE_RESP" | grep -q "\"id\""; then
@@ -756,7 +730,7 @@ RETRY_COUNT=0
 HEALTHY=false
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://localhost:3001/api/health || echo "000")
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://localhost:3020/api/health || echo "000")
     if [ "$HTTP_CODE" = "200" ]; then
         HEALTHY=true
         break
@@ -767,7 +741,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ "$HEALTHY" = "true" ]; then
-    success "WAF Dashboard API is HEALTHY and listening on port 3001!"
+    success "WAF Dashboard API is HEALTHY and listening on port 3020!"
 else
     warn "Health checks are slow. Check logs manually using: sudo docker compose logs -f"
 fi
@@ -785,7 +759,7 @@ echo -e "${GREEN}===============================================================
 echo -e "${GREEN}             CYBERSENTINEL WAF DEPLOYMENT COMPLETE!                     ${NC}"
 echo -e "${GREEN}=======================================================================${NC}"
 echo ""
-echo -e "  🚀 ${BLUE}WAF Dashboard URL:${NC} http://${SERVER_IP}:3001/"
+echo -e "  🚀 ${BLUE}WAF Dashboard URL:${NC} http://${SERVER_IP}:3020/"
 echo -e "  📊 ${BLUE}ClickHouse Play Console:${NC} http://localhost:8123/play"
 echo -e "     - ${YELLOW}Note:${NC} To connect, open an SSH Tunnel from your local terminal:"
 echo -e "       ${CYAN}ssh -L 8123:127.0.0.1:8123 soc@${SERVER_IP}${NC}"
@@ -795,7 +769,7 @@ echo -e "     - ${GREEN}Security Analyst:${NC} analyst  /  (your custom password
 echo -e "     - ${GREEN}ClickHouse Database:${NC} Username: (custom username, default: wafuser) / Password: (check your .env file)"
 echo ""
 echo -e "  🌐 ${BLUE}Port Mapping Structure:${NC}"
-echo -e "     - ${CYAN}Port 3001${NC} : Direct Administrative Dashboard Access (WAF-Inspected)"
+echo -e "     - ${CYAN}Port 3020${NC} : Direct Administrative Dashboard Access (WAF-Inspected)"
 echo -e "     - ${CYAN}Port 80  ${NC} : HTTP Redirector (Redirects traffic to HTTPS 443)"
 echo -e "     - ${CYAN}Port 443 ${NC} : HTTPS WAF Interception Gateway proxying to your apps"
 echo -e "     - ${CYAN}Port 8123${NC} : ClickHouse HTTP Interface (Bound to 127.0.0.1 for security)"

@@ -97,12 +97,17 @@ def _sync_clickhouse_ttl(retention_days: int):
         if client is None:
             return
 
-        tables = ["waf_events", "ml_events", "threat_intelligence", "alert_history"]
-        for table in tables:
+        tables = [
+            ("waf_events", "timestamp"),
+            ("ml_events", "timestamp"),
+            ("threat_intelligence", "timestamp"),
+            ("alert_history", "created_at"),
+        ]
+        for table, ts_col in tables:
             try:
                 client.command(
                     f"ALTER TABLE cybersentinel.{table} "
-                    f"MODIFY TTL timestamp + INTERVAL {retention_days} DAY DELETE"
+                    f"MODIFY TTL {ts_col} + INTERVAL {retention_days} DAY DELETE"
                 )
                 logger.info(
                     f"[LogRetention] ClickHouse TTL updated: {table} → {retention_days} days"

@@ -371,10 +371,10 @@ def reload_nginx() -> bool:
 def get_redis_client():
     """
     Get Redis client using centralized configuration.
-    This function now delegates to app.utils.redis_client.get_redis_client()
+    This function now delegates to app.utils.redis_client.get_global_redis_client()
     for consistent password handling across the codebase.
     """
-    from app.utils.redis_client import get_redis_client as get_centralized_client
+    from app.utils.redis_client import get_global_redis_client as get_centralized_client
     return get_centralized_client()
 
 
