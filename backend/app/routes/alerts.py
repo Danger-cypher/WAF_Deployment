@@ -2,8 +2,9 @@
 CyberSentinel WAF - Alerting Routes
 """
 import logging
+import secrets
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, status, Query
 
 from app.models.alert_models import (
     AlertChannelCreate, AlertChannelUpdate, AlertChannel,
@@ -14,6 +15,7 @@ from app.models.alert_models import (
 from app.services.alert_db_service import AlertDatabaseService
 from app.services.alert_manager import alert_manager
 from app.services.auth import require_admin, require_any_role, TokenData
+from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -344,7 +346,29 @@ async def get_stats(days: int = Query(30, ge=1, le=365), current_user: TokenData
 
 trigger_router = APIRouter()
 
-@trigger_router.post("/alerts/trigger", response_model=Dict[str, Any])
+
+def verify_internal_key(x_internal_key: Optional[str] = Header(default=None)) -> None:
+    """
+    Guards internal service-to-service endpoints (e.g. waf-ml -> backend).
+    This is not a user session - callers authenticate with a shared secret
+    (INTERNAL_ALERT_TRIGGER_KEY) sent as the X-Internal-Key header, since
+    this endpoint is reachable both from other containers on waf-network
+    and, via the /api/ reverse-proxy rule, from the public internet.
+    """
+    if not x_internal_key or not secrets.compare_digest(
+        x_internal_key, settings.INTERNAL_ALERT_TRIGGER_KEY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or missing internal service credentials."
+        )
+
+
+@trigger_router.post(
+    "/alerts/trigger",
+    response_model=Dict[str, Any],
+    dependencies=[Depends(verify_internal_key)],
+)
 async def trigger_alert_event(payload: Dict[str, Any]):
     """
     Triggers an alert rule based on external data (like from waf-ml container).

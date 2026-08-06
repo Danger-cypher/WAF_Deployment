@@ -14,12 +14,18 @@
 # Use set -uo (not -e) so we control error handling explicitly with our own trap
 set -uo pipefail
 
+# Always operate relative to this script's own directory so the installer
+# behaves consistently no matter where it's invoked from.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+
 # ── Global Error Trap ─────────────────────────────────────────────────────────
-# Trap any unexpected error and print a user-friendly message instead of
-# exiting silently. The installer will still abort, but the admin will know
-# exactly where it failed and what to check.
-trap 'echo -e "\n${RED}[x] INSTALLER FAILED at line ${LINENO}.${NC}" \
-     "\n    Check the error above and re-run setup.sh after fixing the issue." \
+# Trap any unexpected error and print a diagnostic message. NOTE: because we
+# deliberately run without `set -e`, this trap does NOT abort the script by
+# itself — most commands below are individually guarded and explicitly call
+# error() (which does exit) at genuinely fatal steps. This trap exists purely
+# to surface unexpected non-zero exits that aren't already handled.
+trap 'echo -e "\n${YELLOW}[!] WARNING: a step failed at line ${LINENO}.${NC}" \
+     "\n    The installer is continuing — review the message above." \
      "\n    Tip: Run: sudo docker compose logs -f   to inspect container state." >&2' ERR
 
 # ANSI color codes
@@ -37,6 +43,87 @@ warn() { echo -e "${YELLOW}[!] WARNING:${NC} $1"; }
 error() { echo -e "${RED}[x] ERROR:${NC} $1" >&2; exit 1; }
 success() { echo -e "${GREEN}[+]${NC} $1"; }
 
+# Returns true (0) if a value is empty OR still a "CHANGE_ME*" placeholder
+# left over from .env.example — used to decide whether a secret needs to be
+# auto-generated.
+is_unset_or_placeholder() {
+    local val="$1"
+    [ -z "$val" ] && return 0
+    case "$val" in
+        CHANGE_ME*) return 0 ;;
+    esac
+    return 1
+}
+
+# Check if a port is in use on the host (ignores if it is in use by our own WAF containers)
+is_port_in_use() {
+    local port=$1
+    local in_use=1
+    
+    if command -v ss &>/dev/null; then
+        sudo ss -tuln | grep -E -q ":$port\b"
+        in_use=$?
+    elif command -v netstat &>/dev/null; then
+        sudo netstat -tuln | grep -E -q ":$port\b"
+        in_use=$?
+    else
+        # Fallback to bash TCP check
+        if timeout 1 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/$port" &>/dev/null; then
+            in_use=0
+        fi
+    fi
+
+    if [ $in_use -eq 0 ]; then
+        # Check if our own running docker container is the one listening
+        if command -v docker &>/dev/null; then
+            local ours=$(docker ps --format '{{.Names}} {{.Ports}}' | grep -E "^waf-" | grep -q ":$port->" && echo "yes" || echo "no")
+            if [ "$ours" = "yes" ]; then
+                # It is our own running container, so it's not a conflict
+                return 1
+            fi
+        fi
+        return 0 # Port is in use by another application
+    fi
+    return 1 # Port is free
+}
+
+# Prompt the user for an alternative port or auto-select one if default port is in use
+get_free_port() {
+    local default_port=$1
+    local port_name=$2
+    local port=$default_port
+
+    if is_port_in_use "$port"; then
+        warn "Port $port (required for $port_name) is already in use by another process!"
+        while true; do
+            echo -e -n "${YELLOW}[?]${NC} Enter a different port for $port_name (or press ENTER to auto-find): "
+            read -r user_port
+            if [ -z "$user_port" ]; then
+                # Auto-find a free port starting from default_port + 1
+                port=$((default_port + 1))
+                while is_port_in_use "$port"; do
+                    port=$((port + 1))
+                done
+                success "Auto-selected free port: $port"
+                break
+            else
+                # Validate user input is a valid port number
+                if [[ "$user_port" =~ ^[0-9]+$ ]] && [ "$user_port" -le 65535 ] && [ "$user_port" -gt 0 ]; then
+                    if is_port_in_use "$user_port"; then
+                        warn "Port $user_port is also in use! Please try another one."
+                    else
+                        port=$user_port
+                        break
+                    fi
+                else
+                    warn "Invalid port number. Must be between 1 and 65535."
+                fi
+            fi
+        done
+    fi
+    echo "$port"
+}
+
 # Clear screen and display banner
 clear
 echo -e "${CYAN}=======================================================================${NC}"
@@ -53,13 +140,20 @@ log "Verifying system requirements..."
 if ! command -v docker &> /dev/null; then
     warn "Docker is not installed. Attempting automated Docker installation..."
     if command -v apt-get &> /dev/null; then
-        sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg lsb-release
+        (sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg lsb-release) \
+            || error "Failed to install Docker prerequisite packages. Check network access and re-run."
         sudo mkdir -p /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg \
+            || error "Failed to fetch/install Docker's GPG signing key."
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-        sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        (sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin) \
+            || error "Failed to install Docker Engine packages."
     else
         error "Supported package manager (apt-get) not found. Please install Docker manually."
+    fi
+
+    if ! command -v docker &> /dev/null; then
+        error "Docker installation appears to have failed (docker command still not found). Please install Docker manually and re-run this script."
     fi
 fi
 success "Docker is installed: $(docker --version)"
@@ -79,8 +173,13 @@ elif command -v docker-compose &> /dev/null; then
 else
     warn "Docker Compose is not installed. Attempting automated Docker Compose plugin installation..."
     if command -v apt-get &> /dev/null; then
-        sudo apt-get update && sudo apt-get install -y docker-compose-plugin
-        COMPOSE_CMD="docker compose"
+        (sudo apt-get update && sudo apt-get install -y docker-compose-plugin) \
+            || error "Failed to install Docker Compose plugin."
+        if docker compose version &> /dev/null; then
+            COMPOSE_CMD="docker compose"
+        else
+            error "Docker Compose installation appears to have failed. Please install manually."
+        fi
     else
         error "Could not install Docker Compose automatically. Please install manually."
     fi
@@ -104,6 +203,9 @@ if [ ! -f "$ENV_FILE" ]; then
         cat > "$ENV_FILE" <<EOF
 REDIS_PASSWORD=
 JWT_SECRET_KEY=
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+INTERNAL_ALERT_TRIGGER_KEY=
 BACKEND_CORS_ORIGINS=http://localhost:3020,http://127.0.0.1:3020
 GEOIP_DATA_DIR=/etc/nginx/geoip
 CLICKHOUSE_HOST=waf-clickhouse
@@ -189,12 +291,30 @@ fi
 log "  Configured CPU Limit: Backend=$BACKEND_CPU_LIMIT, ML=$ML_CPU_LIMIT, OpenResty=$OPENRESTY_CPU_LIMIT"
 log "  Configured Mem Limit: Backend=$BACKEND_MEM_LIMIT, ML=$ML_MEM_LIMIT, OpenResty=$OPENRESTY_MEM_LIMIT"
 
+# Load existing ports or default them
+DASHBOARD_PORT=$(grep -E "^DASHBOARD_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
+HTTP_PORT=$(grep -E "^HTTP_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
+HTTPS_PORT=$(grep -E "^HTTPS_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
+CLICKHOUSE_HOST_PORT=$(grep -E "^CLICKHOUSE_HOST_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
+
+[ -z "$DASHBOARD_PORT" ] && DASHBOARD_PORT=3020
+[ -z "$HTTP_PORT" ] && HTTP_PORT=80
+[ -z "$HTTPS_PORT" ] && HTTPS_PORT=443
+[ -z "$CLICKHOUSE_HOST_PORT" ] && CLICKHOUSE_HOST_PORT=8123
+
+log "Checking WAF port availability on the host..."
+DASHBOARD_PORT=$(get_free_port "$DASHBOARD_PORT" "WAF Dashboard")
+HTTP_PORT=$(get_free_port "$HTTP_PORT" "HTTP gateway")
+HTTPS_PORT=$(get_free_port "$HTTPS_PORT" "HTTPS WAF gateway")
+CLICKHOUSE_HOST_PORT=$(get_free_port "$CLICKHOUSE_HOST_PORT" "ClickHouse HTTP API")
+
 # Remove existing resource configuration keys from .env to avoid duplicates
 for key in BACKEND_CPU_LIMIT BACKEND_CPU_RESERVE BACKEND_MEM_LIMIT BACKEND_MEM_RESERVE \
            ML_CPU_LIMIT ML_CPU_RESERVE ML_MEM_LIMIT ML_MEM_RESERVE \
            REDIS_CPU_LIMIT REDIS_CPU_RESERVE REDIS_MEM_LIMIT REDIS_MEM_RESERVE \
            OPENRESTY_CPU_LIMIT OPENRESTY_CPU_RESERVE OPENRESTY_MEM_LIMIT OPENRESTY_MEM_RESERVE \
-           FRONTEND_CPU_LIMIT FRONTEND_CPU_RESERVE FRONTEND_MEM_LIMIT FRONTEND_MEM_RESERVE; do
+           FRONTEND_CPU_LIMIT FRONTEND_CPU_RESERVE FRONTEND_MEM_LIMIT FRONTEND_MEM_RESERVE \
+           DASHBOARD_PORT HTTP_PORT HTTPS_PORT CLICKHOUSE_HOST_PORT; do
     sed -i "/^$key=/d" "$ENV_FILE" 2>/dev/null || true
 done
 
@@ -222,16 +342,23 @@ FRONTEND_CPU_LIMIT=$FRONTEND_CPU_LIMIT
 FRONTEND_CPU_RESERVE=$FRONTEND_CPU_RESERVE
 FRONTEND_MEM_LIMIT=$FRONTEND_MEM_LIMIT
 FRONTEND_MEM_RESERVE=$FRONTEND_MEM_RESERVE
+
+# Confirmed Free Ports Configuration
+DASHBOARD_PORT=$DASHBOARD_PORT
+HTTP_PORT=$HTTP_PORT
+HTTPS_PORT=$HTTPS_PORT
+CLICKHOUSE_HOST_PORT=$CLICKHOUSE_HOST_PORT
 EOF
 
 # Load existing environment variables
-# Set default values if not defined or empty
+# Set default values if not defined, empty, or still a CHANGE_ME placeholder
 REDIS_PW=$(grep -E "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 JWT_KEY=$(grep -E "^JWT_SECRET_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 CH_PW=$(grep -E "^CLICKHOUSE_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
+INTERNAL_KEY=$(grep -E "^INTERNAL_ALERT_TRIGGER_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 CORS_ORIGINS=$(grep -E "^BACKEND_CORS_ORIGINS=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 
-if [ -z "$REDIS_PW" ]; then
+if is_unset_or_placeholder "$REDIS_PW"; then
     log "Generating cryptographically secure password for Redis..."
     # Generate random 32-char hex string
     REDIS_PW=$(openssl rand -hex 16)
@@ -239,16 +366,30 @@ if [ -z "$REDIS_PW" ]; then
     sed -i "s|^REDIS_PASSWORD=.*|REDIS_PASSWORD=${REDIS_PW}|" "$ENV_FILE"
 fi
 
-if [ -z "$JWT_KEY" ]; then
+if is_unset_or_placeholder "$JWT_KEY"; then
     log "Generating secure JWT signing key..."
     JWT_KEY=$(openssl rand -hex 16)
     sed -i "s|^JWT_SECRET_KEY=.*|JWT_SECRET_KEY=${JWT_KEY}|" "$ENV_FILE"
 fi
 
-if [ -z "$CH_PW" ] || [ "$CH_PW" = "CHANGE_ME_TO_STRONG_RANDOM_PASSWORD" ]; then
+if is_unset_or_placeholder "$CH_PW"; then
     log "Generating cryptographically secure password for ClickHouse..."
     CH_PW=$(openssl rand -hex 32)
     sed -i "s|^CLICKHOUSE_PASSWORD=.*|CLICKHOUSE_PASSWORD=${CH_PW}|" "$ENV_FILE"
+fi
+
+if is_unset_or_placeholder "$INTERNAL_KEY"; then
+    log "Generating secure internal service-to-service alert trigger key..."
+    # Shared secret used by the ml-engine container to authenticate its
+    # POST /alerts/trigger calls to the backend — must be identical for
+    # both containers, which is guaranteed since both read it from this
+    # same .env file via docker-compose.
+    INTERNAL_KEY=$(openssl rand -hex 32)
+    if grep -q "^INTERNAL_ALERT_TRIGGER_KEY=" "$ENV_FILE"; then
+        sed -i "s|^INTERNAL_ALERT_TRIGGER_KEY=.*|INTERNAL_ALERT_TRIGGER_KEY=${INTERNAL_KEY}|" "$ENV_FILE"
+    else
+        echo "INTERNAL_ALERT_TRIGGER_KEY=${INTERNAL_KEY}" >> "$ENV_FILE"
+    fi
 fi
 
 
@@ -264,16 +405,20 @@ if [ -z "$CORS_ORIGINS" ]; then
     
     if [ -n "$PROD_DOMAIN" ]; then
         # Production deployment with custom domain
-        CORS_ORIGINS="https://${PROD_DOMAIN},http://${PROD_DOMAIN},https://${PROD_DOMAIN}:3020,http://${PROD_DOMAIN}:3020"
+        CORS_ORIGINS="https://${PROD_DOMAIN},http://${PROD_DOMAIN},https://${PROD_DOMAIN}:${DASHBOARD_PORT},http://${PROD_DOMAIN}:${DASHBOARD_PORT}"
         log "Production CORS configured for: $PROD_DOMAIN"
     else
         # Local development deployment
-        CORS_ORIGINS="http://localhost:3020,http://127.0.0.1:3020,https://localhost,https://127.0.0.1"
+        CORS_ORIGINS="http://localhost:${DASHBOARD_PORT},http://127.0.0.1:${DASHBOARD_PORT},https://localhost,https://127.0.0.1"
         log "Development CORS configured for localhost"
     fi
     
     sed -i "s|^BACKEND_CORS_ORIGINS=.*|BACKEND_CORS_ORIGINS=${CORS_ORIGINS}|" "$ENV_FILE"
     success "CORS origins saved to $ENV_FILE"
+else
+    # Update existing CORS_ORIGINS to ensure the correct dashboard port is configured
+    CORS_ORIGINS=$(echo "$CORS_ORIGINS" | sed -E "s/:(3020|3001|[0-9]+)\b/:${DASHBOARD_PORT}/g")
+    sed -i "s|^BACKEND_CORS_ORIGINS=.*|BACKEND_CORS_ORIGINS=${CORS_ORIGINS}|" "$ENV_FILE"
 fi
 
 success "Environment variables generated and saved in $ENV_FILE"
@@ -391,13 +536,14 @@ if [ ! -f "$GEOIP_FILE" ]; then
     if [ -n "$LICENSE_KEY" ]; then
         log "Downloading GeoLite2-Country database from MaxMind API..."
         TEMP_TAR="/tmp/geoip.tar.gz"
-        if wget -qO "$TEMP_TAR" "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${LICENSE_KEY}&suffix=tar.gz"; then
-            tar -xzf "$TEMP_TAR" -C /tmp
-            mv /tmp/GeoLite2-Country_*/GeoLite2-Country.mmdb "$GEOIP_FILE"
+        if wget -qO "$TEMP_TAR" "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${LICENSE_KEY}&suffix=tar.gz" \
+            && tar -xzf "$TEMP_TAR" -C /tmp \
+            && mv /tmp/GeoLite2-Country_*/GeoLite2-Country.mmdb "$GEOIP_FILE"; then
             rm -f "$TEMP_TAR"
             success "MaxMind GeoIP Country Database downloaded successfully."
         else
             warn "MaxMind download failed. Attempting fallback mirror..."
+            rm -f "$TEMP_TAR"
             LICENSE_KEY=""
         fi
     fi
@@ -563,22 +709,22 @@ if command -v ufw &>/dev/null; then
     UFW_STATUS=$(sudo ufw status 2>/dev/null | head -1 || echo "inactive")
     if echo "$UFW_STATUS" | grep -qi "active"; then
         log "  UFW firewall is active. Opening required ports..."
-        sudo ufw allow 80/tcp   &>/dev/null && success "  Port 80  (HTTP)       — opened" || warn "  Failed to open port 80"
-        sudo ufw allow 443/tcp  &>/dev/null && success "  Port 443 (HTTPS)      — opened" || warn "  Failed to open port 443"
-        sudo ufw allow 3020/tcp &>/dev/null && success "  Port 3020 (Dashboard) — opened" || warn "  Failed to open port 3020"
+        sudo ufw allow ${HTTP_PORT}/tcp   &>/dev/null && success "  Port ${HTTP_PORT}  (HTTP)       — opened" || warn "  Failed to open port ${HTTP_PORT}"
+        sudo ufw allow ${HTTPS_PORT}/tcp  &>/dev/null && success "  Port ${HTTPS_PORT} (HTTPS)      — opened" || warn "  Failed to open port ${HTTPS_PORT}"
+        sudo ufw allow ${DASHBOARD_PORT}/tcp &>/dev/null && success "  Port ${DASHBOARD_PORT} (Dashboard) — opened" || warn "  Failed to open port ${DASHBOARD_PORT}"
         sudo ufw reload &>/dev/null || true
     else
         warn "  UFW is installed but inactive. No firewall rules changed."
-        warn "  If you enable UFW later, manually run: sudo ufw allow 80,443,3020/tcp"
+        warn "  If you enable UFW later, manually run: sudo ufw allow ${HTTP_PORT},${HTTPS_PORT},${DASHBOARD_PORT}/tcp"
     fi
 elif command -v firewall-cmd &>/dev/null; then
     log "  firewalld detected. Opening required ports..."
-    sudo firewall-cmd --permanent --add-port=80/tcp   &>/dev/null && success "  Port 80 opened" || warn "  Failed to open port 80"
-    sudo firewall-cmd --permanent --add-port=443/tcp  &>/dev/null && success "  Port 443 opened" || warn "  Failed to open port 443"
-    sudo firewall-cmd --permanent --add-port=3020/tcp &>/dev/null && success "  Port 3020 opened" || warn "  Failed to open port 3020"
+    sudo firewall-cmd --permanent --add-port=${HTTP_PORT}/tcp   &>/dev/null && success "  Port ${HTTP_PORT} opened" || warn "  Failed to open port ${HTTP_PORT}"
+    sudo firewall-cmd --permanent --add-port=${HTTPS_PORT}/tcp  &>/dev/null && success "  Port ${HTTPS_PORT} opened" || warn "  Failed to open port ${HTTPS_PORT}"
+    sudo firewall-cmd --permanent --add-port=${DASHBOARD_PORT}/tcp &>/dev/null && success "  Port ${DASHBOARD_PORT} opened" || warn "  Failed to open port ${DASHBOARD_PORT}"
     sudo firewall-cmd --reload &>/dev/null || true
 else
-    warn "  No known firewall manager (ufw/firewalld) found. Ensure ports 80, 443, 3020 are open manually."
+    warn "  No known firewall manager (ufw/firewalld) found. Ensure ports ${HTTP_PORT}, ${HTTPS_PORT}, ${DASHBOARD_PORT} are open manually."
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -603,11 +749,11 @@ EOF
 sudo chmod 666 configs/nginx/conf.d/waf_ddos.conf configs/nginx/conf.d/waf_hardening.conf
 
 # Run compose build and up
-sudo $COMPOSE_CMD build
-sudo $COMPOSE_CMD up -d
+sudo $COMPOSE_CMD build || error "Docker Compose build failed. Check the output above for details."
+sudo $COMPOSE_CMD up -d || error "Failed to start containers. Check the output above, then run: sudo docker compose logs -f"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 7: Post-Boot Database and Credential Sync
+# Step 8: Post-Boot Database and Credential Sync
 # ─────────────────────────────────────────────────────────────────────────────
 log "Applying credentials to the WAF database..."
 
@@ -630,8 +776,18 @@ fi
 
 # Set passwords inside settings.json by executing an inline python command inside the running backend container
 # This completely avoids installing bcrypt or other libraries on the host system
-sudo docker exec -t waf-backend python3 -c "
+#
+# Credentials are passed via `docker exec -e` (process environment) rather than
+# interpolated into the Python source string, so passwords containing quotes,
+# backslashes, or other shell/Python-special characters can't break out of the
+# literal or inject code.
+sudo docker exec -t \
+    -e SETUP_ADMIN_PASS="${ADMIN_PASS}" \
+    -e SETUP_ANALYST_PASS="${ANALYST_PASS}" \
+    -e SETUP_ABUSEIPDB_KEY="${ABUSEIPDB_KEY}" \
+    waf-backend python3 -c "
 import json
+import os
 import bcrypt
 
 path = '/app/app/config/settings.json'
@@ -640,15 +796,15 @@ try:
         data = json.load(f)
 
     # Hash admin password
-    admin_hash = bcrypt.hashpw(b'${ADMIN_PASS}', bcrypt.gensalt()).decode('utf-8')
+    admin_hash = bcrypt.hashpw(os.environb[b'SETUP_ADMIN_PASS'], bcrypt.gensalt()).decode('utf-8')
     data['auth']['password_hash'] = admin_hash
 
     # Hash analyst password
-    analyst_hash = bcrypt.hashpw(b'${ANALYST_PASS}', bcrypt.gensalt()).decode('utf-8')
+    analyst_hash = bcrypt.hashpw(os.environb[b'SETUP_ANALYST_PASS'], bcrypt.gensalt()).decode('utf-8')
     data['auth']['analyst_password_hash'] = analyst_hash
 
     # Save AbuseIPDB key if specified during setup
-    abuse_key = '${ABUSEIPDB_KEY}'.strip()
+    abuse_key = os.environ.get('SETUP_ABUSEIPDB_KEY', '').strip()
     if abuse_key:
         if 'abuseipdb' not in data:
             data['abuseipdb'] = {}
@@ -670,7 +826,6 @@ sudo docker exec waf-backend python3 /app/scripts/migrate_sqlite_to_clickhouse.p
     --ch-password "${CH_PW}" \
     --ch-db cybersentinel || warn "ClickHouse database migration failed to run automatically."
 
-
 # ── SMTP Alert Channel Seeding ────────────────────────────────────────────────
 # If SMTP was configured interactively, register it as an alert channel via the
 # backend API so it appears in the dashboard immediately after install.
@@ -678,35 +833,41 @@ if [ -n "${SMTP_HOST:-}" ] && [ -n "${SMTP_TO:-}" ]; then
     log "Registering SMTP email alert channel in the WAF alert system..."
     sleep 2  # brief pause to ensure API is fully ready
 
-    # Obtain a session cookie from the login endpoint
+    # Obtain a session cookie from the login endpoint. --data-urlencode ensures
+    # special characters in the password can't corrupt the form body.
     LOGIN_RESP=$(curl -sc /tmp/waf_setup.cookies -s -X POST \
-        "http://localhost:3020/api/auth/login" \
-        -d "username=admin&password=${ADMIN_PASS}" 2>/dev/null || echo "")
+        "http://localhost:${DASHBOARD_PORT}/api/auth/login" \
+        --data-urlencode "username=admin" \
+        --data-urlencode "password=${ADMIN_PASS}" 2>/dev/null || echo "")
 
     if echo "$LOGIN_RESP" | grep -q "successful"; then
         XSRF_TOKEN=$(grep XSRF /tmp/waf_setup.cookies 2>/dev/null | awk '{print $7}' || echo "")
-        CHANNEL_PAYLOAD=$(cat <<PAYLOAD
-{
-  "name": "Setup Email Alerts",
-  "channel_type": "email",
-  "enabled": true,
-  "config": {
-    "smtp_host": "${SMTP_HOST}",
-    "smtp_port": ${SMTP_PORT},
-    "username": "${SMTP_USERNAME}",
-    "password": "${SMTP_PASSWORD}",
-    "from_addr": "${SMTP_FROM}",
-    "to_addrs": ["${SMTP_TO}"],
-    "use_tls": true,
-    "use_ssl": false
-  }
-}
-PAYLOAD
-)
+        # Built with python3's json.dumps (via env vars, not string interpolation)
+        # so special characters (quotes, backslashes) in any SMTP field can't
+        # corrupt or inject into the JSON payload.
+        CHANNEL_PAYLOAD=$(SMTP_HOST="$SMTP_HOST" SMTP_PORT="$SMTP_PORT" SMTP_USERNAME="$SMTP_USERNAME" \
+            SMTP_PASSWORD="$SMTP_PASSWORD" SMTP_FROM="$SMTP_FROM" SMTP_TO="$SMTP_TO" python3 -c "
+import json, os
+print(json.dumps({
+    'name': 'Setup Email Alerts',
+    'channel_type': 'email',
+    'enabled': True,
+    'config': {
+        'smtp_host': os.environ['SMTP_HOST'],
+        'smtp_port': int(os.environ['SMTP_PORT']),
+        'username': os.environ['SMTP_USERNAME'],
+        'password': os.environ['SMTP_PASSWORD'],
+        'from_addr': os.environ['SMTP_FROM'],
+        'to_addrs': [os.environ['SMTP_TO']],
+        'use_tls': True,
+        'use_ssl': False,
+    },
+}))
+")
         CREATE_RESP=$(curl -s -b /tmp/waf_setup.cookies \
             -H "Content-Type: application/json" \
             -H "X-XSRF-TOKEN: ${XSRF_TOKEN}" \
-            -X POST "http://localhost:3020/api/alerts/channels" \
+            -X POST "http://localhost:${DASHBOARD_PORT}/api/alerts/channels" \
             -d "$CHANNEL_PAYLOAD" 2>/dev/null || echo "")
         
         if echo "$CREATE_RESP" | grep -q "\"id\""; then
@@ -721,7 +882,7 @@ PAYLOAD
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 8: Health Verification Loop
+# Step 9: Health Verification Loop
 # ─────────────────────────────────────────────────────────────────────────────
 log "Verifying health check endpoints..."
 
@@ -730,7 +891,7 @@ RETRY_COUNT=0
 HEALTHY=false
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://localhost:3020/api/health || echo "000")
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://localhost:${DASHBOARD_PORT}/api/health" || echo "000")
     if [ "$HTTP_CODE" = "200" ]; then
         HEALTHY=true
         break
@@ -741,7 +902,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ "$HEALTHY" = "true" ]; then
-    success "WAF Dashboard API is HEALTHY and listening on port 3020!"
+    success "WAF Dashboard API is HEALTHY and listening on port ${DASHBOARD_PORT}!"
 else
     warn "Health checks are slow. Check logs manually using: sudo docker compose logs -f"
 fi
@@ -759,21 +920,20 @@ echo -e "${GREEN}===============================================================
 echo -e "${GREEN}             CYBERSENTINEL WAF DEPLOYMENT COMPLETE!                     ${NC}"
 echo -e "${GREEN}=======================================================================${NC}"
 echo ""
-echo -e "  🚀 ${BLUE}WAF Dashboard URL:${NC} http://${SERVER_IP}:3020/"
-echo -e "  📊 ${BLUE}ClickHouse Play Console:${NC} http://localhost:8123/play"
+echo -e "  🚀 ${BLUE}WAF Dashboard URL:${NC} http://${SERVER_IP}:${DASHBOARD_PORT}/"
+echo -e "  📊 ${BLUE}ClickHouse Play Console:${NC} http://localhost:${CLICKHOUSE_HOST_PORT}/play"
 echo -e "     - ${YELLOW}Note:${NC} To connect, open an SSH Tunnel from your local terminal:"
-echo -e "       ${CYAN}ssh -L 8123:127.0.0.1:8123 soc@${SERVER_IP}${NC}"
+echo -e "       ${CYAN}ssh -L ${CLICKHOUSE_HOST_PORT}:127.0.0.1:${CLICKHOUSE_HOST_PORT} soc@${SERVER_IP}${NC}"
 echo -e "  🔐 ${BLUE}Credentials:${NC}"
 echo -e "     - ${GREEN}Administrator:${NC} admin  /  (your custom password)"
 echo -e "     - ${GREEN}Security Analyst:${NC} analyst  /  (your custom password)"
 echo -e "     - ${GREEN}ClickHouse Database:${NC} Username: (custom username, default: wafuser) / Password: (check your .env file)"
 echo ""
 echo -e "  🌐 ${BLUE}Port Mapping Structure:${NC}"
-echo -e "     - ${CYAN}Port 3020${NC} : Direct Administrative Dashboard Access (WAF-Inspected)"
-echo -e "     - ${CYAN}Port 80  ${NC} : HTTP Redirector (Redirects traffic to HTTPS 443)"
-echo -e "     - ${CYAN}Port 443 ${NC} : HTTPS WAF Interception Gateway proxying to your apps"
-echo -e "     - ${CYAN}Port 8123${NC} : ClickHouse HTTP Interface (Bound to 127.0.0.1 for security)"
-
+echo -e "     - ${CYAN}Port ${DASHBOARD_PORT}${NC} : Direct Administrative Dashboard Access (WAF-Inspected)"
+echo -e "     - ${CYAN}Port ${HTTP_PORT}  ${NC} : HTTP Redirector (Redirects traffic to HTTPS ${HTTPS_PORT})"
+echo -e "     - ${CYAN}Port ${HTTPS_PORT} ${NC} : HTTPS WAF Interception Gateway proxying to your apps"
+echo -e "     - ${CYAN}Port ${CLICKHOUSE_HOST_PORT}${NC} : ClickHouse HTTP Interface (Bound to 127.0.0.1 for security)"
 echo ""
 echo -e "  📁 ${BLUE}Configuration Paths:${NC}"
 echo -e "     - ${CYAN}Nginx Main Configs:${NC}   ./configs/nginx/"

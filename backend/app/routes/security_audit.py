@@ -8,6 +8,7 @@ from typing import Optional, List
 from datetime import datetime, timezone
 
 from app.utils.security import security_audit_logger, SecurityAuditLogger
+from app.services.auth import require_any_role, TokenData
 
 router = APIRouter()
 
@@ -47,7 +48,8 @@ async def get_security_events(
     hours: int = 24,
     limit: int = 100,
     page: int = 1,
-    page_size: int = 50
+    page_size: int = 50,
+    current_user: TokenData = Depends(require_any_role)
 ):
     """
     Get recent security audit events with pagination.
@@ -90,7 +92,8 @@ async def get_security_events(
 async def get_auth_events(
     request: Request,
     hours: int = 24,
-    success: Optional[bool] = None
+    success: Optional[bool] = None,
+    current_user: TokenData = Depends(require_any_role)
 ):
     """
     Get authentication-related security events.
@@ -121,7 +124,8 @@ async def get_auth_events(
 @router.get("/events/rate-limits", response_model=AuthEventsResponse)
 async def get_rate_limit_events(
     request: Request,
-    hours: int = 24
+    hours: int = 24,
+    current_user: TokenData = Depends(require_any_role)
 ):
     """
     Get rate limit trigger events.
@@ -146,7 +150,8 @@ async def get_rate_limit_events(
 async def get_input_validation_events(
     request: Request,
     hours: int = 24,
-    violation_type: Optional[str] = None
+    violation_type: Optional[str] = None,
+    current_user: TokenData = Depends(require_any_role)
 ):
     """
     Get input validation failure events.
@@ -177,7 +182,8 @@ async def get_input_validation_events(
 @router.get("/statistics")
 async def get_security_statistics(
     request: Request,
-    hours: int = 24
+    hours: int = 24,
+    current_user: TokenData = Depends(require_any_role)
 ):
     """
     Get security statistics summary for the specified time window.
@@ -228,7 +234,8 @@ async def get_security_statistics(
 async def get_ip_security_profile(
     ip_address: str,
     request: Request,
-    hours: int = 24
+    hours: int = 24,
+    current_user: TokenData = Depends(require_any_role)
 ):
     """
     Get all security events for a specific IP address.

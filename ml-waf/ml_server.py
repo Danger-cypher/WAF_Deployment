@@ -587,7 +587,8 @@ def send_backend_alert(event_type: str, event_data: dict, message: str = None):
             "event_data": event_data,
             "message": message
         }
-        res = requests.post(url, json=payload, timeout=5)
+        headers = {"X-Internal-Key": os.environ.get("INTERNAL_ALERT_TRIGGER_KEY", "")}
+        res = requests.post(url, json=payload, headers=headers, timeout=5)
         if res.status_code != 200:
             logger.warning(f"Backend alerts trigger failed: HTTP {res.status_code} - {res.text}")
         else:

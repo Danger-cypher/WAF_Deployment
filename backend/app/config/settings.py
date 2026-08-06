@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
+    # Shared secret used by internal service-to-service callers (e.g. the
+    # waf-ml container hitting POST /alerts/trigger). Not a user credential.
+    INTERNAL_ALERT_TRIGGER_KEY: str = ""
+
     # ClickHouse — Log Storage
     CLICKHOUSE_HOST: str = "waf-clickhouse"
     CLICKHOUSE_PORT: int = 8123
@@ -94,3 +98,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 settings.JWT_SECRET_KEY = settings.get_secret()
+
+if not settings.INTERNAL_ALERT_TRIGGER_KEY:
+    logging.warning(
+        "INTERNAL_ALERT_TRIGGER_KEY not set. Generating an ephemeral key for "
+        "this process — the waf-ml container's alert triggers will fail to "
+        "authenticate until it is also given this value (restart required). "
+        "Set INTERNAL_ALERT_TRIGGER_KEY in .env to fix this permanently."
+    )
+    settings.INTERNAL_ALERT_TRIGGER_KEY = secrets.token_hex(32)

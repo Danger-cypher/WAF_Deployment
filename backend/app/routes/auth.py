@@ -66,7 +66,11 @@ async def login_for_access_token(
             success=False,
             details={"reason": "Invalid username"}
         )
-        rate_limiter.record_success(client_ip)
+        # NOTE: do NOT call record_success() here - it deletes the escalating
+        # block counter that check_rate_limit()/_increment_failure() set for
+        # this IP, which would let an attacker reset their own lockout by
+        # simply failing again. Failure accounting for the sliding window is
+        # already handled inside check_rate_limit() on every request.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"
@@ -80,7 +84,7 @@ async def login_for_access_token(
             success=False,
             details={"reason": "Invalid password"}
         )
-        rate_limiter.record_success(client_ip)
+        # See note above: must not reset the rate-limit block state on failure.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"

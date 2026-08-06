@@ -372,26 +372,32 @@ def _run_nginx_reload() -> Tuple[bool, str]:
         ) # nosec B603 B607
         return True, "NGINX configuration validated and reloaded successfully."
     except PermissionError as e:
-        logger.warning(f"Reload permission denied: {e}. Running in simulation mode.")
-        return True, "WAF states reloaded successfully (Simulation Mode)."
+        logger.error(f"Reload permission denied: {e}. Neither Docker exec nor host reload succeeded.")
+        return False, (
+            "NGINX reload failed: no working reload path available "
+            f"(Docker exec unavailable, host reload permission denied: {e})."
+        )
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr or e.stdout or str(e)
         if (
             "sudo: a password is required" in err_msg.lower()
             or "permission denied" in err_msg.lower()
         ):
-            logger.warning(
-                f"Reload permission denied (sudo password required). Running in simulation mode. Error: {err_msg}"
+            logger.error(
+                f"Reload permission denied (sudo password required) and Docker exec unavailable. Error: {err_msg}"
             )
-            return True, "WAF states reloaded successfully (Simulation Mode)."
+            return False, (
+                "NGINX reload failed: no working reload path available "
+                f"(Docker exec unavailable, host reload requires a password: {err_msg})."
+            )
         logger.error(f"NGINX validation failed: {err_msg}")
         return (
             False,
             f"NGINX reload aborted: configuration validation failed: {err_msg}",
         )
     except Exception as e:
-        logger.debug(f"Subprocess reload not available: {e}. Simulating reload.")
-        return True, "WAF states reloaded successfully (Simulation Mode)."
+        logger.error(f"Subprocess reload not available: {e}. No reload was performed.")
+        return False, f"NGINX reload failed: no working reload path available ({e})."
 
 
 def _update_modsecurity_override_file(

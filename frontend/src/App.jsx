@@ -5426,7 +5426,7 @@ function AlertsIntegrations({ userRole }) {
                     <select className="settings-input" style={{ width: '100%' }} value={channelForm.channel_type} onChange={(e) => {
                       const newType = e.target.value;
                       let defaultCfg = {};
-                      if (newType === 'email') defaultCfg = { smtp_host: "smtp.office365.com", smtp_port: 587, username: "darshan.butle@vginfotech.ai", password: "YOUR_PASSWORD_HERE", from_addr: "darshan.butle@vginfotech.ai", to_addrs: ["darshan.butle@vginfotech.ai"], use_tls: true, use_ssl: false };
+                      if (newType === 'email') defaultCfg = { smtp_host: "smtp.office365.com", smtp_port: 587, username: "alerts@yourcompany.com", password: "YOUR_PASSWORD_HERE", from_addr: "alerts@yourcompany.com", to_addrs: ["soc@yourcompany.com"], use_tls: true, use_ssl: false };
                       else if (newType === 'slack') defaultCfg = { webhook_url: "https://hooks.slack.com/services/..." };
                       else defaultCfg = { url: "https://company.api/events", method: "POST", headers: {} };
                       setChannelForm({ ...channelForm, channel_type: newType, config: defaultCfg });
@@ -5444,7 +5444,7 @@ function AlertsIntegrations({ userRole }) {
                     className="settings-input" 
                     required 
                     style={{ minHeight: '140px', fontSize: '11px', fontFamily: 'monospace' }} 
-                    defaultValue={Object.keys(channelForm.config).length > 0 ? JSON.stringify(channelForm.config, null, 2) : (channelForm.channel_type === 'slack' ? '{\n  "webhook_url": "https://hooks.slack.com/services/..."\n}' : channelForm.channel_type === 'email' ? '{\n  "smtp_host": "smtp.office365.com",\n  "smtp_port": 587,\n  "username": "darshan.butle@vginfotech.ai",\n  "password": "YOUR_PASSWORD_HERE",\n  "from_addr": "darshan.butle@vginfotech.ai",\n  "to_addrs": ["darshan.butle@vginfotech.ai"],\n  "use_tls": true,\n  "use_ssl": false\n}' : '{\n  "url": "https://company.api/events",\n  "method": "POST",\n  "headers": {}\n}')} 
+                    defaultValue={Object.keys(channelForm.config).length > 0 ? JSON.stringify(channelForm.config, null, 2) : (channelForm.channel_type === 'slack' ? '{\n  "webhook_url": "https://hooks.slack.com/services/..."\n}' : channelForm.channel_type === 'email' ? '{\n  "smtp_host": "smtp.office365.com",\n  "smtp_port": 587,\n  "username": "alerts@yourcompany.com",\n  "password": "YOUR_PASSWORD_HERE",\n  "from_addr": "alerts@yourcompany.com",\n  "to_addrs": ["soc@yourcompany.com"],\n  "use_tls": true,\n  "use_ssl": false\n}' : '{\n  "url": "https://company.api/events",\n  "method": "POST",\n  "headers": {}\n}')} 
                     onChange={(e) => {
                       try {
                         const cfg = JSON.parse(e.target.value);

@@ -33,6 +33,7 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      INTERNAL_ALERT_TRIGGER_KEY: ${INTERNAL_ALERT_TRIGGER_KEY}
       CLICKHOUSE_HOST: waf-clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
@@ -84,6 +85,7 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      INTERNAL_ALERT_TRIGGER_KEY: ${INTERNAL_ALERT_TRIGGER_KEY}
 
     depends_on:
       redis:
@@ -110,7 +112,7 @@ services:
     container_name: waf-clickhouse
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:${CLICKHOUSE_HOST_PORT:-8123}:8123"
     expose:
       - "8123"   # HTTP interface (clickhouse-connect)
       - "9000"   # Native TCP interface
@@ -179,11 +181,11 @@ services:
     restart: unless-stopped
     ports:
       # Port 3020 — direct WAF Dashboard access (HTTP, WAF-inspected)
-      - "3020:3020"
+      - "${DASHBOARD_PORT:-3020}:3020"
       # Port 80 — intercepts all plain HTTP, redirects to HTTPS 443
-      - "80:80"
+      - "${HTTP_PORT:-80}:80"
       # Port 443 — HTTPS WAF gateway (TLS + ModSecurity + ML-WAF)
-      - "443:443"
+      - "${HTTPS_PORT:-443}:443"
     volumes:
       # Custom Nginx configurations mapped to internal config paths
       - ./configs/nginx:/etc/nginx

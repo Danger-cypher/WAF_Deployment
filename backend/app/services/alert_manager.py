@@ -160,8 +160,7 @@ class AlertManager:
                 "client_ip": event_data.get("client_ip") or event_data.get("remote_addr") or "",
                 "uri": event_data.get("uri") or ""
             }
-            sig_str = json.dumps(sig_source, sort_keys=True)
-            event_signature = hashlib = AlertDatabaseService.generate_event_signature(sig_source)
+            event_signature = AlertDatabaseService.generate_event_signature(sig_source)
 
             # 5. Check throttling
             is_throttled = self.db.should_throttle_alert(rule_id, event_signature, throttle_minutes)
