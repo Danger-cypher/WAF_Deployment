@@ -86,6 +86,10 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
       INTERNAL_ALERT_TRIGGER_KEY: ${INTERNAL_ALERT_TRIGGER_KEY}
+      # How often (hours) the in-process drift monitor checks the last 24h
+      # of ML telemetry and auto-triggers a retrain if thresholds are
+      # breached. Optional — defaults to 6 in ml_server.py if unset.
+      DRIFT_CHECK_INTERVAL_HOURS: ${DRIFT_CHECK_INTERVAL_HOURS:-6}
 
     depends_on:
       redis:

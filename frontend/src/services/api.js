@@ -967,6 +967,20 @@ export async function getMLLogs(page = 1, size = 50, filters = {}) {
   }
 }
 
+export async function labelMLEvent(eventId, label) {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/events/${eventId}/label`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to label ML event ${eventId}:`, error);
+    throw error;
+  }
+}
+
 export async function getMLTimeline() {
   try {
     const response = await fetch(`${BASE_URL}/ml/timeline`, { cache: 'no-store' });
@@ -1030,6 +1044,16 @@ export async function rollbackMLModel(timestamp) {
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to rollback ML model:", error);
+    throw error;
+  }
+}
+
+export async function getMLDriftHistory() {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/drift-history`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch ML drift history:", error);
     throw error;
   }
 }
@@ -1254,12 +1278,12 @@ export async function getAlertHistory(limit = 100, offset = 0, filters = {}) {
   }
 }
 
-export async function acknowledgeAlert(alertId, username) {
+export async function acknowledgeAlert(alertId) {
+  // Who acknowledged it is derived server-side from the authenticated
+  // session, not sent by the client.
   try {
     const response = await fetch(`${BASE_URL}/alerts/history/${alertId}/acknowledge`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ acknowledged_by: username })
     });
     return await handleResponse(response);
   } catch (error) {
@@ -1300,6 +1324,206 @@ export async function saveCustomRules(rules_content) {
     console.error("Failed to save custom rules:", error);
     throw error;
   }
+}
+
+// ============================================================================
+// User Management (Admin > Users) & Self-Service Profile
+// ============================================================================
+
+export async function listUsers() {
+  try {
+    const response = await fetch(`${BASE_URL}/users`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch users:", error);
+    throw error;
+  }
+}
+
+export async function createUser(user) {
+  try {
+    const response = await fetch(`${BASE_URL}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(user)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to create user:", error);
+    throw error;
+  }
+}
+
+export async function updateUser(userId, updates) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/${userId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to update user:", error);
+    throw error;
+  }
+}
+
+export async function resetUserPassword(userId, newPassword) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/${userId}/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_password: newPassword })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to reset user password:", error);
+    throw error;
+  }
+}
+
+export async function deleteUser(userId) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/${userId}`, { method: 'DELETE' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to delete user:", error);
+    throw error;
+  }
+}
+
+export async function getMyProfile() {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/profile`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch profile:", error);
+    throw error;
+  }
+}
+
+export async function updateMyProfile(updates) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to update profile:", error);
+    throw error;
+  }
+}
+
+export async function changeMyPassword(currentPassword, newPassword) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to change password:", error);
+    throw error;
+  }
+}
+
+export async function getMyNotificationPreferences() {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/notification-preferences`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch notification preferences:", error);
+    throw error;
+  }
+}
+
+export async function updateMyNotificationPreferences(prefs) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/notification-preferences`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prefs)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to update notification preferences:", error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// TOTP MFA (Two-Factor Authentication)
+// ============================================================================
+
+export async function getMyMfaStatus() {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/mfa/status`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch MFA status:", error);
+    throw error;
+  }
+}
+
+export async function setupMyMfa() {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/mfa/setup`, { method: 'POST' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to start MFA setup:", error);
+    throw error;
+  }
+}
+
+export async function confirmMyMfa(code) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/mfa/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to confirm MFA setup:", error);
+    throw error;
+  }
+}
+
+export async function disableMyMfa(currentPassword, code) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/mfa/disable`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: currentPassword, code })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to disable MFA:", error);
+    throw error;
+  }
+}
+
+export async function adminDisableUserMfa(userId) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/${userId}/mfa/disable`, { method: 'POST' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to force-disable user MFA:", error);
+    throw error;
+  }
+}
+
+/**
+ * Build the same-origin WebSocket URL for the live log/alert stream.
+ * Auth is via the session cookie, which browsers attach automatically
+ * to same-origin WS upgrade requests.
+ */
+export function getLiveStreamWsUrl() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws/logs/stream`;
 }
 
 // getSecurityStatistics is also available in ./security-api.js (canonical version).

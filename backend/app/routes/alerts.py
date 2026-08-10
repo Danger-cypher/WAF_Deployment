@@ -10,7 +10,6 @@ from app.models.alert_models import (
     AlertChannelCreate, AlertChannelUpdate, AlertChannel,
     AlertRuleCreate, AlertRuleUpdate, AlertRule,
     AlertHistory, AlertStats, TestAlertRequest, TestAlertResponse,
-    AlertHistoryAcknowledge
 )
 from app.services.alert_db_service import AlertDatabaseService
 from app.services.alert_manager import alert_manager
@@ -308,9 +307,11 @@ async def get_history(
 
 
 @router.post("/alerts/history/{alert_id}/acknowledge", response_model=Dict[str, Any])
-async def acknowledge_alert(alert_id: int, req: AlertHistoryAcknowledge, current_user: TokenData = Depends(require_any_role)):
+async def acknowledge_alert(alert_id: int, current_user: TokenData = Depends(require_any_role)):
     """Acknowledge a triggered alert (Any role)"""
-    success = db.acknowledge_alert(alert_id, req.acknowledged_by)
+    # acknowledged_by comes from the verified session, not client input,
+    # so the audit trail can't be spoofed by whatever the frontend sends.
+    success = db.acknowledge_alert(alert_id, current_user.username)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

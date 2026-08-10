@@ -339,21 +339,28 @@ async def update_anti_defacement_settings(
 
 
 # 4. Password Change Route
+# NOTE: kept at its original path for frontend backward-compatibility. It now
+# reads/writes through user_service (users.db) instead of settings.json, and
+# changes the currently logged-in user's own password (previously this only
+# ever touched the hardcoded "admin" record). Admin-issued resets for OTHER
+# accounts live in /users/{id}/reset-password (app/routes/users.py).
 @router.post("/settings/password")
 async def change_password(
     payload: PasswordChangeModel, current_user: TokenData = Depends(require_admin)
 ):
-    current_hash = settings_manager.get_password_hash()
-    if not verify_password(payload.currentPassword, current_hash):
+    from app.services.user_service import user_service
+
+    user = user_service.get_by_username(current_user.username)
+    if not user or not verify_password(payload.currentPassword, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect current password"
         )
-    if not payload.newPassword or len(payload.newPassword.strip()) < 4:
+    if not payload.newPassword or len(payload.newPassword.strip()) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must be at least 4 characters long",
+            detail="New password must be at least 8 characters long",
         )
-    settings_manager.update_password(payload.newPassword)
+    user_service.set_password(user["id"], payload.newPassword)
     return {"message": "Password updated successfully!"}
 
 # NOTE: System administrative actions (restart, reload-nginx, purge-cache, sync-signatures)

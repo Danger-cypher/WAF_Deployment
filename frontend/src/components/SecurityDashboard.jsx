@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { ShieldAlert, ShieldCheck, AlertTriangle, Clock, Users, Activity, Lock, Eye, EyeOff, Server, TerminalSquare, Shield, Zap, Brain, Globe } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, AlertTriangle, Users, Activity, Lock, Shield } from 'lucide-react';
 
 /* ─── Security Statistics Card ───────────────────────────── */
 function SecurityStatsCard({ title, value, subtext, icon: Icon, color }) {
@@ -150,10 +150,6 @@ export default function SecurityDashboard() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchSecurityData();
-  }, []);
-
   const fetchSecurityData = async () => {
     try {
       const [statsRes, eventsRes] = await Promise.all([
@@ -176,6 +172,10 @@ export default function SecurityDashboard() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchSecurityData();
+  }, []);
 
   return (
     <div className="security-dashboard">

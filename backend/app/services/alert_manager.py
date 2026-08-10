@@ -4,10 +4,11 @@ CyberSentinel WAF - Alerting Rule Evaluation Engine & Manager
 import logging
 import json
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.services.alert_db_service import AlertDatabaseService
 from app.services.alert_dispatcher import notification_dispatcher
+from app.websocket.connection_manager import manager as ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +203,7 @@ class AlertManager:
 
             if not channels_data:
                 logger.warning(f"No active notification channels configured for rule: {rule_name}")
-                self.db.create_alert_history(
+                new_id = self.db.create_alert_history(
                     rule_id=rule_id,
                     rule_name=rule_name,
                     event_type=event_type,
@@ -212,6 +213,10 @@ class AlertManager:
                     message=message,
                     status="sent",
                     error_message="No active notification channels configured."
+                )
+                await self._broadcast_new_alert(
+                    new_id, rule_id, rule_name, event_type, severity, [],
+                    event_data, message, "sent", "No active notification channels configured."
                 )
                 continue
 
@@ -236,7 +241,7 @@ class AlertManager:
                     status_str = "failed"
                 err_msg = "; ".join(error_msgs)
 
-            self.db.create_alert_history(
+            new_id = self.db.create_alert_history(
                 rule_id=rule_id,
                 rule_name=rule_name,
                 event_type=event_type,
@@ -247,6 +252,39 @@ class AlertManager:
                 status=status_str,
                 error_message=err_msg
             )
+            await self._broadcast_new_alert(
+                new_id, rule_id, rule_name, event_type, severity, channels_notified_names,
+                event_data, message, status_str, err_msg
+            )
+
+    async def _broadcast_new_alert(
+        self, alert_id: int, rule_id: int, rule_name: str, event_type: str, severity: str,
+        channels_notified: List[str], event_data: Dict[str, Any], message: str,
+        status: str, error_message: Optional[str],
+    ):
+        """Push a freshly-created (non-throttled) alert_history row to connected
+        dashboards over the WebSocket, so the notification bell updates live
+        instead of polling. Shape mirrors the AlertHistory REST model."""
+        if alert_id <= 0:
+            return
+        try:
+            await ws_manager.broadcast_alert({
+                "id": alert_id,
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "event_type": event_type,
+                "severity": severity,
+                "channels_notified": channels_notified,
+                "event_data": event_data,
+                "message": message,
+                "status": status,
+                "error_message": error_message,
+                "acknowledged_by": None,
+                "acknowledged_at": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as e:
+            logger.error(f"Failed to broadcast alert over websocket: {e}")
 
 
 # Global alert manager instance

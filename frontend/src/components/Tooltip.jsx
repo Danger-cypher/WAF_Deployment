@@ -10,8 +10,7 @@ const Tooltip = ({ text, children, position = 'top' }) => {
   useEffect(() => {
     if (isVisible && tooltipRef.current && triggerRef.current) {
       const tooltipRect = tooltipRef.current.getBoundingClientRect();
-      const triggerRect = triggerRef.current.getBoundingClientRect();
-      
+
       // Check if tooltip goes off screen and adjust position
       if (position === 'top' && tooltipRect.top < 0) {
         setActualPosition('bottom');

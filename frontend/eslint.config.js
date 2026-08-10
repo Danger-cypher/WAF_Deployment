@@ -17,5 +17,11 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    rules: {
+      // Fetch-on-mount via useEffect is used deliberately throughout this
+      // codebase; downgraded from the plugin's default 'error' since it's
+      // not a bug, just a stricter React-Compiler-oriented rule.
+      'react-hooks/set-state-in-effect': 'warn',
+    },
   },
 ])

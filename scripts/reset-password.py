@@ -4,8 +4,7 @@ CyberSentinel WAF - Password Reset Utility
 Securely generates bcrypt password hashes for admin/analyst accounts
 """
 import sys
-import json
-import os
+import sqlite3
 import getpass
 from pathlib import Path
 
@@ -38,23 +37,44 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
     return True, "Password meets requirements"
 
 
-def update_settings_file(settings_path: Path, role: str, password_hash: str):
-    """Update settings.json with new password hash"""
+def list_users(db_path: Path) -> list[tuple[int, str, str]]:
+    """Returns (id, username, role) for every account, or [] if the DB
+    doesn't exist yet (first-run — 'admin'/'analyst' get seeded lazily by
+    the backend on next startup, not by this script)."""
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(db_path)
     try:
-        with open(settings_path, 'r') as f:
-            settings = json.load(f)
-        
-        if role == 'admin':
-            settings['auth']['password_hash'] = password_hash
-        elif role == 'analyst':
-            settings['auth']['analyst_password_hash'] = password_hash
-        
-        with open(settings_path, 'w') as f:
-            json.dump(settings, f, indent=2)
-        
-        return True
+        cur = conn.cursor()
+        cur.execute("SELECT id, username, role FROM users ORDER BY id ASC")
+        return cur.fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+
+def update_users_db(db_path: Path, username: str, password_hash: str) -> bool:
+    """Reset the given account's password hash directly in users.db — the
+    source of truth for login since the Admin > Users panel was introduced.
+    Also bumps session_version so any existing session for this account is
+    invalidated immediately (see backend/app/services/auth.py:decode_token),
+    matching what an admin-issued reset via the API does."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET password_hash = ?, enabled = 1, "
+            "session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP "
+            "WHERE username = ?",
+            (password_hash, username),
+        )
+        conn.commit()
+        updated = cur.rowcount > 0
+        conn.close()
+        return updated
     except Exception as e:
-        print(f"Error updating settings file: {e}")
+        print(f"Error updating users database: {e}")
         return False
 
 
@@ -64,39 +84,38 @@ def main():
     print("=" * 70)
     print()
     
-    # Locate settings.json
+    # Locate users.db (created automatically the first time the backend starts)
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
-    settings_path = project_root / "backend" / "app" / "config" / "settings.json"
-    
-    if not settings_path.exists():
-        print(f"Error: settings.json not found at {settings_path}")
-        print("Please ensure you're running this from the project scripts directory.")
+    db_path = project_root / "backend" / "app" / "data" / "users.db"
+
+    print(f"Users database: {db_path}")
+    print()
+
+    users = list_users(db_path)
+    if not users:
+        print("No users.db found yet (or it has no accounts). Start the backend once")
+        print("first — it seeds the legacy 'admin'/'analyst' accounts on first run —")
+        print("then re-run this script.")
         sys.exit(1)
-    
-    print(f"Settings file: {settings_path}")
+
+    # Select account — usernames are no longer just 'admin'/'analyst';
+    # the Admin > Users panel supports arbitrary accounts and multiple admins.
+    print("Accounts:")
+    for user_id, username, role in users:
+        print(f"  {user_id}. {username} ({role})")
     print()
-    
-    # Select role
-    print("Select role to reset:")
-    print("  1. Admin (full system access)")
-    print("  2. Analyst (read-only access)")
-    print()
-    
-    choice = input("Enter choice (1 or 2): ").strip()
-    
-    if choice == '1':
-        role = 'admin'
-        role_name = 'Admin'
-    elif choice == '2':
-        role = 'analyst'
-        role_name = 'Analyst'
-    else:
+
+    choice = input("Enter the number of the account to reset: ").strip()
+    selected = next((u for u in users if str(u[0]) == choice), None)
+    if selected is None:
         print("Invalid choice. Exiting.")
         sys.exit(1)
-    
+    _, username, role = selected
+    role_name = role.capitalize()
+
     print()
-    print(f"Resetting password for: {role_name}")
+    print(f"Resetting password for: {username} ({role_name})")
     print()
     print("Password Requirements:")
     print("  • Minimum 12 characters")
@@ -129,21 +148,19 @@ def main():
     print("Generating bcrypt hash...")
     password_hash = generate_password_hash(password)
     
-    # Update settings file
-    print(f"Updating {settings_path}...")
-    if update_settings_file(settings_path, role, password_hash):
+    # Update users database
+    print(f"Updating {db_path}...")
+    if update_users_db(db_path, username, password_hash):
         print()
         print("=" * 70)
-        print(f"✅ SUCCESS: {role_name} password has been reset!")
+        print(f"✅ SUCCESS: password for '{username}' has been reset!")
         print("=" * 70)
         print()
-        print("Next steps:")
-        print("  1. Restart the backend container: docker compose restart backend")
-        print("  2. Log in with the new password via the dashboard")
+        print("No backend restart needed — log in with the new password now.")
         print()
     else:
         print()
-        print("❌ Failed to update settings file")
+        print("❌ Failed to update users database")
         sys.exit(1)
 
 

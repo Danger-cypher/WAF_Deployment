@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Lock, Activity, Eye, EyeOff, Server, ShieldCheck, LayoutDashboard, TerminalSquare, Shield, Zap, Brain, Globe } from 'lucide-react';
+import { Lock, Activity, Eye, EyeOff, Server, ShieldCheck, Zap, Brain, Globe } from 'lucide-react';
 
 /* ─── Animated Particle Network Canvas ──────────────────── */
 function ParticleCanvas() {
@@ -200,15 +200,53 @@ const Login = ({ setAuth, onLoginSuccess }) => {
   const [showMfa, setShowMfa] = useState(false);
   const [otpCode, setOtpCode] = useState('');
 
+  const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
+
+  const completeLogin = async () => {
+    // Auth cookie is now set. Immediately fetch the user profile so we
+    // can pass the role to the parent before it renders — this prevents
+    // the Settings tab from being absent on first login.
+    let user = { role: 'analyst', username };
+    try {
+      const meRes = await fetch(`${API_BASE}/auth/me`, { credentials: 'include' });
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        user = { role: meData.role || 'analyst', username: meData.username || username };
+      }
+    } catch {
+      // Fall back to username from form if /me fails
+    }
+
+    // Notify parent with the user data BEFORE flipping isAuthenticated,
+    // so userRole state is populated in the same render cycle.
+    if (onLoginSuccess) onLoginSuccess(user);
+    setAuth(true);
+  };
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
     try {
-      const payload = { username, password };
+      if (showMfa) {
+        // Step 2: exchange the pending-MFA session for a real one.
+        const response = await fetch(`${API_BASE}/auth/login/mfa`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: otpCode }),
+          credentials: 'include'
+        });
+        if (!response.ok) {
+          throw new Error('Invalid or expired OTP code');
+        }
+        await completeLogin();
+        return;
+      }
 
-      const response = await fetch(`${window.location.protocol}//${window.location.host}/api/auth/login`, {
+      // Step 1: username + password.
+      const payload = { username, password };
+      const response = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(payload),
@@ -219,27 +257,13 @@ const Login = ({ setAuth, onLoginSuccess }) => {
         throw new Error('Invalid credentials');
       }
 
-      // Auth cookie is now set. Immediately fetch the user profile so we
-      // can pass the role to the parent before it renders — this prevents
-      // the Settings tab from being absent on first login.
-      let user = { role: 'analyst', username };
-      try {
-        const meRes = await fetch(
-          `${window.location.protocol}//${window.location.host}/api/auth/me`,
-          { credentials: 'include' }
-        );
-        if (meRes.ok) {
-          const meData = await meRes.json();
-          user = { role: meData.role || 'analyst', username: meData.username || username };
-        }
-      } catch (_) {
-        // Fall back to username from form if /me fails
+      const data = await response.json().catch(() => ({}));
+      if (data.mfa_required) {
+        setShowMfa(true);
+        return;
       }
 
-      // Notify parent with the user data BEFORE flipping isAuthenticated,
-      // so userRole state is populated in the same render cycle.
-      if (onLoginSuccess) onLoginSuccess(user);
-      setAuth(true);
+      await completeLogin();
     } catch (err) {
       setError(err.message || 'Authentication failed. Please try again.');
     } finally {

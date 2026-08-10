@@ -1,0 +1,6 @@
+node_modules/
+dist/
+**/*.test.jsx
+**/*.test.js
+src/test/
+.git/

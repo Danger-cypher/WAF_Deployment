@@ -75,6 +75,14 @@
   --shadow-card:  0 1px 3px rgba(0,0,0,0.5), 0 4px 16px rgba(0,0,0,0.4);
   --shadow-hover: 0 4px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(99,102,241,0.15);
   --shadow-glow:  0 0 20px rgba(99, 102, 241, 0.15);
+
+  /* Radius scale — the app had accumulated 13 different border-radius
+     values with no clear system. New/refactored components should use
+     one of these instead of a magic number. */
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-pill: 999px;
 }
 
 /* ─── Reset ──────────────────────────────────────────────── */
@@ -82,6 +90,23 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* ─── Keyboard focus ─────────────────────────────────────────
+   Most interactive elements set outline:none with no replacement,
+   which leaves keyboard navigation with no visible focus indicator
+   anywhere except a handful of form inputs. This restores one
+   consistent ring app-wide without touching mouse-click behavior
+   (:focus-visible only triggers for keyboard/programmatic focus). */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 /* ─── Scrollbar ───────────────────────────────────────────── */

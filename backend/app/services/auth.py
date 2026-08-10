@@ -43,23 +43,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     return encoded_jwt
 
 
-async def get_current_user(request: Request) -> TokenData:
-    # 1. Try to get token from HttpOnly cookie
-    token = request.cookies.get("waf_session_v3")
-    
-    # 2. Fallback to Authorization header (for backward compatibility / Swagger UI)
+def decode_token(token: Optional[str]) -> Optional[TokenData]:
+    """Validate a raw JWT and return its TokenData, or None if invalid,
+    expired, or the account no longer exists / is disabled. Shared by the
+    HTTP dependency below and the WebSocket handshake (which has no
+    Request object to hang a FastAPI Depends() off of)."""
     if not token:
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-    )
-    
-    if not token:
-        raise credentials_exception
+        return None
 
     try:
         payload = jwt.decode(
@@ -67,14 +57,47 @@ async def get_current_user(request: Request) -> TokenData:
         )
         username: str = payload.get("sub")
         role: str = payload.get("role")
+        token_version = payload.get("tv")
         if username is None or role is None:
-            raise credentials_exception
+            return None
         token_data = TokenData(username=username, role=role)
     except jwt.PyJWTError:
-        raise credentials_exception
+        return None
 
-    if token_data.username not in ("admin", "analyst"):
-        raise credentials_exception
+    # Verify the account still exists, hasn't been disabled, and its
+    # session_version still matches what was current when the token was
+    # issued (role changes, enable/disable, and password changes/resets
+    # all bump it). This makes those changes take effect immediately
+    # instead of waiting out the token's remaining lifetime.
+    from app.services.user_service import user_service
+
+    user = user_service.get_by_username(token_data.username)
+    if user is None or not user["enabled"] or user["session_version"] != token_version:
+        return None
+
+    # Source the role from the live DB record rather than the (now
+    # revalidated, but still originally client-held) JWT claim.
+    token_data.role = user["role"]
+
+    return token_data
+
+
+async def get_current_user(request: Request) -> TokenData:
+    # 1. Try to get token from HttpOnly cookie
+    token = request.cookies.get("waf_session_v3")
+
+    # 2. Fallback to Authorization header (for backward compatibility / Swagger UI)
+    if not token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+
+    token_data = decode_token(token)
+    if token_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+        )
 
     return token_data
 

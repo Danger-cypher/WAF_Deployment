@@ -32,17 +32,23 @@ class ConnectionManager:
             f"WebSocket disconnected. Total clients: {len(self.active_connections)}"
         )
 
-    async def broadcast_log(self, log_dict: dict):
+    async def _broadcast(self, envelope: dict):
         if not self.active_connections:
             return
 
-        message = json.dumps(log_dict)
+        message = json.dumps(envelope)
         for connection in list(self.active_connections):
             try:
                 await connection.send_text(message)
             except Exception as e:
                 logger.error(f"Error sending to websocket: {e}")
                 self.disconnect(connection)
+
+    async def broadcast_log(self, log_dict: dict):
+        await self._broadcast({"type": "log", "data": log_dict})
+
+    async def broadcast_alert(self, alert_dict: dict):
+        await self._broadcast({"type": "alert", "data": alert_dict})
 
 
 manager = ConnectionManager()

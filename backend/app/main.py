@@ -22,6 +22,8 @@ from app.routes import (
     apps,
     alerts,
     system,
+    users,
+    ws,
 )
 from app.services.log_reader import scan_log_directory
 from app.services.log_ingestor import backfill_logs, start_ingestor, start_ingestor_tasks
@@ -261,6 +263,11 @@ app.include_router(apps.router, tags=["Protected Apps"], dependencies=csrf_deps)
 app.include_router(alerts.router, tags=["Alerts"], dependencies=csrf_deps)
 app.include_router(alerts.trigger_router, tags=["Alerts"])
 app.include_router(system.router, tags=["System"], prefix="/system", dependencies=csrf_deps)
+app.include_router(users.router, tags=["Users"], dependencies=csrf_deps)
+# No csrf_deps: the WebSocket handshake has no Request object for the
+# double-submit CSRF check to inspect. Auth is instead done inside the
+# handler itself by reading the session cookie directly (see routes/ws.py).
+app.include_router(ws.router, tags=["WebSocket"])
 
 if __name__ == "__main__":
     import uvicorn

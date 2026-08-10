@@ -9,7 +9,7 @@ All URL paths and response schemas are unchanged — frontend needs no updates.
 
 import os
 import stat
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import APIRouter, Query, Depends, HTTPException
 from typing import Optional
 
 from app.models.response_models import PaginatedLogs
@@ -18,7 +18,6 @@ from app.services.auth import require_any_role, require_admin, TokenData
 from app.services import clickhouse_service
 from app.services.log_reader import list_newest_log_files, _row_to_log_entry
 from app.config.settings import settings
-from app.websocket.connection_manager import manager
 
 router = APIRouter()
 
@@ -81,17 +80,6 @@ async def get_log_by_id(
     if row is None:
         raise HTTPException(status_code=404, detail="Log entry not found")
     return _row_to_log_entry(row)
-
-
-@router.websocket("/logs/stream")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time log streaming."""
-    await manager.connect(websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
 
 
 @router.get("/debug/logs")

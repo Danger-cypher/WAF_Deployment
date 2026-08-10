@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Trash2, Edit2, Server, Globe, Power, Play, Square, Check, X, Shield, Activity, HelpCircle, ArrowRight, Wifi, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, Server, Globe, Power, Check, X, Shield, Activity, ArrowRight, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2 } from 'lucide-react';
 import { getProtectedApps, createProtectedApp, updateProtectedApp, deleteProtectedApp, toggleProtectedApp } from '../services/api';
 
 const PREREQUISITES = [
@@ -239,6 +239,11 @@ export default function ProtectedApps({ onOpenWizard }) {
   const [rateLimitRps, setRateLimitRps] = useState(50);
   const [burstTolerance, setBurstTolerance] = useState(100);
 
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+
   const fetchApps = async () => {
     setLoading(true);
     try {
@@ -255,11 +260,6 @@ export default function ProtectedApps({ onOpenWizard }) {
   useEffect(() => {
     fetchApps();
   }, []);
-
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
 
   const handleOpenCreateModal = () => {
     setModalMode("create");

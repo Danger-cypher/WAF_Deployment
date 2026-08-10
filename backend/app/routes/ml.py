@@ -1,6 +1,7 @@
 import os
 import sqlite3
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, HTTPException, status
+from pydantic import BaseModel
 from typing import Optional
 from app.services.auth import require_any_role, require_admin, TokenData
 
@@ -145,6 +146,40 @@ async def get_ml_logs(
         return {"error": str(e), "data": [], "total": 0, "page": page, "size": size}
 
 
+class MlEventLabelPayload(BaseModel):
+    label: str  # "false_positive" | "true_positive" | null to clear
+
+
+@router.post("/ml/events/{event_id}/label")
+async def label_ml_event(
+    event_id: int,
+    payload: MlEventLabelPayload,
+    current_user: TokenData = Depends(require_any_role),
+):
+    """Analyst feedback on an ML decision. Feeds drift_monitor's
+    xgb_fp_rate signal, which is otherwise always 0 (nothing else writes
+    admin_label) and can never trigger a drift-based retrain."""
+    if payload.label not in ("false_positive", "true_positive"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="label must be 'false_positive' or 'true_positive'.",
+        )
+    if not os.path.exists(DB_PATH):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute(
+            "UPDATE ml_events SET admin_label = ? WHERE id = ?", (payload.label, event_id)
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
+    finally:
+        conn.close()
+    return {"message": "Event labeled successfully.", "label": payload.label}
+
+
 @router.get("/ml/timeline")
 async def get_ml_timeline(current_user: TokenData = Depends(require_any_role)):
     if not os.path.exists(DB_PATH):
@@ -232,6 +267,18 @@ async def rollback_ml_model(payload: RollbackPayload, current_user: TokenData = 
     ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
     try:
         res = requests.post(f"{ml_api}/models/rollback", json=payload.model_dump(), timeout=5)
+        if res.status_code == 200:
+            return res.json()
+        return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@router.get("/ml/drift-history")
+async def get_ml_drift_history(current_user: TokenData = Depends(require_any_role)):
+    import requests
+    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
+    try:
+        res = requests.get(f"{ml_api}/drift/history", timeout=5)
         if res.status_code == 200:
             return res.json()
         return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}

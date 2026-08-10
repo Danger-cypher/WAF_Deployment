@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 import feature_pipeline
 import redis_features
 import threat_score
+import drift_monitor
 
 # ClickHouse client for ML event persistence
 try:
@@ -164,7 +165,16 @@ def init_sqlite_db():
         except sqlite3.OperationalError:
             cursor.execute("ALTER TABLE ml_events ADD COLUMN unique_id TEXT;")
             conn.commit()
-            
+
+        try:
+            cursor.execute("SELECT admin_label FROM ml_events LIMIT 1;")
+        except sqlite3.OperationalError:
+            # Analyst feedback ('false_positive' / 'true_positive') fed back
+            # via POST /ml/events/{id}/label — drift_monitor's xgb_fp_rate
+            # signal depends on this being populated.
+            cursor.execute("ALTER TABLE ml_events ADD COLUMN admin_label TEXT;")
+            conn.commit()
+
         conn.close()
         try:
             os.chmod(DB_PATH, 0o666)
@@ -343,13 +353,29 @@ retrain_state = {
     "end_time": None,
     "error": None
 }
+# Guards the check-then-act on retrain_state["status"] shared between the
+# manual /retrain endpoint and the drift-triggered auto-retrain path.
+retrain_lock = threading.Lock()
+RETRAIN_TIMEOUT_SECONDS = int(os.environ.get("RETRAIN_TIMEOUT_SECONDS", "1800"))
+
+
+def _try_claim_retrain_slot() -> bool:
+    """Atomically claims the retrain slot. Returns False if one is already
+    running, so callers on either path never launch retrain.sh twice."""
+    with retrain_lock:
+        if retrain_state["status"] == "running":
+            return False
+        retrain_state["status"] = "running"
+        retrain_state["error"] = None
+        retrain_state["start_time"] = datetime.now().isoformat()
+        return True
+
 
 def run_retrain_subprocess():
+    """Runs retrain.sh. The caller must have already claimed the retrain
+    slot via _try_claim_retrain_slot()."""
     global retrain_state
     import subprocess
-    retrain_state["status"] = "running"
-    retrain_state["error"] = None
-    retrain_state["start_time"] = datetime.now().isoformat()
     try:
         process = subprocess.Popen(
             ["bash", "retrain.sh"],
@@ -358,7 +384,16 @@ def run_retrain_subprocess():
             stderr=subprocess.STDOUT,
             text=True
         )
-        process.wait()
+        try:
+            process.wait(timeout=RETRAIN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            retrain_state["status"] = "failed"
+            retrain_state["error"] = (
+                f"Retraining timed out after {RETRAIN_TIMEOUT_SECONDS}s and was killed"
+            )
+            return
         if process.returncode == 0:
             retrain_state["status"] = "success"
         else:
@@ -371,12 +406,61 @@ def run_retrain_subprocess():
     finally:
         retrain_state["end_time"] = datetime.now().isoformat()
 
+
+# ──────────────────────────────────────────────────────────────
+#  Drift monitoring — periodic in-process scheduler
+# ──────────────────────────────────────────────────────────────
+# drift_monitor.py existed in the codebase but nothing ever invoked it: no
+# cron entry, no scheduler, and it imported opensearchpy (not installed,
+# and no OpenSearch service exists in this stack) so it would have crashed
+# even if something had tried. Wired up here as a daemon thread instead of
+# a host cron job, since retrain.sh already assumes it's running inside
+# this container (writes to ./logs, reloads via localhost:9000/reload).
+DRIFT_CHECK_INTERVAL_SECONDS = int(os.environ.get("DRIFT_CHECK_INTERVAL_HOURS", "6")) * 3600
+
+
+def _on_drift_detected(reasons: list):
+    """Routes an auto-detected drift event through the same retrain_state
+    tracking as the manual /retrain endpoint, so the Admin UI's retrain
+    console reflects auto-triggered runs too and the two paths can't race."""
+    if not _try_claim_retrain_slot():
+        logger.info(
+            f"Drift detected ({', '.join(reasons)}) but a retrain is already "
+            f"in progress — skipping this cycle."
+        )
+        return
+    logger.warning(f"Drift-triggered retrain starting. Reasons: {', '.join(reasons)}")
+    run_retrain_subprocess()
+
+
+def _periodic_drift_check_loop():
+    logger.info(
+        f"Drift monitor started — checking every "
+        f"{DRIFT_CHECK_INTERVAL_SECONDS / 3600:.1f}h."
+    )
+    while True:
+        time.sleep(DRIFT_CHECK_INTERVAL_SECONDS)
+        try:
+            drift_monitor.monitor_drift(on_drift_detected=_on_drift_detected)
+        except Exception as e:
+            logger.error(f"Periodic drift check failed: {e}")
+
+
+threading.Thread(target=_periodic_drift_check_loop, daemon=True).start()
+
+
+@app.get("/drift/history")
+def get_drift_history_endpoint():
+    """Recent drift checks (metrics + whether they triggered a retrain)."""
+    return {"data": drift_monitor.get_drift_history(limit=50)}
+
+
 @app.post("/retrain")
 def trigger_retrain(background_tasks: BackgroundTasks):
     """Triggers the model retraining pipeline asynchronously."""
-    if retrain_state["status"] == "running":
+    if not _try_claim_retrain_slot():
         return {"status": "running", "message": "Retraining is already in progress"}
-    
+
     background_tasks.add_task(run_retrain_subprocess)
     return {"status": "success", "message": "Retraining triggered successfully"}
 

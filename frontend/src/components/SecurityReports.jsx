@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { 
-  FileText, Download, Printer, ShieldAlert, AlertTriangle, 
-  ShieldCheck, Clock, Users, Globe, Activity, FileJson, Server, RefreshCw
+import {
+  Download, Printer, AlertTriangle,
+  ShieldCheck, Activity, FileJson, RefreshCw
 } from 'lucide-react';
 import { getStats, getAttackTypes, getTopIPs, getHealth, getSecurityStatistics } from '../services/api';
 

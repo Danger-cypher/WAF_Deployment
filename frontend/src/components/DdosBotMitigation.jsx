@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { ShieldCheck, AlertTriangle, Activity, Database, Server } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { AlertTriangle, Activity, Database, Server } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { getDdosBotSettings, saveDdosBotSettings, getDdosAnalytics } from '../services/api';
+import { useToast } from '../hooks/useToast';
+import Toast from './Toast';
 
 export default function DdosBotMitigation() {
   const [rateLimitRps, setRateLimitRps] = useState(50);
@@ -20,7 +22,7 @@ export default function DdosBotMitigation() {
   const [newRuleBurst, setNewRuleBurst] = useState(20);
 
   const [loadingAction, setLoadingAction] = useState(false);
-  const [toast, setToast] = useState(null);
+  const { toast, showToast } = useToast();
 
   const [analytics, setAnalytics] = useState({
     timeline: [],
@@ -64,11 +66,6 @@ export default function DdosBotMitigation() {
       clearInterval(interval);
     };
   }, []);
-
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
 
   const handleSaveSettings = async (e) => {
     e.preventDefault();
@@ -155,35 +152,7 @@ export default function DdosBotMitigation() {
       transition={{ duration: 0.4 }}
     >
       {/* Toast Alert overlay */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className={`toast-alert ${toast.type === 'error' ? 'error' : 'success'}`}
-            style={{
-              position: 'fixed',
-              top: '24px',
-              right: '24px',
-              zIndex: 9999,
-              padding: '12px 24px',
-              borderRadius: '8px',
-              boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              background: toast.type === 'error' ? 'rgba(239, 68, 68, 0.95)' : 'rgba(16, 185, 129, 0.95)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              color: '#fff',
-              fontWeight: 500
-            }}
-          >
-            <ShieldCheck size={18} />
-            <span>{toast.message}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Toast toast={toast} />
 
       {/* Settings Form */}
       <div className="glass-panel" style={{ gridColumn: 'span 4', padding: '24px' }}>
