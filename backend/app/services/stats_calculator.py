@@ -176,8 +176,23 @@ def calculate_stats(hours: Optional[int] = None) -> Dict[str, Any]:
     if cached is not None:
         return cached
 
-    ch_stats = clickhouse_service.get_stats(hours)
     nginx_allowed = _get_total_nginx_requests(hours)
+    try:
+        ch_stats = clickhouse_service.get_stats(hours)
+    except Exception as e:
+        # A transient ClickHouse failure (query timeout, brief connection
+        # drop) must not get cached as if it were a real "zero attacks"
+        # result — that previously poisoned the 30s cache window and made
+        # the dashboard flicker between real numbers and all-zero on every
+        # refresh. Degrade gracefully for THIS request only; the next
+        # request tries ClickHouse fresh instead of reusing a cached failure.
+        logger.error(f"calculate_stats: ClickHouse query failed, not caching: {e}")
+        return {
+            "total_requests": nginx_allowed, "total_blocked": 0, "sqli_count": 0,
+            "xss_count": 0, "top_attack_type": "None", "total_unique_ips": 0,
+            "recent_threats": 0,
+        }
+
     total_blocked = ch_stats.get("total_blocked", 0)
     total_requests = total_blocked + nginx_allowed
 
@@ -201,7 +216,11 @@ def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict[str, 
     if cached is not None:
         return cached
 
-    result = clickhouse_service.get_top_ips(limit=limit, hours=hours)
+    try:
+        result = clickhouse_service.get_top_ips(limit=limit, hours=hours)
+    except Exception as e:
+        logger.error(f"get_top_ips: ClickHouse query failed, not caching: {e}")
+        return []
 
     # Enrich with AbuseIPDB scores cached in Redis
     from app.utils.redis_client import get_global_redis_client
@@ -215,7 +234,8 @@ def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict[str, 
             except Exception:
                 pass
 
-    _cache_set(cache_key, result)
+    if result:
+        _cache_set(cache_key, result)
     return result
 
 
@@ -225,8 +245,13 @@ def get_attack_types_distribution(hours: Optional[int] = None) -> List[Dict[str,
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    result = clickhouse_service.get_attack_types(hours=hours)
-    _cache_set(cache_key, result)
+    try:
+        result = clickhouse_service.get_attack_types(hours=hours)
+    except Exception as e:
+        logger.error(f"get_attack_types_distribution: ClickHouse query failed, not caching: {e}")
+        return []
+    if result:
+        _cache_set(cache_key, result)
     return result
 
 
@@ -236,8 +261,13 @@ def get_timeline(hours: Optional[int] = None) -> List[Dict[str, Any]]:
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    result = clickhouse_service.get_timeline(hours=hours)
-    _cache_set(cache_key, result)
+    try:
+        result = clickhouse_service.get_timeline(hours=hours)
+    except Exception as e:
+        logger.error(f"get_timeline: ClickHouse query failed, not caching: {e}")
+        return []
+    if result:
+        _cache_set(cache_key, result)
     return result
 
 
@@ -247,8 +277,13 @@ def get_top_rules(limit: int = 10, hours: Optional[int] = None) -> List[Dict[str
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    result = clickhouse_service.get_top_rules(limit=limit, hours=hours)
-    _cache_set(cache_key, result)
+    try:
+        result = clickhouse_service.get_top_rules(limit=limit, hours=hours)
+    except Exception as e:
+        logger.error(f"get_top_rules: ClickHouse query failed, not caching: {e}")
+        return []
+    if result:
+        _cache_set(cache_key, result)
     return result
 
 
@@ -258,6 +293,12 @@ def get_severity_distribution(hours: Optional[int] = None) -> List[Dict[str, Any
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    result = clickhouse_service.get_severity_distribution(hours=hours)
-    _cache_set(cache_key, result)
+    try:
+        result = clickhouse_service.get_severity_distribution(hours=hours)
+    except Exception as e:
+        logger.error(f"get_severity_distribution: ClickHouse query failed, not caching: {e}")
+        return [{"severity": s, "count": 0} for s in ["Critical", "High", "Medium", "Low"]]
+
+    if any(item.get("count", 0) > 0 for item in result):
+        _cache_set(cache_key, result)
     return result

@@ -382,14 +382,18 @@ def get_waf_event_by_id(log_id: str) -> Optional[Dict]:
 # Stats / Aggregation Queries
 # ---------------------------------------------------------------------------
 def get_stats(hours: Optional[int] = None) -> Dict[str, Any]:
-    """Aggregate stats from waf_events: total blocked, attack counts, etc."""
+    """Aggregate stats from waf_events: total blocked, attack counts, etc.
+
+    Raises on any failure (no client, query error) instead of swallowing it
+    — the caller (stats_calculator.py) needs to be able to tell a real,
+    empty result apart from a failed query, since only the former is safe
+    to cache. Silently caching a transient failure's fallback value for a
+    full cache-TTL window is what previously made dashboard panels flicker
+    between real data and "empty" every refresh cycle.
+    """
     client = _get_client()
     if client is None:
-        return {
-            "total_requests": 0, "total_blocked": 0, "sqli_count": 0,
-            "xss_count": 0, "top_attack_type": "None", "total_unique_ips": 0,
-            "recent_threats": 0,
-        }
+        raise RuntimeError("ClickHouse client unavailable")
 
     time_filter = _time_filter_clause(hours)
     recent_filter = "AND timestamp >= now() - INTERVAL 1 MINUTE"
@@ -420,67 +424,75 @@ def get_stats(hours: Optional[int] = None) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"get_stats failed: {e}")
-        return {
-            "total_requests": 0, "total_blocked": 0, "sqli_count": 0,
-            "xss_count": 0, "top_attack_type": "None", "total_unique_ips": 0,
-            "recent_threats": 0,
-        }
+        raise
 
 
 def get_timeline(hours: Optional[int] = None) -> List[Dict]:
     """15-minute bucketed timeline of attack counts."""
     client = _get_client()
     if client is None:
-        return []
+        raise RuntimeError("ClickHouse client unavailable")
     time_filter = _time_filter_clause(hours)
     try:
+        # `ORDER BY time ASC LIMIT 200` alone takes the 200 OLDEST buckets in
+        # the queried window, not the 200 most recent — with no hours filter
+        # (Overview's default call) that's the 200 oldest 15-minute buckets
+        # in the entire 90-day retention window, i.e. mid-history data with
+        # nothing from "now", which is exactly what makes the Attack Timeline
+        # chart look empty/stale. It also silently truncates any window wide
+        # enough to exceed 200 buckets (a 30-day report window allows up to
+        # 2,880). Select the most recent 200 buckets first (DESC), then
+        # re-sort them chronologically for the chart's left-to-right axis.
         result = client.query(f"""
-            SELECT
-                formatDateTime(toStartOfInterval(timestamp, INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i') AS time,
-                count() AS count
-            FROM waf_events
-            WHERE 1=1 {time_filter}
-            GROUP BY time
+            SELECT time, count FROM (
+                SELECT
+                    formatDateTime(toStartOfInterval(timestamp, INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i') AS time,
+                    count() AS count
+                FROM waf_events
+                WHERE 1=1 {time_filter}
+                GROUP BY time
+                ORDER BY time DESC
+                LIMIT 200
+            )
             ORDER BY time ASC
-            LIMIT 200
         """)
         return [{"time": row[0], "count": row[1]} for row in result.result_rows]
     except Exception as e:
         logger.error(f"get_timeline failed: {e}")
-        return []
+        raise
 
 
 def get_attack_types(hours: Optional[int] = None) -> List[Dict]:
-    """Distribution of attack types — only blocked (HTTP 403) events."""
+    """Distribution of attack types — blocked (HTTP 401, 403, 406, 429) events."""
     client = _get_client()
     if client is None:
-        return []
+        raise RuntimeError("ClickHouse client unavailable")
     time_filter = _time_filter_clause(hours)
     try:
         result = client.query(f"""
             SELECT attack_type, count() AS count
             FROM waf_events
-            WHERE http_code = '403' {time_filter}
+            WHERE http_code IN ('401', '403', '406', '429') {time_filter}
             GROUP BY attack_type
             ORDER BY count DESC
         """)
         return [{"attack_type": row[0], "count": row[1]} for row in result.result_rows]
     except Exception as e:
         logger.error(f"get_attack_types failed: {e}")
-        return []
+        raise
 
 
 def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
-    """Top attacking IPs — only from blocked (HTTP 403) events."""
+    """Top attacking IPs — from blocked (HTTP 401, 403, 406, 429) events."""
     client = _get_client()
     if client is None:
-        return []
+        raise RuntimeError("ClickHouse client unavailable")
     time_filter = _time_filter_clause(hours)
     try:
         result = client.query(f"""
             SELECT client_ip, any(country) AS country, count() AS count
             FROM waf_events
-            WHERE http_code = '403' AND client_ip != '' {time_filter}
+            WHERE http_code IN ('401', '403', '406', '429') AND client_ip != '' {time_filter}
             GROUP BY client_ip
             ORDER BY count DESC
             LIMIT {int(limit)}
@@ -491,14 +503,14 @@ def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
         ]
     except Exception as e:
         logger.error(f"get_top_ips failed: {e}")
-        return []
+        raise
 
 
 def get_severity_distribution(hours: Optional[int] = None) -> List[Dict]:
-    """Count of blocked (HTTP 403) events per severity level."""
+    """Count of blocked (HTTP 401, 403, 406, 429) events per severity level."""
     client = _get_client()
     if client is None:
-        return [{"severity": s, "count": 0} for s in ["Critical", "High", "Medium", "Low"]]
+        raise RuntimeError("ClickHouse client unavailable")
     time_filter = _time_filter_clause(hours)
     standards = ["Critical", "High", "Medium", "Low"]
     try:
@@ -513,21 +525,21 @@ def get_severity_distribution(hours: Optional[int] = None) -> List[Dict]:
                 ) AS sev_normalized,
                 count() AS count
             FROM waf_events
-            WHERE http_code = '403' {time_filter}
+            WHERE http_code IN ('401', '403', '406', '429') {time_filter}
             GROUP BY sev_normalized
         """)
         counts = {row[0]: row[1] for row in result.result_rows}
         return [{"severity": s, "count": counts.get(s, 0)} for s in standards]
     except Exception as e:
         logger.error(f"get_severity_distribution failed: {e}")
-        return [{"severity": s, "count": 0} for s in standards]
+        raise
 
 
 def get_top_rules(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
     """Most triggered ModSecurity rule IDs."""
     client = _get_client()
     if client is None:
-        return []
+        raise RuntimeError("ClickHouse client unavailable")
     time_filter = _time_filter_clause(hours)
     try:
         result = client.query(f"""
@@ -541,7 +553,7 @@ def get_top_rules(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
         return [{"rule_id": row[0], "count": row[1]} for row in result.result_rows]
     except Exception as e:
         logger.error(f"get_top_rules failed: {e}")
-        return []
+        raise
 
 
 def get_total_blocked_count(hours: Optional[int] = None) -> int:
