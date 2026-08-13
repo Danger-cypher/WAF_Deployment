@@ -34,9 +34,21 @@ def is_internal_ip(ip_str: str) -> bool:
 
 _discovery_lock = threading.Lock()
 
-# NGINX waf_extended log format regex (new format with real timing)
-# e.g., 10.200.11.33 - - [08/Jun/2026:10:35:51 +0530] "GET /api/stats HTTP/1.1" 200 154 "-" "Mozilla/5.0" 0.012 0.010
+# NGINX waf_extended log format regex (current format: real timing + real
+# scheme/Content-Encoding for API Protection's TLS/Compression scoring).
+# e.g., 10.200.11.33 - - [08/Jun/2026:10:35:51 +0530] "GET /api/stats HTTP/1.1" 200 154 "-" "Mozilla/5.0" 0.012 0.010 https "gzip"
 ACCESS_LINE_RE = re.compile(
+    r"^(?P<ip>[\d\.:a-fA-F]+) - (?P<user>[^ ]+) \[(?P<time>[^\]]+)\] "
+    r'"(?P<method>[A-Z]+) (?P<uri>[^ ]+) (?P<proto>[^"]+)" '
+    r"(?P<status>\d+) (?P<bytes>\d+) "
+    r'"(?P<referer>[^"]*)" "(?P<agent>[^"]*)" '
+    r'(?P<request_time>[\d\.\-]+) (?P<upstream_time>[\d\.\-]+) '
+    r'(?P<scheme>https?) "(?P<encoding>[^"]*)"'
+)
+
+# Fallback tier: format used between the request-timing rollout and the
+# scheme/Content-Encoding rollout — has real timing but not scheme/encoding.
+ACCESS_LINE_RE_TIMING_ONLY = re.compile(
     r"^(?P<ip>[\d\.:a-fA-F]+) - (?P<user>[^ ]+) \[(?P<time>[^\]]+)\] "
     r'"(?P<method>[A-Z]+) (?P<uri>[^ ]+) (?P<proto>[^"]+)" '
     r"(?P<status>\d+) (?P<bytes>\d+) "
@@ -44,13 +56,22 @@ ACCESS_LINE_RE = re.compile(
     r'(?P<request_time>[\d\.\-]+) (?P<upstream_time>[\d\.\-]+)'
 )
 
-# Fallback: legacy combined format without timing fields (used during log rotation transition)
+# Oldest fallback tier: legacy combined format, no timing/scheme/encoding at all.
 ACCESS_LINE_RE_LEGACY = re.compile(
     r"^(?P<ip>[\d\.:a-fA-F]+) - (?P<user>[^ ]+) \[(?P<time>[^\]]+)\] "
     r'"(?P<method>[A-Z]+) (?P<uri>[^ ]+) (?P<proto>[^"]+)" '
     r"(?P<status>\d+) (?P<bytes>\d+) "
     r'"(?P<referer>[^"]*)" "(?P<agent>[^"]*)"'
 )
+
+# Sentinel values for has_https / content_encoding when the log line's
+# format tier doesn't capture real scheme/Content-Encoding data. Using
+# sentinels instead of NULL avoids a live schema migration on the
+# non-nullable ClickHouse columns (has_https UInt8, content_encoding
+# LowCardinality(String)) while still letting scoring/UI distinguish
+# "measured" from "not yet measured" instead of silently fabricating a value.
+HTTPS_UNKNOWN = 2  # vs. 1 = confirmed https, 0 = confirmed http
+ENCODING_UNKNOWN = "unknown"  # vs. "" = confirmed no Content-Encoding header, or a real value like "gzip"
 
 # Global last read file position
 _last_position = 0
@@ -145,15 +166,20 @@ def run_api_discovery():
             skipped_internal = 0
 
             for line in lines:
-                # Try new waf_extended format first (has real timing fields)
-                match = ACCESS_LINE_RE.match(line.strip())
-                is_legacy = False
+                # Try the current format first (real timing + real scheme/encoding),
+                # then progressively older formats for lines written before each rollout.
+                stripped = line.strip()
+                match = ACCESS_LINE_RE.match(stripped)
+                format_tier = "full"
                 if not match:
-                    # Fall back to old combined format (lines logged before the format change)
-                    match = ACCESS_LINE_RE_LEGACY.match(line.strip())
-                    is_legacy = True
+                    match = ACCESS_LINE_RE_TIMING_ONLY.match(stripped)
+                    format_tier = "timing_only"
+                if not match:
+                    match = ACCESS_LINE_RE_LEGACY.match(stripped)
+                    format_tier = "legacy"
                 if not match:
                     continue
+                is_legacy = format_tier == "legacy"
 
                 # Skip management/internal traffic before any processing.
                 # This prevents dashboard polling and RFC1918 scanners from
@@ -215,7 +241,15 @@ def run_api_discovery():
                     )
                 )
 
-                has_https = 1
+                # Real measurements from the "full" format tier; sentinels
+                # (not a guess) for older log lines that don't carry this data.
+                if format_tier == "full":
+                    has_https = 1 if data.get("scheme") == "https" else 0
+                    content_encoding = data.get("encoding") or ""
+                else:
+                    has_https = HTTPS_UNKNOWN
+                    content_encoding = ENCODING_UNKNOWN
+
                 has_versioning = (
                     1
                     if any(
@@ -224,8 +258,6 @@ def run_api_discovery():
                     )
                     else 0
                 )
-
-                content_encoding = "gzip" if status_code == 200 else "none"
 
                 key = (clean_uri, method)
                 if key not in endpoints_aggregated:
@@ -237,9 +269,9 @@ def run_api_discovery():
                         "suspicious_count": 0,
                         "external_hit_count": 0,
                         "internal_hit_count": 0,
-                        "has_https": has_https,
+                        "has_https": HTTPS_UNKNOWN,
                         "has_versioning": has_versioning,
-                        "content_encoding": content_encoding,
+                        "content_encoding": ENCODING_UNKNOWN,
                         "timestamp": timestamp,
                     }
 
@@ -256,6 +288,14 @@ def run_api_discovery():
                     ep["suspicious_count"] += 1
                 # Keep the latest timestamp
                 ep["timestamp"] = timestamp
+                # Prefer known measurements over the unknown sentinel within
+                # this batch. For has_https, a confirmed-insecure hit (0)
+                # always wins even over a confirmed-secure one (1) — a real
+                # plaintext hit is a genuine finding worth surfacing, not
+                # something a later HTTPS hit should paper over.
+                ep["has_https"] = min(ep["has_https"], has_https)
+                if content_encoding != ENCODING_UNKNOWN:
+                    ep["content_encoding"] = content_encoding
 
             if skipped_internal > 0:
                 logger.debug(

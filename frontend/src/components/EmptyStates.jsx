@@ -1,10 +1,37 @@
-import { Shield, Activity, Clock, Search, AlertTriangle, CheckCircle, Zap } from 'lucide-react';
+import { Shield, Activity, Clock, Search, AlertTriangle, CheckCircle, Zap, RotateCw } from 'lucide-react';
+
+/**
+ * Shown instead of a "no data" empty state when a fetch actually failed —
+ * an empty dashboard and a broken backend must never look identical, or an
+ * analyst has no way to tell a quiet system from a down one.
+ */
+export const FetchErrorState = ({ message, onRetry }) => (
+  <div className="empty-state-container">
+    <div className="empty-state-content">
+      <div className="empty-state-icon">
+        <AlertTriangle size={64} color="var(--danger-color)" />
+      </div>
+      <h2 className="empty-state-title">Couldn't Load Data</h2>
+      <p className="empty-state-description">
+        {message || 'The dashboard could not reach the backend API. This may be a temporary connectivity issue.'}
+      </p>
+      {onRetry && (
+        <div className="empty-state-actions">
+          <button className="empty-state-btn primary" onClick={onRetry}>
+            <RotateCw size={16} />
+            Retry
+          </button>
+        </div>
+      )}
+    </div>
+  </div>
+);
 
 export const NoTrafficEmptyState = ({ onTestWaf, onViewApps }) => (
   <div className="empty-state-container">
     <div className="empty-state-content">
       <div className="empty-state-icon pulse-slow">
-        <Shield size={64} color="#14b8a6" />
+        <Shield size={64} color="var(--teal-color)" />
       </div>
       <h2 className="empty-state-title">CyberSentinel is Protecting Your Application</h2>
       <p className="empty-state-description">
@@ -54,7 +81,7 @@ export const NoLogsEmptyState = () => (
   <div className="empty-state-container compact">
     <div className="empty-state-content">
       <div className="empty-state-icon">
-        <CheckCircle size={48} color="#10b981" />
+        <CheckCircle size={48} color="var(--success-color)" />
       </div>
       <h3 className="empty-state-title">No Security Events Detected</h3>
       <p className="empty-state-description">
@@ -72,7 +99,7 @@ export const NoSearchResultsEmptyState = ({ searchTerm, onClear }) => (
   <div className="empty-state-container compact">
     <div className="empty-state-content">
       <div className="empty-state-icon">
-        <Search size={48} color="#6b7280" />
+        <Search size={48} color="var(--text-secondary)" />
       </div>
       <h3 className="empty-state-title">No Results Found</h3>
       <p className="empty-state-description">
@@ -91,7 +118,7 @@ export const NoFalsePositivesEmptyState = () => (
   <div className="empty-state-container compact">
     <div className="empty-state-content">
       <div className="empty-state-icon">
-        <CheckCircle size={48} color="#10b981" />
+        <CheckCircle size={48} color="var(--success-color)" />
       </div>
       <h3 className="empty-state-title">No False Positives Reported</h3>
       <p className="empty-state-description">
@@ -109,7 +136,7 @@ export const NoExceptionsEmptyState = () => (
   <div className="empty-state-container compact">
     <div className="empty-state-content">
       <div className="empty-state-icon">
-        <Shield size={48} color="#14b8a6" />
+        <Shield size={48} color="var(--teal-color)" />
       </div>
       <h3 className="empty-state-title">No Exception Rules Active</h3>
       <p className="empty-state-description">
@@ -124,7 +151,7 @@ export const NoMLEventsEmptyState = () => (
   <div className="empty-state-container compact">
     <div className="empty-state-content">
       <div className="empty-state-icon pulse-slow">
-        <Activity size={48} color="#6366f1" />
+        <Activity size={48} color="var(--accent-dim)" />
       </div>
       <h3 className="empty-state-title">AI/ML Engine Initializing</h3>
       <p className="empty-state-description">

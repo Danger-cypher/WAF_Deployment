@@ -1,24 +1,24 @@
-import { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Activity, AlertTriangle as AlertTriangleIcon, Brain, Check, Clock, Copy, Globe, Lock,
-  Server, Settings as SettingsIcon, ShieldAlert, X,
+  Activity, AlertTriangle as AlertTriangleIcon, Brain, Clock, Globe, Lock,
+  Server, Settings as SettingsIcon, ShieldAlert,
 } from 'lucide-react';
 import {
   Area, Bar, CartesianGrid, Cell, ComposedChart, Pie, PieChart, Tooltip as RechartsTooltip,
   ResponsiveContainer, XAxis, YAxis,
 } from 'recharts';
 import {
-  getLogById, getMLBackups, getMLDriftHistory, getMLFeatureImportance, getMLLogs, getMLModelInfo,
-  getMLRetrainStatus, getMLStats, getMLTimeline, labelMLEvent, rollbackMLModel, triggerMLRetrain,
+  getMLBackups, getMLDriftHistory, getMLFeatureImportance, getMLLogs, getMLModelInfo,
+  getMLRetrainStatus, getMLStats, getMLTimeline, rollbackMLModel, triggerMLRetrain,
 } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import { HelpText } from '../components/Tooltip';
-import HighlightedJson from '../components/JsonViewer';
 import { NoMLEventsEmptyState } from '../components/EmptyStates';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
+import { useConfirm } from '../hooks/useConfirm';
+import MLLogDrawer from '../components/MLLogDrawer';
 
 export default function MLAnalytics() {
   const [stats, setStats] = useState({
@@ -39,12 +39,8 @@ export default function MLAnalytics() {
   const [selectedLog, setSelectedLog] = useState(null);
   const [refreshInterval, setRefreshInterval] = useState(3000);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [copied, setCopied] = useState(false);
-  const [correlatedLog, setCorrelatedLog] = useState(null);
-  const [loadingCorrelated, setLoadingCorrelated] = useState(false);
-  const [modalActiveTab, setModalActiveTab] = useState('scores');
-  const [labeling, setLabeling] = useState(false);
   const { toast, showToast } = useToast();
+  const confirm = useConfirm();
 
   // Model Management & Retraining States
   const [activeSubTab, setActiveSubTab] = useState('analytics'); // 'analytics', 'management'
@@ -81,11 +77,18 @@ export default function MLAnalytics() {
     }
   };
 
+  const isPollingManagementRef = useRef(false);
+
   useEffect(() => {
     let interval;
     if (activeSubTab === 'management') {
       fetchManagementData();
       interval = setInterval(async () => {
+        // setInterval fires unconditionally regardless of whether the
+        // previous poll (up to 5 sequential calls) resolved — skip an
+        // overlapping cycle rather than piling requests up.
+        if (isPollingManagementRef.current) return;
+        isPollingManagementRef.current = true;
         try {
           const status = await getMLRetrainStatus();
           if (status && !status.error) {
@@ -103,6 +106,8 @@ export default function MLAnalytics() {
           }
         } catch (err) {
           console.warn("Error polling retrain status:", err);
+        } finally {
+          isPollingManagementRef.current = false;
         }
       }, 3000);
     }
@@ -110,158 +115,59 @@ export default function MLAnalytics() {
   }, [activeSubTab]);
 
   const handleTriggerRetrain = async () => {
-    if (window.confirm("Are you sure you want to trigger ML model retraining? This will run collect_data and rebuild XGBoost and Isolation Forest classifiers using active traffic db records.")) {
-      setTriggeringRetrain(true);
-      try {
-        const res = await triggerMLRetrain();
-        if (res.status === 'success') {
-          setRetrainStatus(prev => ({ ...prev, status: 'running' }));
-        } else {
-          alert("Failed to start retraining: " + res.message);
-        }
-      } catch (err) {
-        alert("Retrain error: " + err.message);
-      } finally {
-        setTriggeringRetrain(false);
+    const ok = await confirm({
+      title: 'Trigger ML retraining',
+      message: 'This will run collect_data and rebuild XGBoost and Isolation Forest classifiers using active traffic db records.',
+      confirmLabel: 'Retrain',
+    });
+    if (!ok) return;
+    setTriggeringRetrain(true);
+    try {
+      const res = await triggerMLRetrain();
+      if (res.status === 'success') {
+        setRetrainStatus(prev => ({ ...prev, status: 'running' }));
+      } else {
+        showToast("Failed to start retraining: " + res.message, "error");
       }
+    } catch (err) {
+      showToast("Retrain error: " + err.message, "error");
+    } finally {
+      setTriggeringRetrain(false);
     }
   };
 
   const handleRollback = async (timestamp) => {
-    if (window.confirm(`Are you sure you want to roll back both model weights to version backup ${timestamp}?`)) {
-      setRollingBack(true);
-      try {
-        const res = await rollbackMLModel(timestamp);
-        if (res.status === 'success') {
-          alert(res.message);
-          const info = await getMLModelInfo();
-          if (info && !info.error) setModelInfo(info);
-          const bks = await getMLBackups();
-          if (bks && !bks.error) setBackups(bks.data || []);
-        } else {
-          alert("Rollback failed: " + res.message);
-        }
-      } catch (err) {
-        alert("Rollback error: " + err.message);
-      } finally {
-        setRollingBack(false);
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (selectedLog && selectedLog.unique_id) {
-      setLoadingCorrelated(true);
-      setModalActiveTab('scores');
-      getLogById(selectedLog.unique_id)
-        .then(data => {
-          if (data && !data.error) {
-            setCorrelatedLog(data);
-          } else {
-            setCorrelatedLog(null);
-          }
-        })
-        .catch(err => {
-          console.warn("No correlated CyberSentinel Engine audit log found:", err);
-          setCorrelatedLog(null);
-        })
-        .finally(() => {
-          setLoadingCorrelated(false);
-        });
-    } else {
-      setCorrelatedLog(null);
-      setModalActiveTab('scores');
-    }
-  }, [selectedLog]);
-
-  const [copiedRaw, setCopiedRaw] = useState(false);
-
-  useEffect(() => {
-    if (copied) {
-      const t = setTimeout(() => setCopied(false), 2000);
-      return () => clearTimeout(t);
-    }
-  }, [copied]);
-
-  useEffect(() => {
-    if (copiedRaw) {
-      const t = setTimeout(() => setCopiedRaw(false), 2000);
-      return () => clearTimeout(t);
-    }
-  }, [copiedRaw]);
-
-  const handleCopy = () => {
-    if (!selectedLog) return;
-    const textToCopy = JSON.stringify(selectedLog, null, 2);
-
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(textToCopy)
-        .then(() => setCopied(true))
-        .catch(err => console.error("Copy failed", err));
-    } else {
-      try {
-        const textArea = document.createElement("textarea");
-        textArea.value = textToCopy;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        const successful = document.execCommand('copy');
-        document.body.removeChild(textArea);
-        if (successful) setCopied(true);
-      } catch (err) {
-        console.error("Fallback copy error", err);
-      }
-    }
-  };
-
-  const handleLabelEvent = async (label) => {
-    if (!selectedLog) return;
-    setLabeling(true);
+    const ok = await confirm({
+      title: 'Roll back ML models',
+      message: `Are you sure you want to roll back both model weights to version backup ${timestamp}?`,
+      confirmLabel: 'Roll back',
+      danger: true,
+    });
+    if (!ok) return;
+    setRollingBack(true);
     try {
-      await labelMLEvent(selectedLog.id, label);
-      const updated = { ...selectedLog, admin_label: label };
-      setSelectedLog(updated);
-      setLogs(prev => prev.map(l => (l.id === selectedLog.id ? updated : l)));
-      showToast(
-        label === 'false_positive' ? 'Marked as false positive.' : 'Confirmed as true positive.'
-      );
-    } catch (err) {
-      showToast('Failed to save label: ' + (err.message || 'Unknown error'), 'error');
-    } finally {
-      setLabeling(false);
-    }
-  };
-
-  const handleCopyRaw = () => {
-    if (!correlatedLog) return;
-    const raw = correlatedLog.raw_log || correlatedLog;
-    const textToCopy = JSON.stringify(raw, null, 2);
-
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(textToCopy)
-        .then(() => setCopiedRaw(true))
-        .catch(err => console.error("Copy failed", err));
-    } else {
-      try {
-        const textArea = document.createElement("textarea");
-        textArea.value = textToCopy;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-999999px";
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        const successful = document.execCommand('copy');
-        document.body.removeChild(textArea);
-        if (successful) setCopiedRaw(true);
-      } catch (err) {
-        console.error("Fallback copy error", err);
+      const res = await rollbackMLModel(timestamp);
+      if (res.status === 'success') {
+        showToast(res.message);
+        const info = await getMLModelInfo();
+        if (info && !info.error) setModelInfo(info);
+        const bks = await getMLBackups();
+        if (bks && !bks.error) setBackups(bks.data || []);
+      } else {
+        showToast("Rollback failed: " + res.message, "error");
       }
+    } catch (err) {
+      showToast("Rollback error: " + err.message, "error");
+    } finally {
+      setRollingBack(false);
     }
   };
+
+  const isFetchingMLDataRef = useRef(false);
 
   const fetchMLData = async () => {
+    if (isFetchingMLDataRef.current) return;
+    isFetchingMLDataRef.current = true;
     try {
       const statsData = await getMLStats();
       if (statsData && !statsData.error) {
@@ -284,8 +190,10 @@ export default function MLAnalytics() {
       }
     } catch (err) {
       console.error("Error fetching ML analytics data:", err);
+      showToast('Failed to load ML analytics: ' + (err.message || 'Unknown error'), 'error');
     } finally {
       setLoading(false);
+      isFetchingMLDataRef.current = false;
     }
   };
 
@@ -307,21 +215,21 @@ export default function MLAnalytics() {
   }, [autoRefresh, refreshInterval, page, filterDecision, searchQuery]);
 
   const decisionColors = {
-    allow: '#10b981',
-    log: '#3b82f6',
-    rate_limit: '#f59e0b',
-    block: '#ef4444'
+    allow: 'var(--success-color)',
+    log: 'var(--sev-low)',
+    rate_limit: 'var(--warning-color)',
+    block: 'var(--danger-color)'
   };
 
   const pieData = Object.entries(stats.decision_breakdown).map(([name, value]) => ({
     name: name.toUpperCase().replace('_', ' '),
     value,
-    color: decisionColors[name] || '#6b7280'
+    color: decisionColors[name] || 'var(--text-secondary)'
   })).filter(item => item.value > 0);
 
   const hasPieData = pieData.length > 0;
   const displayPieData = hasPieData ? pieData : [
-    { name: 'NO DATA', value: 1, color: '#4b5563' }
+    { name: 'NO DATA', value: 1, color: 'var(--text-secondary)' }
   ];
 
   return (
@@ -336,7 +244,7 @@ export default function MLAnalytics() {
       {/* Dynamic Controls Header inside the grid to span full width */}
       <div className="glass-panel" style={{ gridColumn: 'span 12', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <Brain size={24} color="#6366f1" style={{ filter: 'drop-shadow(0 0 8px rgba(99, 102, 241, 0.5))' }} />
+          <Brain size={24} color="var(--accent-dim)" style={{ filter: 'drop-shadow(0 0 8px rgba(99, 102, 241, 0.5))' }} />
           <div>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Status: </span>
             <strong style={{ fontSize: '13px', color: 'var(--success-color)' }}>Predictive Protection Shields Active</strong>
@@ -457,7 +365,7 @@ export default function MLAnalytics() {
               Hybrid Decision Matrix Routing Thresholds
             </div>
 
-            <div style={{ display: 'flex', width: '100%', height: '32px', borderRadius: '8px', overflow: 'hidden', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', marginBottom: '16px', fontSize: '12px', fontWeight: 600, textAlign: 'center', lineHeight: '32px' }}>
+            <div style={{ display: 'flex', width: '100%', height: '32px', borderRadius: '8px', overflow: 'hidden', background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', marginBottom: '16px', fontSize: '12px', fontWeight: 600, textAlign: 'center', lineHeight: '32px' }}>
               <div style={{ width: '40%', background: 'rgba(16, 185, 129, 0.15)', borderRight: '1px solid rgba(16, 185, 129, 0.3)', color: 'var(--success-color)' }}>ALLOW (Score &lt; 40%)</div>
               <div style={{ width: '30%', background: 'rgba(99, 102, 241, 0.15)', borderRight: '1px solid rgba(99, 102, 241, 0.3)', color: 'var(--accent-color)' }}>LOG (40% - 70%)</div>
               <div style={{ width: '15%', background: 'rgba(245, 158, 11, 0.15)', borderRight: '1px solid rgba(245, 158, 11, 0.3)', color: 'var(--warning-color)' }}>LIMIT (70% - 85%)</div>
@@ -494,7 +402,7 @@ export default function MLAnalytics() {
                         <stop offset="95%" stopColor="var(--danger-color)" stopOpacity={0.0} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-hover)" vertical={false} />
                     <XAxis
                       dataKey="time_bucket"
                       tickFormatter={(val) => {
@@ -646,7 +554,7 @@ export default function MLAnalytics() {
                   </thead>
                   <tbody>
                     {stats.top_anomalous_uris.map((item, idx) => (
-                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', color: 'var(--text-primary)' }}>
+                      <tr key={idx} style={{ borderBottom: '1px solid var(--surface-subtle)', color: 'var(--text-primary)' }}>
                         <td style={{ padding: '10px 0', fontFamily: 'monospace', color: 'var(--accent-color)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.uri}>
                           {item.uri}
                         </td>
@@ -682,7 +590,7 @@ export default function MLAnalytics() {
                   </thead>
                   <tbody>
                     {stats.top_anomalous_ips.map((item, idx) => (
-                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', color: 'var(--text-primary)' }}>
+                      <tr key={idx} style={{ borderBottom: '1px solid var(--surface-subtle)', color: 'var(--text-primary)' }}>
                         <td style={{ padding: '10px 0', fontFamily: 'monospace', color: 'var(--accent-color)' }}>{item.ip}</td>
                         <td style={{ padding: '10px 0', textAlign: 'center' }}>{item.count}</td>
                         <td style={{ padding: '10px 0', textAlign: 'right', color: item.avg_score >= 0.7 ? 'var(--danger-color)' : 'var(--warning-color)', fontWeight: 600 }}>
@@ -764,7 +672,7 @@ export default function MLAnalytics() {
                         <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>{log.remote_addr}</td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)' }}>{log.method}</span>
+                            <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'var(--surface-hover)', color: 'var(--text-secondary)' }}>{log.method}</span>
                             <span style={{ fontFamily: 'monospace', color: 'var(--accent-color)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.uri}>{log.uri}</span>
                           </div>
                         </td>
@@ -776,7 +684,7 @@ export default function MLAnalytics() {
                         </td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                            <div style={{ width: '48px', height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                            <div style={{ width: '48px', height: '6px', borderRadius: '3px', background: 'var(--surface-hover)', overflow: 'hidden' }}>
                               <div style={{ height: '100%', width: `${log.threat_score * 100}%`, background: decisionColors[log.decision] }} />
                             </div>
                             <strong style={{ fontSize: '12px', color: decisionColors[log.decision] }}>{(log.threat_score * 100).toFixed(0)}%</strong>
@@ -926,7 +834,7 @@ export default function MLAnalytics() {
                       <span style={{ fontWeight: 500 }}>{item.feature}</span>
                       <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 600 }}>{(item.importance * 100).toFixed(1)}%</span>
                     </div>
-                    <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
+                    <div style={{ width: '100%', height: '8px', background: 'var(--surface-subtle)', borderRadius: '4px', overflow: 'hidden' }}>
                       <div style={{ width: `${item.importance * 100}%`, height: '100%', background: 'linear-gradient(90deg, var(--accent-dim), var(--accent-color))', borderRadius: '4px', boxShadow: '0 0 6px var(--accent-glow)' }}></div>
                     </div>
                   </div>
@@ -1088,234 +996,15 @@ export default function MLAnalytics() {
         </>
       )}
 
-      {/* View Payload Detail Modal */}
-      {selectedLog && createPortal(
-        <div className="log-drawer-overlay" onClick={() => setSelectedLog(null)}>
-          <div className="log-drawer" onClick={(e) => e.stopPropagation()}>
-            {/* Header */}
-            <div className="log-drawer-header">
-              <div className="log-drawer-title">
-                <Brain size={18} color="var(--accent-color)" />
-                Threat Evaluation
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
-                  {selectedLog.remote_addr}
-                </span>
-              </div>
-              <button className="log-drawer-close" onClick={() => setSelectedLog(null)}><X size={16} /></button>
-            </div>
-
-            {/* Tabs */}
-            <div className="log-drawer-tabs">
-              <span className={`log-drawer-tab ${modalActiveTab === 'scores' ? 'active' : ''}`} onClick={() => setModalActiveTab('scores')}>Payload Details</span>
-              <span className={`log-drawer-tab ${modalActiveTab === 'raw' ? 'active' : ''}`} onClick={() => setModalActiveTab('raw')}>CyberSentinel Engine Log</span>
-            </div>
-
-            {/* Body */}
-            <div className="log-drawer-body">
-              {modalActiveTab === 'scores' ? (
-                <>
-                  {/* Info grid */}
-                  <div>
-                    <div className="drawer-section-title">Request Metadata</div>
-                    <div className="drawer-info-grid">
-                      <div className="drawer-info-cell">
-                        <div className="drawer-info-label">Timestamp</div>
-                        <div className="drawer-info-value" style={{ fontSize: '11px' }}>{formatLocalTime(selectedLog.timestamp)}</div>
-                      </div>
-                      <div className="drawer-info-cell">
-                        <div className="drawer-info-label">Client IP</div>
-                        <div className="drawer-info-value" style={{ color: 'var(--accent-color)' }}>{selectedLog.remote_addr}</div>
-                      </div>
-                      <div className="drawer-info-cell">
-                        <div className="drawer-info-label">Method</div>
-                        <div className="drawer-info-value">{selectedLog.method}</div>
-                      </div>
-                      <div className="drawer-info-cell">
-                        <div className="drawer-info-label">Body Length</div>
-                        <div className="drawer-info-value">{selectedLog.body_len} bytes</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* URI */}
-                  <div>
-                    <div className="drawer-section-title">Target URI</div>
-                    <div className="drawer-code-block" style={{ color: 'var(--accent-color)' }}>{selectedLog.uri}</div>
-                  </div>
-
-                  {/* Args */}
-                  {selectedLog.args && (
-                    <div>
-                      <div className="drawer-section-title">Payload Arguments</div>
-                      <div className="drawer-code-block" style={{ color: 'var(--warning-color)' }}>{selectedLog.args}</div>
-                    </div>
-                  )}
-
-                  {/* Matched vars */}
-                  {selectedLog.matched_vars && (
-                    <div>
-                      <div className="drawer-section-title">OWASP CRS Matched Variables</div>
-                      <div className="drawer-code-block" style={{ color: 'var(--danger-color)' }}>{selectedLog.matched_vars}</div>
-                    </div>
-                  )}
-
-                  {/* ML scores */}
-                  <div>
-                    <div className="drawer-section-title">ML Diagnostics Vector</div>
-                    <div className="drawer-ml-grid">
-                      <div className="drawer-ml-cell">
-                        <div className="drawer-ml-label">XGBoost Prob</div>
-                        <div className="drawer-ml-value">{(selectedLog.xgb_prob * 100).toFixed(1)}%</div>
-                      </div>
-                      <div className="drawer-ml-cell">
-                        <div className="drawer-ml-label">Isolation Forest</div>
-                        <div className="drawer-ml-value">{selectedLog.iso_score?.toFixed(4)}</div>
-                      </div>
-                      <div className="drawer-ml-cell">
-                        <div className="drawer-ml-label">CRS Anomaly</div>
-                        <div className="drawer-ml-value">{selectedLog.crs_score}</div>
-                      </div>
-                      <div className="drawer-ml-cell">
-                        <div className="drawer-ml-label">Redis IP Rep</div>
-                        <div className="drawer-ml-value" style={{ fontSize: '14px' }}>{selectedLog.redis_rep} pts</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Reconstructed request */}
-                  <div>
-                    <div className="drawer-section-title">Reconstructed HTTP Signature</div>
-                    <div className="drawer-code-block" style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>
-                      {`${selectedLog.method} ${selectedLog.uri}${selectedLog.args ? `?${selectedLog.args}` : ''} HTTP/1.1\n` +
-                        `Host: localhost\n` +
-                        (selectedLog.ua ? `User-Agent: ${selectedLog.ua}\n` : '') +
-                        (selectedLog.ct ? `Content-Type: ${selectedLog.ct}\n` : '') +
-                        (selectedLog.body_len ? `Content-Length: ${selectedLog.body_len}\n` : '')}
-                    </div>
-                  </div>
-
-                  {/* Analyst feedback — feeds drift_monitor's xgb_fp_rate signal */}
-                  <div>
-                    <div className="drawer-section-title">Analyst Feedback</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <button
-                        className="pagination-btn"
-                        disabled={labeling}
-                        onClick={() => handleLabelEvent('false_positive')}
-                        style={{
-                          padding: '6px 12px', fontSize: '11px',
-                          borderColor: selectedLog.admin_label === 'false_positive' ? 'var(--warning-color)' : undefined,
-                          color: selectedLog.admin_label === 'false_positive' ? 'var(--warning-color)' : undefined,
-                        }}
-                      >
-                        Mark False Positive
-                      </button>
-                      <button
-                        className="pagination-btn"
-                        disabled={labeling}
-                        onClick={() => handleLabelEvent('true_positive')}
-                        style={{
-                          padding: '6px 12px', fontSize: '11px',
-                          borderColor: selectedLog.admin_label === 'true_positive' ? 'var(--danger-color)' : undefined,
-                          color: selectedLog.admin_label === 'true_positive' ? 'var(--danger-color)' : undefined,
-                        }}
-                      >
-                        Confirm Threat
-                      </button>
-                      {selectedLog.admin_label && (
-                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                          Labeled: {selectedLog.admin_label.replace('_', ' ')}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Full JSON */}
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <div className="drawer-section-title" style={{ marginBottom: 0 }}>Full Telemetry Record</div>
-                      <button className="pagination-btn" onClick={handleCopy}
-                        style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', margin: 0 }}>
-                        {copied ? <Check size={13} color="var(--success-color)" /> : <Copy size={13} />}
-                        <span>{copied ? 'Copied!' : 'Copy JSON'}</span>
-                      </button>
-                    </div>
-                    <HighlightedJson json={selectedLog} />
-                  </div>
-                </>
-              ) : (
-                <>
-                  {loadingCorrelated ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: '12px', color: 'var(--text-secondary)' }}>
-                      <Activity className="animate-spin" size={24} color="var(--accent-color)" />
-                      <span>Syncing correlated CyberSentinel Engine raw logs...</span>
-                    </div>
-                  ) : correlatedLog ? (
-                    <>
-                      <div>
-                        <div className="drawer-section-title">Event Metadata</div>
-                        <div className="drawer-info-grid">
-                          <div className="drawer-info-cell">
-                            <div className="drawer-info-label">Timestamp</div>
-                            <div className="drawer-info-value" style={{ fontSize: '11px' }}>{formatLocalTime(correlatedLog.timestamp)}</div>
-                          </div>
-                          <div className="drawer-info-cell">
-                            <div className="drawer-info-label">Client IP</div>
-                            <div className="drawer-info-value" style={{ color: 'var(--accent-color)' }}>{correlatedLog.client_ip}</div>
-                          </div>
-                          <div className="drawer-info-cell">
-                            <div className="drawer-info-label">Severity</div>
-                            <div className="drawer-info-value" style={{ color: correlatedLog.severity === 'Critical' || correlatedLog.severity === 'High' ? 'var(--danger-color)' : 'var(--warning-color)' }}>{correlatedLog.severity}</div>
-                          </div>
-                          <div className="drawer-info-cell">
-                            <div className="drawer-info-label">Attack Category</div>
-                            <div className="drawer-info-value">{correlatedLog.attack_type}</div>
-                          </div>
-                          {correlatedLog.rule_id && (
-                            <div className="drawer-info-cell">
-                              <div className="drawer-info-label">Rule ID</div>
-                              <div className="drawer-info-value" style={{ color: 'var(--accent-color)' }}>{correlatedLog.rule_id}</div>
-                            </div>
-                          )}
-                          {correlatedLog.hostname && (
-                            <div className="drawer-info-cell">
-                              <div className="drawer-info-label">Host Target</div>
-                              <div className="drawer-info-value">{correlatedLog.hostname}</div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      {correlatedLog.message && (
-                        <div>
-                          <div className="drawer-section-title">Rule Message</div>
-                          <div className="drawer-code-block" style={{ color: 'var(--text-primary)', fontStyle: 'italic' }}>{correlatedLog.message}</div>
-                        </div>
-                      )}
-                      <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                          <div className="drawer-section-title" style={{ marginBottom: 0 }}>Raw Audit Log JSON</div>
-                          <button className="pagination-btn" onClick={handleCopyRaw}
-                            style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', margin: 0 }}>
-                            {copiedRaw ? <Check size={13} color="var(--success-color)" /> : <Copy size={13} />}
-                            <span>{copiedRaw ? 'Copied!' : 'Copy JSON'}</span>
-                          </button>
-                        </div>
-                        <HighlightedJson json={correlatedLog.raw_log || correlatedLog} />
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: '10px', color: 'var(--text-secondary)' }}>
-                      <AlertTriangleIcon size={28} color="var(--warning-color)" />
-                      <span style={{ textAlign: 'center' }}>No matching CyberSentinel Engine audit logs found.<br /><span style={{ fontSize: '12px', opacity: 0.7 }}>(This clean request bypassed CyberSentinel Engine block/log thresholds).</span></span>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <MLLogDrawer
+        log={selectedLog}
+        onClose={() => setSelectedLog(null)}
+        onLabelUpdate={(updated) => {
+          setSelectedLog(updated);
+          setLogs(prev => prev.map(l => (l.id === updated.id ? updated : l)));
+        }}
+        showToast={showToast}
+      />
     </motion.div>
   );
 }

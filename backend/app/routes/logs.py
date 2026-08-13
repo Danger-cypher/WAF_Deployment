@@ -9,6 +9,7 @@ All URL paths and response schemas are unchanged — frontend needs no updates.
 
 import os
 import stat
+import asyncio
 from fastapi import APIRouter, Query, Depends, HTTPException
 from typing import Optional
 
@@ -49,7 +50,12 @@ async def get_logs(
     - uri_type: 'web' (non-/api) or 'api' (/api/*)
     - hours: restrict to last N hours
     """
-    rows, total = clickhouse_service.query_waf_events(
+    # query_waf_events() runs a synchronous ClickHouse HTTP query — called
+    # directly on this async route (polled every few seconds by the Events
+    # page) it blocks the whole single-process event loop for its full
+    # round-trip, stalling every other user's request in the meantime.
+    rows, total = await asyncio.to_thread(
+        clickhouse_service.query_waf_events,
         page=page,
         size=size,
         severity=severity,
@@ -76,7 +82,7 @@ async def get_log_by_id(
     current_user: TokenData = Depends(require_any_role),
 ):
     """Fetch a single WAF log entry by its unique transaction ID from ClickHouse."""
-    row = clickhouse_service.get_waf_event_by_id(log_id)
+    row = await asyncio.to_thread(clickhouse_service.get_waf_event_by_id, log_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Log entry not found")
     return _row_to_log_entry(row)
@@ -107,8 +113,8 @@ async def debug_logs(current_user: TokenData = Depends(require_admin)):
         except Exception as e:
             file_results.append({"path": f, "error": str(e)})
 
-    ch_available = clickhouse_service.is_available()
-    ch_count = clickhouse_service.get_total_blocked_count() if ch_available else -1
+    ch_available = await asyncio.to_thread(clickhouse_service.is_available)
+    ch_count = await asyncio.to_thread(clickhouse_service.get_total_blocked_count) if ch_available else -1
 
     return {
         "log_dir": settings.LOG_DIR,

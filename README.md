@@ -44,7 +44,7 @@ Here is an overview of the directory structure of the CyberSentinel WAF reposito
 ├── backend/                      # Python FastAPI backend server
 │   ├── main.py                   # Launcher entry point
 │   ├── requirements.txt          # Python dependencies for the backend
-│   └── app/                      # Application core package
+│   ├── app/                      # Application core package
 │       ├── main.py               # FastAPI configuration & routing registry
 │       ├── config/               # System settings files & SQLite databases
 │       │   ├── settings.json     # Active system configurations (WAF, DDoS, etc.)
@@ -55,33 +55,41 @@ Here is an overview of the directory structure of the CyberSentinel WAF reposito
 │       ├── parsers/              # System log parsers (ModSecurity audit log parser)
 │       ├── models/               # Pydantic schemas and schema models
 │       └── websocket/            # Live logs real-time WebSocket connection manager
+│   └── tests/                    # Pytest suite (auth, users, MFA, WebSocket auth, notification prefs)
 ├── ml-waf/                       # Machine Learning Security Engine (subsystem)
 │   ├── ml_server.py              # FastAPI microservice exposing scoring Rest APIs
 │   ├── requirements.txt          # Python machine learning dependencies
 │   ├── threat_score.py           # Core threat score compilation logic
 │   ├── feature_pipeline.py       # Raw data vectors feature extraction pipeline
+│   ├── drift_monitor.py          # Auto-detects model drift and triggers retraining
 │   ├── collect_data.py           # Compiles audit logs into training datasets
 │   ├── train_xgb.py              # Script to train the XGBoost model
 │   ├── train_iso.py              # Script to train the Isolation Forest model
-│   ├── ml_check.lua              # Lua hook script executing in OpenResty proxy context
+│   ├── ml_check.lua              # Lua hook script executing in OpenResty proxy context (loaded by OpenResty on every request)
 │   └── retrain.sh                # Shell automation script to retrain ML models
 ├── frontend/                     # Dedicated Frontend Workspace Folder (React + Vite)
 │   ├── src/                      # Vite + React Frontend Dashboard
 │   │   ├── main.jsx              # React application entrypoint
-│   │   ├── App.jsx               # Primary layout, routes, navigation, and tab renders
-│   │   ├── index.css             # Global styles, tailwind/vanilla CSS tokens, and theme
-│   │   ├── components/           # Reusable UI component modules
-│   │   │   ├── Login.jsx         # Access control authentication login panel
-│   │   │   └── DdosBotMitigation.jsx # DDoS configuration editor dashboard
+│   │   ├── App.jsx               # Primary layout, lazy-loaded routes, navigation, and tab renders
+│   │   ├── index.css             # Global styles, CSS custom-property design tokens, and theme (light/dark)
+│   │   ├── pages/                # One file per sidebar tab (Overview, Events, Rules, Settings, etc.)
+│   │   ├── components/           # Reusable UI component modules (Login, modals, Toast, EmptyStates, ...)
+│   │   ├── context/               # React context providers (Theme, Confirm dialog)
+│   │   ├── hooks/                 # Shared hooks (useToast, useConfirm, useEscapeToClose)
+│   │   ├── utils/                 # Formatting/date helpers
+│   │   ├── test/                  # Vitest + React Testing Library setup & tests
 │   │   └── services/             # Frontend API services layer
-│   │       └── api.js            # API request clients wrapper to fetch backend APIs
+│   │       └── api.js            # API request clients wrapper to fetch backend APIs (cookie-based auth)
 │   ├── public/                   # Public assets (icons, static graphics)
 │   ├── package.json              # NPM scripts and dependency packages list
 │   ├── package-lock.json         # Pinned packages dependency tree
 │   ├── vite.config.js            # Vite build environment configuration
 │   └── eslint.config.js          # ESLint code style syntax rules config
 ├── configs/                      # Configuration files folder
-│   ├── nginx/                    # Nginx reverse proxy & ModSecurity CRS rules
+│   ├── nginx/                    # Nginx reverse proxy, ModSecurity CRS rules, per-app vhosts
+│   │   ├── sites-available/      # Dashboard vhost + generated protected-app vhosts
+│   │   ├── modsec/                # main.conf, coreruleset/, rules-override.conf, positive-security.conf, app-auth/
+│   │   └── conf.d/                # Generated DDoS/rate-limit config
 │   └── clickhouse/               # ClickHouse schema scripts
 │       └── init.sql              # Automated DB table schemas initialization
 ├── scripts/                      # System administration & deployment scripts
@@ -91,8 +99,11 @@ Here is an overview of the directory structure of the CyberSentinel WAF reposito
 │   ├── deploy-frontend.sh        # Frontend distribution builder and deployment script
 │   ├── modsec-clamscan.sh        # ClamAV malware scanning script
 │   ├── setup_ddos_kernel.sh      # Kernel DDoS tuning configuration script
+│   ├── configure-production.sh   # Post-install SSL/CORS reconfiguration tool
+│   ├── reset-password.py         # Admin/analyst password reset utility (operates on users.db)
 │   ├── migrate_sqlite_to_clickhouse.py # One-time SQLite to ClickHouse database migrator
 │   └── verify_clickhouse_db.py   # Diagnostic script verifying ClickHouse logging pipeline
+├── .github/workflows/            # CI: backend pytest, frontend lint/test/build, Docker build sanity checks
 └── dist/                         # Compiled production distribution directory (served by Nginx)
 
 ```
@@ -109,6 +120,7 @@ Quick reference mapping of important files, configuration, and log paths:
 | **CRS Rule States** | `backend/app/config/rule_states.json` | JSON list of active/inactive Core Rule Set rules |
 | **Analytical Database** | ClickHouse `cybersentinel` | Central analytical store containing `waf_events`, `ml_events`, `analyst_feedback`, `api_discovery`, `alert_history` tables |
 | **Local Configurations DB** | `backend/app/config/false_positives.db` | Local SQLite database fallback storing exclusions, rule states, and analyst overrides |
+| **User Accounts DB** | `backend/app/data/users.db` | SQLite database of dashboard accounts (admin/analyst), password hashes, roles, and MFA secrets |
 | **ML Lua Integration**| `ml-waf/ml_check.lua` | Request inspection script loaded inside OpenResty request cycles |
 | **Nginx Config** | `/etc/nginx/nginx.conf` | Primary configuration mapping request proxies |
 | **ModSecurity Config**| `/etc/nginx/modsec/main.conf` | Core configurations file listing WAF rules and OWASP CRS rules |
@@ -123,7 +135,7 @@ Quick reference mapping of important files, configuration, and log paths:
 1. **Active Threat Blocking:** Instantly detects and blocks common hacker attacks (such as SQL Injection, Cross-Site Scripting (XSS), and Path Traversal) before they reach your web application.
 2. **AI/ML Security Engine:** An intelligent machine-learning layer that analyzes traffic behavior and scores the "threat level" of users to catch new, sophisticated attacks that traditional rules might miss.
 3. **DDoS & Bot Mitigation:** Limits request speeds and blocks automated bots that try to overwhelm your server or scrape your website content.
-4. **API Protection:** Inspects and assigns a security grade (A to F) to hidden application endpoints (APIs) to ensure background communications are safe.
+4. **API Protection:** Automatically discovers application endpoints from live traffic, assigns a security grade (A to F) to each one (TLS, compression, auth signals), and lets an analyst turn that grade directly into enforcement — one click adds a traffic-suggested rate limit, or fully blocks a specific method+endpoint combination.
 5. **Web Anti-Defacement (File Integrity):** Monitors files on the server in real-time. If an unauthorized attacker somehow changes the website code, CyberSentinel immediately reverts the file back to its original state and sounds an alarm.
 6. **Visual Control Panel:** A clean, responsive dashboard that lets you see live logs, adjust settings, and monitor attack statistics at a glance.
 7. **Administrative Multi-Factor Authentication (MFA):** Supports Google Authenticator (TOTP) to secure SOC logins with 6-digit verification codes.
@@ -131,6 +143,11 @@ Quick reference mapping of important files, configuration, and log paths:
 9. **Compliance CSV Reporting:** Real-time log export capability, allowing security analysts to stream and download historical threat event reports as formatted CSV files directly from the dashboard.
 10. **Malware Scanning Integration:** Intercepts uploaded files using ClamAV (`clamdscan`) integration to isolate and block dynamic payloads/webshells.
 11. **Kernel-level Network Hardening:** Performance automation to tune Linux networking sysctl parameters for SYN flood resilience.
+12. **Virtual Patching:** A live custom-rule editor for writing hand-crafted ModSecurity rules to mitigate zero-day vulnerabilities immediately, with syntax validation before any change reaches production traffic.
+13. **Positive Security Policy:** Per-protected-app allowlisting of HTTP methods, request Content-Types, and blocked file extensions — an opt-in, stricter alternative to signature-based (negative) detection.
+14. **Per-Application Authentication Requirements:** Require a configurable header or cookie to be present before a protected app's backend is reached, enforced at the WAF layer.
+15. **Real-Time Alerts & Multi-Channel Integrations:** Configurable notification channels (Email/SMTP, Slack, generic Webhook, PagerDuty) with rule-based routing by event type and severity, throttling, and a live in-dashboard notification bell.
+16. **Role-Based User Management:** Admin-managed accounts (Admin / Analyst roles) with self-service profile and password management, backed by a real user database — not shared/hardcoded credentials.
 
 ---
 
@@ -213,19 +230,20 @@ Used as a local, lightweight configuration cache for fallback operations:
 
 
 ### 4. JSON Configuration File (`settings.json`)
-The application core configurations—such as WAF rule adjustments, DDoS settings, whitelist/blacklist IPs, and mail alerts—are stored in a plain text file at `backend/app/config/settings.json`.
+General application configuration — WAF rule adjustments, DDoS settings, whitelist/blacklist IPs, positive security policy, and anti-defacement settings — is stored in a plain text file at `backend/app/config/settings.json`. Alert channel configuration (SMTP/Slack/Webhook/PagerDuty) and notification rules live separately in `alerts.db`.
 
 ---
 
 ## 🔑 Login Authentication & Security
 
-To maintain a lightweight footprint without requiring a bulky database engine, login authentication is designed to be **simple, secure, and stateless**:
+Dashboard accounts are real, individually managed user records — not a single shared credential:
 
-* **No Dedicated User DB:** User credentials (passwords for the "Admin" and "Analyst" roles) are not stored in a SQL table. Instead, their **secure cryptographical hashes** (using `bcrypt`) are saved directly inside the `settings.json` configuration file.
-* **Secure Verification:** When a user logs in via the dashboard, the backend hashes the input password and checks if it matches the hash stored in `settings.json`.
-* **Stateless JWT Tokens:** Upon successful login, the backend generates a **JSON Web Token (JWT)**. The user's browser saves this token in `localStorage`. For every future dashboard action, the browser automatically sends this token. The backend verifies the token's validity mathematically, meaning it doesn't need to look up active sessions in a database.
-* **Role-Based Access Control:** Users are assigned either an `Admin` role (can modify settings, reload Nginx, turn WAF off) or an `Analyst` role (read-only access to view logs, charts, and statistics).
-* **Note on Bypassing Authentication:** In local, development, or single-tenant direct-access environments, frontend login checks can be bypassed by setting `isAuthenticated` state to `true` in `App.jsx` and corresponding API dependency mocks in `auth.py`.
+* **User Database:** Every account (username, `bcrypt` password hash, role, MFA secret) lives in `backend/app/data/users.db` (SQLite), managed from the dashboard's User Management screen (Admin only). The very first `admin`/`analyst` accounts are seeded once from the password you set during `setup.sh`, then live entirely in this database from that point on.
+* **Cookie-Based Sessions, Not localStorage:** On login, the backend issues a JSON Web Token (JWT) as an `HttpOnly`, `SameSite=Strict` cookie — it is never exposed to page JavaScript and is never stored in `localStorage`, which closes off an entire class of token-theft-via-XSS attack. A separate, non-`HttpOnly` CSRF token cookie is required (double-submit pattern) on every state-changing request.
+* **Session Revocation:** Changing a password, disabling MFA, or an admin editing another user's role/enabled status bumps that user's session version — their existing JWTs stop being accepted immediately, without needing a server-side session store.
+* **Multi-Factor Authentication (MFA):** Optional per-user TOTP (Google Authenticator-compatible) — self-service setup/disable from the Profile screen, with an admin override for account recovery.
+* **Rate-Limited Login:** Failed login attempts are throttled with exponential backoff, keyed by both source IP and the attempted username, so neither a single noisy IP nor a distributed attempt against one account can brute-force past it.
+* **Role-Based Access Control:** Users are assigned either an `Admin` role (can modify settings, reload Nginx, manage other users) or an `Analyst` role (read-only access to view logs, charts, and statistics).
 
 ---
 
@@ -235,7 +253,7 @@ CyberSentinel WAF is fully containerized using **Docker Compose** to isolate ser
 
 ### 1. Service Map & Internal Networks
 All backend and caching engines run within an isolated virtual network (`waf-network`), exposing ports only to peer services:
-* **`waf-openresty`** (Gateway Proxy): Mounts rule engines and binds host port `3001` (Single Entry Point).
+* **`waf-openresty`** (Gateway Proxy): Mounts rule engines and binds host ports `3020` (direct dashboard access, WAF-inspected), `80` (HTTP → HTTPS redirect), and `443` (HTTPS WAF gateway for protected apps).
 * **`waf-backend`** (FastAPI API): Port `8000` (internal only, maps to `/api` proxy).
 * **`waf-frontend`** (React + Nginx): Port `80` (internal only, maps to `/` fallback proxy).
 * **`waf-ml`** (ML Prediction Engine): Port `9000` (internal only).
@@ -288,8 +306,6 @@ If you need to update SSL certificates or CORS settings on an already-running sy
 sudo ./scripts/configure-production.sh
 ```
 
-For manual step-by-step custom deployment instructions, please refer to the comprehensive [Client Deployment & Operations Guide](CLIENT_GUIDE.md).
-
 ### 3. Management & Maintenance
 
 * **Reload Nginx / Apply Rules**:
@@ -298,7 +314,7 @@ For manual step-by-step custom deployment instructions, please refer to the comp
   ```
 * **Verify System Health**:
   ```bash
-  curl -s http://localhost:3001/api/health
+  curl -s http://localhost:3020/api/health
   ```
 * **Check Service Status**:
   ```bash

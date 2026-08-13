@@ -59,7 +59,32 @@ class NewLogHandler(FileSystemEventHandler):
         self.loop = loop
         super().__init__()
 
+    @staticmethod
+    def _log_future_exception(future, label: str):
+        """
+        run_coroutine_threadsafe() returns a concurrent.futures.Future whose
+        exception is otherwise silently discarded if nothing ever calls
+        .result()/.exception() on it — meaning a bug in broadcast_log or
+        trigger_event (a bad rule condition, a DB error, ...) could make
+        real-time alerting or the live log feed quietly stop working with
+        zero log line, zero crash, and no signal to anyone that it broke.
+        """
+        try:
+            future.result()
+        except Exception as e:
+            logger.error(f"Unhandled error in {label}: {e}", exc_info=True)
+
     def process_file(self, file_path: str):
+        try:
+            self._process_file_unsafe(file_path)
+        except Exception as e:
+            # Watchdog's observer thread has no try/except of its own around
+            # event handler calls — an uncaught exception here would kill the
+            # entire watcher thread silently (log ingestion + real-time alerts
+            # stop for good, with the process otherwise still running normally).
+            logger.error(f"Error processing log file {file_path}: {e}", exc_info=True)
+
+    def _process_file_unsafe(self, file_path: str):
         # We only process if it's new
         if file_path in parsed_entries:
             return
@@ -75,14 +100,20 @@ class NewLogHandler(FileSystemEventHandler):
             parsed_entries[file_path] = entry
 
             # Broadcast the new log to websocket clients
-            asyncio.run_coroutine_threadsafe(
+            broadcast_future = asyncio.run_coroutine_threadsafe(
                 manager.broadcast_log(entry.model_dump()), self.loop
+            )
+            broadcast_future.add_done_callback(
+                lambda f: self._log_future_exception(f, "broadcast_log")
             )
 
             # Trigger real-time alert rule evaluation
             from app.services.alert_manager import alert_manager
-            asyncio.run_coroutine_threadsafe(
+            alert_future = asyncio.run_coroutine_threadsafe(
                 alert_manager.trigger_event("attack_detected", entry.model_dump()), self.loop
+            )
+            alert_future.add_done_callback(
+                lambda f: self._log_future_exception(f, "alert_manager.trigger_event")
             )
 
     def on_created(self, event):

@@ -9,11 +9,24 @@ handshake — applying it here previously made the endpoint unusable.
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.config.settings import settings
 from app.services.auth import decode_token
 from app.websocket.connection_manager import manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _origin_allowed(origin: str) -> bool:
+    """
+    Defense-in-depth check for the WS handshake's Origin header. The cookie
+    itself is samesite="strict" so a modern browser won't attach it
+    cross-site anyway — this exists as a second, independent layer for
+    older/non-compliant clients rather than relying on the cookie alone.
+    """
+    if not origin:
+        return False
+    return origin.rstrip("/") in {o.rstrip("/") for o in settings.BACKEND_CORS_ORIGINS}
 
 
 @router.websocket("/logs/stream")
@@ -24,8 +37,9 @@ async def websocket_endpoint(websocket: WebSocket):
     login is read from the WebSocket handshake (browsers attach cookies
     to the WS upgrade request automatically for same-origin connections).
     """
+    origin = websocket.headers.get("origin", "")
     token = websocket.cookies.get("waf_session_v3")
-    if decode_token(token) is None:
+    if not _origin_allowed(origin) or decode_token(token) is None:
         # Accept-then-close (rather than closing pre-accept) is the more
         # reliably-supported rejection pattern across ASGI servers/proxies.
         await websocket.accept()

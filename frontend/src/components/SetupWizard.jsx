@@ -93,7 +93,7 @@ const SetupWizard = ({ onComplete }) => {
                 className="setup-step"
               >
                 <div className="step-icon-wrapper">
-                  <Server size={48} color="#14b8a6" />
+                  <Server size={48} color="var(--teal-color)" />
                 </div>
                 <h2>Protect Your Application</h2>
                 <p className="step-description">
@@ -128,7 +128,7 @@ const SetupWizard = ({ onComplete }) => {
 
                   <div className="setup-toggle-wrapper">
                     <div className="toggle-label-group">
-                      <Zap size={18} color={setupData.enableProtection ? '#10b981' : '#6b7280'} />
+                      <Zap size={18} color={setupData.enableProtection ? 'var(--success-color)' : 'var(--text-secondary)'} />
                       <span>Enable Protection Immediately</span>
                     </div>
                     <div
@@ -152,7 +152,7 @@ const SetupWizard = ({ onComplete }) => {
                 className="setup-step"
               >
                 <div className="step-icon-wrapper">
-                  <Shield size={48} color="#14b8a6" />
+                  <Shield size={48} color="var(--teal-color)" />
                 </div>
                 <h2>Choose Protection Level</h2>
                 <p className="step-description">
@@ -223,7 +223,7 @@ const SetupWizard = ({ onComplete }) => {
                 className="setup-step"
               >
                 <div className="step-icon-wrapper">
-                  <Bell size={48} color="#14b8a6" />
+                  <Bell size={48} color="var(--teal-color)" />
                 </div>
                 <h2>Configure Alerts</h2>
                 <p className="step-description">
@@ -233,7 +233,7 @@ const SetupWizard = ({ onComplete }) => {
                 <div className="setup-form">
                   <div className="form-group">
                     <label htmlFor="alertEmail">
-                      Notification Email <span style={{ color: '#6b7280', fontWeight: 400 }}>(Optional)</span>
+                      Notification Email <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(Optional)</span>
                     </label>
                     <input
                       id="alertEmail"
@@ -261,7 +261,7 @@ const SetupWizard = ({ onComplete }) => {
                   </div>
 
                   <div className="info-box">
-                    <AlertTriangle size={16} color="#f59e0b" />
+                    <AlertTriangle size={16} color="var(--warning-color)" />
                     <span>You can configure additional notification channels (Slack, Telegram) later in the Advanced settings.</span>
                   </div>
                 </div>
@@ -283,7 +283,7 @@ const SetupWizard = ({ onComplete }) => {
                   animate={{ scale: 1 }}
                   transition={{ delay: 0.2, type: 'spring', stiffness: 200 }}
                 >
-                  <CheckCircle size={64} color="#10b981" />
+                  <CheckCircle size={64} color="var(--success-color)" />
                 </motion.div>
                 
                 <h2>You're Protected!</h2>
@@ -319,19 +319,19 @@ const SetupWizard = ({ onComplete }) => {
                   <h3>What's Protecting Your Application:</h3>
                   <div className="feature-grid">
                     <div className="feature-item">
-                      <CheckCircle size={16} color="#10b981" />
+                      <CheckCircle size={16} color="var(--success-color)" />
                       <span>OWASP Core Rule Set v4.0</span>
                     </div>
                     <div className="feature-item">
-                      <CheckCircle size={16} color="#10b981" />
+                      <CheckCircle size={16} color="var(--success-color)" />
                       <span>AI/ML Threat Detection</span>
                     </div>
                     <div className="feature-item">
-                      <CheckCircle size={16} color="#10b981" />
+                      <CheckCircle size={16} color="var(--success-color)" />
                       <span>Real-time Attack Blocking</span>
                     </div>
                     <div className="feature-item">
-                      <CheckCircle size={16} color="#10b981" />
+                      <CheckCircle size={16} color="var(--success-color)" />
                       <span>24/7 Traffic Monitoring</span>
                     </div>
                   </div>

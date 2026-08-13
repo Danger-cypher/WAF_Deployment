@@ -170,18 +170,25 @@ def validate_content_type(content_type: Optional[str], allowed_types: List[str])
 def get_client_ip(request: Request) -> str:
     """
     Extract client IP from request, handling reverse proxy headers.
-    Returns the leftmost IP from X-Forwarded-For or client host.
+
+    Prefers X-Real-IP because nginx sets it directly from $remote_addr (see
+    every proxy_set_header X-Real-IP line in configs/nginx/sites-available/*)
+    — a trustworthy value the client cannot influence. X-Forwarded-For is
+    NOT used here even though it's also set: nginx uses
+    $proxy_add_x_forwarded_for, which APPENDS to whatever XFF value the
+    client already sent rather than replacing it, so the leftmost entry is
+    attacker-controlled. Using it directly let anyone bypass the login
+    rate-limiter/lockout by sending a fresh fake X-Forwarded-For on every
+    attempt (login/MFA lockout in app/routes/auth.py keys off this
+    function's return value).
     """
-    # Try X-Forwarded-For header first (for proxy scenarios)
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        # Take the first IP in the chain (original client)
-        return forwarded_for.split(",")[0].strip()
-    
-    # Fall back to client host
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+
     if request.client:
         return request.client.host
-    
+
     return "unknown"
 
 

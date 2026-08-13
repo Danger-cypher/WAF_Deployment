@@ -190,8 +190,12 @@ async def get_security_statistics(
     
     - **hours**: Time window in hours (default: 24)
     """
-    all_events = security_audit_logger.get_recent_events(hours=hours)
-    
+    # get_recent_events() defaults to limit=100 and stops scanning the audit
+    # log as soon as it hits that many matches within the window — for a
+    # 30-day compliance report that silently undercounts every stat below.
+    # This endpoint summarizes the whole window, so it needs the full set.
+    all_events = security_audit_logger.get_recent_events(hours=hours, limit=1_000_000)
+
     # Count events by type
     stats = {
         "total_events": len(all_events),
@@ -243,7 +247,10 @@ async def get_ip_security_profile(
     - **ip_address**: The IP address to look up
     - **hours**: Time window in hours (default: 24)
     """
-    all_events = security_audit_logger.get_recent_events(hours=hours)
+    # Same undercounting issue as /statistics: without an explicit limit,
+    # scanning stops at the first 100 matches in the window, so an IP's
+    # true event count/summary would be wrong for a busy or wide window.
+    all_events = security_audit_logger.get_recent_events(hours=hours, limit=1_000_000)
     
     # Filter by IP
     ip_events = [

@@ -1,6 +1,7 @@
+import asyncio
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import csv
 import io
 
@@ -29,7 +30,12 @@ async def get_general_stats(
     """
     Get overall WAF statistics.
     """
-    stats = calculate_stats(hours)
+    # calculate_stats() does synchronous ClickHouse queries and, on a cache
+    # miss with hours=None, a full line-by-line scan of the nginx access log
+    # — run directly on this async route it blocks the entire single-process
+    # event loop for its full duration, stalling every other concurrent
+    # user's request on the dashboard, not just this one.
+    stats = await asyncio.to_thread(calculate_stats, hours)
     return StatsResponse(**stats)
 
 
@@ -41,7 +47,7 @@ async def get_top_attacking_ips(
     """
     Get top attacking IPs.
     """
-    return get_top_ips(hours=hours)
+    return await asyncio.to_thread(get_top_ips, hours=hours)
 
 
 @router.get("/attack-types", response_model=List[Dict[str, Any]])
@@ -52,7 +58,7 @@ async def get_attack_types(
     """
     Get attack category distribution.
     """
-    return get_attack_types_distribution(hours)
+    return await asyncio.to_thread(get_attack_types_distribution, hours)
 
 
 @router.get("/timeline", response_model=TimelineResponse)
@@ -63,7 +69,7 @@ async def get_attack_timeline(
     """
     Get timeline of attacks.
     """
-    data = get_timeline(hours)
+    data = await asyncio.to_thread(get_timeline, hours)
     entries = [TimelineEntry(**item) for item in data]
     return TimelineResponse(data=entries)
 
@@ -76,7 +82,7 @@ async def get_top_rules_stats(
     """
     Get most triggered rules.
     """
-    return get_top_rules(hours=hours)
+    return await asyncio.to_thread(get_top_rules, hours=hours)
 
 
 @router.get("/severity-distribution", response_model=List[Dict[str, Any]])
@@ -87,15 +93,20 @@ async def get_severity_dist(
     """
     Get severity level distribution.
     """
-    return get_severity_distribution(hours)
+    return await asyncio.to_thread(get_severity_distribution, hours)
 
 
 @router.get("/stats/export/csv")
-async def export_logs_csv(current_user: TokenData = Depends(require_any_role)):
+async def export_logs_csv(
+    hours: Optional[int] = None,
+    current_user: TokenData = Depends(require_any_role),
+):
     """
-    Exports the WAF security events/logs as a CSV file.
+    Exports the WAF security events/logs as a CSV file, scoped to `hours` if
+    given — previously always exported the full log history regardless of
+    which timeframe the caller had selected in a report.
     """
-    logs = get_all_logs()
+    logs = await asyncio.to_thread(get_all_logs, hours=hours)
 
     def generate():
         output = io.StringIO()

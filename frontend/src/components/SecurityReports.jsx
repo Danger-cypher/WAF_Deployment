@@ -4,7 +4,17 @@ import {
   Download, Printer, AlertTriangle,
   ShieldCheck, Activity, FileJson, RefreshCw
 } from 'lucide-react';
-import { getStats, getAttackTypes, getTopIPs, getHealth, getSecurityStatistics } from '../services/api';
+import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
+import {
+  getStats, getAttackTypes, getTopIPs, getHealth, getSecurityStatistics,
+  getWafSettings, getHardeningSettings, getLogSettings, getProtectedApps,
+} from '../services/api';
+
+const ATTACK_CHART_COLORS = [
+  'var(--danger-color)', 'var(--sev-high)', 'var(--warning-color)',
+  'var(--accent-color)', 'var(--ml-color)', 'var(--cyan-color)',
+  'var(--pink-color)', 'var(--text-secondary)',
+];
 
 export default function SecurityReports() {
   const [timeframe, setTimeframe] = useState('24h'); // '24h', '7d', '30d'
@@ -28,27 +38,77 @@ export default function SecurityReports() {
         getSecurityStatistics(hours)
       ]);
 
+      // Compliance-table data comes from admin-only settings endpoints —
+      // fetched separately (not in the Promise.all above) so a non-admin
+      // analyst viewing this page still gets the rest of the report instead
+      // of the whole thing failing on a 403. `null` on failure means "could
+      // not verify," which the compliance table renders honestly instead of
+      // defaulting to a fake green checkmark.
+      let wafSettings = null, hardeningSettings = null, logSettings = null, protectedApps = null;
+      try {
+        [wafSettings, hardeningSettings, logSettings, protectedApps] = await Promise.all([
+          getWafSettings(), getHardeningSettings(), getLogSettings(), getProtectedApps(),
+        ]);
+      } catch (complianceErr) {
+        console.warn('Could not load compliance settings (may require admin role):', complianceErr);
+      }
+
       // Process and structure the data nicely for the report
       const totalRequests = stats?.total_requests || 0;
       const totalBlocked = stats?.total_blocked || 0;
       const blockRate = totalRequests > 0 ? ((totalBlocked / totalRequests) * 100).toFixed(2) : '0.00';
       
-      // Determine overall risk rating
+      // Determine overall risk rating. blockRate is already a ratio (blocked/
+      // total requests) so it's timeframe-independent, but the absolute
+      // totalBlocked thresholds below were calibrated for a 24h window — used
+      // as-is against a 30d report they'd flag a perfectly normal month
+      // (250 blocks over 30 days ≈ 8/day) as the same "HIGH" severity as
+      // 250 blocks in a single day. Normalize to a blocked-per-day rate
+      // before comparing against the (24h-calibrated) thresholds.
+      const blockedPerDay = totalBlocked / (hours / 24);
       let riskLevel = 'LOW';
-      let riskColor = '#10b981'; // green
-      if (totalBlocked > 1000 || parseFloat(blockRate) > 10.0) {
+      let riskColor = 'var(--success-color)'; // green
+      if (blockedPerDay > 1000 || parseFloat(blockRate) > 10.0) {
         riskLevel = 'CRITICAL';
-        riskColor = '#ff3b5c'; // red
-      } else if (totalBlocked > 200 || parseFloat(blockRate) > 3.0) {
+        riskColor = 'var(--danger-color)'; // red
+      } else if (blockedPerDay > 200 || parseFloat(blockRate) > 3.0) {
         riskLevel = 'HIGH';
-        riskColor = '#ff9500'; // orange
-      } else if (totalBlocked > 20 || parseFloat(blockRate) > 0.5) {
+        riskColor = 'var(--sev-high)'; // orange
+      } else if (blockedPerDay > 20 || parseFloat(blockRate) > 0.5) {
         riskLevel = 'MEDIUM';
-        riskColor = '#bf5af2'; // purple
+        riskColor = 'var(--ml-color)'; // purple
       }
 
+      // Auto-generated narrative summary — plain-language framing of the
+      // numeric metrics above, since a page of raw tables/counters with no
+      // prose reads as a data dump rather than a report an executive or
+      // auditor can skim in 15 seconds.
+      const topAttack = attackTypes?.length
+        ? [...attackTypes].sort((a, b) => (b.count || 0) - (a.count || 0))[0]
+        : null;
+      const topSourceIp = topIps?.length ? topIps[0] : null;
+      const narrativeSummary = [
+        `During the selected ${timeframe === '24h' ? 'last 24 hours' : timeframe === '7d' ? 'last 7 days' : 'last 30 days'}, the CyberSentinel WAF Engine inspected ${totalRequests.toLocaleString()} HTTP requests and blocked ${totalBlocked.toLocaleString()} as malicious (${blockRate}% of total traffic).`,
+        topAttack
+          ? `The most frequently detected violation category was "${topAttack.attack_type || 'Unknown / Custom'}" with ${topAttack.count.toLocaleString()} detections.`
+          : `No categorized violations were recorded in this window.`,
+        topSourceIp
+          ? `The most active single source of malicious traffic was ${topSourceIp.ip || topSourceIp.client_ip || topSourceIp.source_ip || 'an unidentified IP'}${topSourceIp.country ? ` (${topSourceIp.country})` : ''}, responsible for ${(topSourceIp.count || 0).toLocaleString()} flagged requests.`
+          : ``,
+        `Based on blocked-traffic volume and violation rate, this reporting period is assessed as ${riskLevel} risk.`,
+      ].filter(Boolean).join(' ');
+
+      const generatedAtDate = new Date();
+      // Report ID: deterministic-enough to be a real reference number (not
+      // random per re-render) — timestamp + timeframe + report type — so an
+      // analyst citing "report CSR-..." in an incident ticket is citing
+      // something reproducible, not a throwaway value.
+      const reportId = `CSR-${generatedAtDate.getTime().toString(36).toUpperCase()}-${timeframe.toUpperCase()}`;
+
       setReportData({
-        generatedAt: new Date().toLocaleString(),
+        reportId,
+        narrativeSummary,
+        generatedAt: generatedAtDate.toLocaleString(),
         timeframe: timeframe === '24h' ? 'Last 24 Hours' : timeframe === '7d' ? 'Last 7 Days' : 'Last 30 Days',
         riskLevel,
         riskColor,
@@ -56,7 +116,10 @@ export default function SecurityReports() {
           totalRequests,
           totalBlocked,
           blockRate,
-          uniqueIps: stats?.total_unique_ips || topIps?.length || 0,
+          // stats?.total_unique_ips ?? topIps?.length ?? 0 — a legitimate 0
+          // (no unique IPs seen) must not fall through to the topIps-length
+          // fallback the way `||` would treat it as missing.
+          uniqueIps: stats?.total_unique_ips ?? topIps?.length ?? 0,
           sqlInjections: stats?.sqli_count || 0,
           xssAttacks: stats?.xss_count || 0,
           topAttackType: stats?.top_attack_type || '-'
@@ -64,10 +127,24 @@ export default function SecurityReports() {
         attackTypes: attackTypes || [],
         topIps: topIps?.slice(0, 5) || [],
         health: {
-          status: health?.status || 'HEALTHY',
-          version: 'v2.0.0-2026',
+          // A missing/failed health check must not default to "HEALTHY" —
+          // that's the one outcome that's provably wrong when the check
+          // itself couldn't run.
+          status: health?.status || 'UNKNOWN',
           engine: 'CyberSentinel Engine v2.0',
-          antiDefacement: health?.anti_defacement?.status || 'ACTIVE'
+          antiDefacement: health?.anti_defacement?.status || 'UNKNOWN'
+        },
+        // Real system state for the Compliance report — `null` fields mean
+        // "could not verify" (see the try/catch above), rendered as a
+        // distinct neutral status rather than silently reported as passing.
+        compliance: {
+          engineEnforcement: wafSettings?.secRuleEngine ?? null, // 'On' | 'Off'
+          tlsHardening: hardeningSettings ? !!hardeningSettings.hsts_enabled : null,
+          adminAuditLogging: logSettings ? !!logSettings.auditEnabled : null,
+          activeProtectedHosts: protectedApps
+            ? protectedApps.filter((a) => a.is_active).length
+            : null,
+          totalProtectedHosts: protectedApps ? protectedApps.length : null,
         },
         audit: auditStatsRes || {
           total_events: 0,
@@ -92,8 +169,11 @@ export default function SecurityReports() {
   };
 
   const handleExportCSV = () => {
-    // Forward directly to the backend CSV export link
-    window.location.href = `${window.location.protocol}//${window.location.host}/api/stats/export/csv`;
+    // Forward directly to the backend CSV export link, scoped to the
+    // currently selected report timeframe (previously always exported the
+    // full, unfiltered log history regardless of what was on screen).
+    const hours = timeframe === '24h' ? 24 : timeframe === '7d' ? 168 : 720;
+    window.location.href = `${window.location.protocol}//${window.location.host}/api/stats/export/csv?hours=${hours}`;
   };
 
   const handleExportJSON = () => {
@@ -198,7 +278,7 @@ export default function SecurityReports() {
       {/* Structured report preview sheet */}
       {loading && (
         <div style={{ textAlign: 'center', padding: '100px 0', color: 'var(--text-secondary)' }} className="no-print">
-          <RefreshCw size={36} className="animate-spin" style={{ color: 'var(--accent-color)', marginBottom: '16px' }} />
+          <Activity size={36} className="animate-spin" style={{ color: 'var(--accent-color)', marginBottom: '16px' }} />
           <div>Compiling structured report data...</div>
         </div>
       )}
@@ -215,11 +295,22 @@ export default function SecurityReports() {
           <div className="print-header">
             <h2>CyberSentinel WAF Audit & Threat Report</h2>
             <div className="print-meta-grid">
+              <div><strong>Report ID:</strong> {reportData.reportId}</div>
               <div><strong>Timeframe:</strong> {reportData.timeframe}</div>
               <div><strong>Generated At:</strong> {reportData.generatedAt}</div>
               <div><strong>Risk Rating:</strong> {reportData.riskLevel}</div>
               <div><strong>Status:</strong> {reportData.health.status}</div>
+              <div><strong>Classification:</strong> Confidential — Internal Use Only</div>
             </div>
+          </div>
+
+          {/* Print-only footer — position:fixed repeats this on every printed
+              page (Chrome/Firefox both honor this for @media print), which is
+              the only reliable way to stamp page provenance: browsers don't
+              expose CSS counter(page)/counter(pages) to page content, only to
+              their own optional header/footer in the print dialog. */}
+          <div className="print-footer">
+            CyberSentinel WAF — {reportData.reportId} — Confidential
           </div>
 
           {/* Report Sheet Header Card */}
@@ -235,14 +326,17 @@ export default function SecurityReports() {
                 <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                   Timeframe: <strong>{reportData.timeframe}</strong> · Generated at: <strong>{reportData.generatedAt}</strong>
                 </div>
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                  Report ID: <strong>{reportData.reportId}</strong> · Classification: <strong>Confidential — Internal Use Only</strong>
+                </div>
               </div>
 
               <div style={{ 
                 textAlign: 'right', 
                 padding: '12px 20px', 
                 borderRadius: '8px', 
-                background: 'rgba(255,255,255,0.02)',
-                border: '1px solid rgba(255,255,255,0.06)'
+                background: 'var(--surface-subtle)',
+                border: '1px solid var(--border-color)'
               }}>
                 <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>OVERALL RISK</div>
                 <div style={{ fontSize: '20px', fontWeight: 800, color: reportData.riskColor, letterSpacing: '0.5px' }}>
@@ -250,6 +344,14 @@ export default function SecurityReports() {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Narrative Summary */}
+          <div className="report-section-box" style={{ marginBottom: '20px' }}>
+            <h3>Executive Narrative</h3>
+            <p style={{ fontSize: '13px', lineHeight: 1.7, color: 'var(--text-primary)' }}>
+              {reportData.narrativeSummary}
+            </p>
           </div>
 
           {/* Executive Summary stats grid */}
@@ -280,7 +382,32 @@ export default function SecurityReports() {
             <div className="report-sections-layout">
               {/* Category distribution */}
               <div className="report-section-box">
-                <h3>🛡️ Violation Category Breakdown</h3>
+                <h3>Violation Category Breakdown</h3>
+                {reportData.attackTypes.length > 0 && (
+                  <div style={{ height: '200px', width: '100%', marginBottom: '12px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={reportData.attackTypes}
+                          cx="50%" cy="50%"
+                          innerRadius={40} outerRadius={70}
+                          paddingAngle={2}
+                          dataKey="count"
+                          nameKey="attack_type"
+                          strokeWidth={0}
+                        >
+                          {reportData.attackTypes.map((entry, index) => (
+                            <Cell key={index} fill={ATTACK_CHART_COLORS[index % ATTACK_CHART_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <RechartsTooltip
+                          contentStyle={{ background: 'var(--chart-tooltip-bg)', border: '1px solid var(--surface-strong)', borderRadius: '8px', fontSize: '12px' }}
+                          itemStyle={{ color: 'var(--text-primary)' }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
                 <div className="report-table-wrapper">
                   <table className="report-table">
                     <thead>
@@ -316,7 +443,7 @@ export default function SecurityReports() {
 
               {/* Top Attacking IPs */}
               <div className="report-section-box">
-                <h3>🌍 Top Attack Originators</h3>
+                <h3>Top Attack Originators</h3>
                 <div className="report-table-wrapper">
                   <table className="report-table">
                     <thead>
@@ -351,29 +478,29 @@ export default function SecurityReports() {
             <div className="report-sections-layout">
               {/* Detailed Threat Metrics */}
               <div className="report-section-box" style={{ gridColumn: 'span 2' }}>
-                <h3>🔍 Threat Intelligence & Signatures</h3>
+                <h3>Threat Intelligence & Signatures</h3>
                 <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
                   Signature-based detections and CyberSentinel Engine Core Rule Set (CRS) triggers recorded for this timeframe.
                 </p>
                 <div className="report-grid-3" style={{ margin: '0 0 20px 0', padding: 0, border: 'none', background: 'transparent' }}>
-                  <div className="report-metric-card" style={{ background: 'rgba(255,255,255,0.01)' }}>
+                  <div className="report-metric-card" style={{ background: 'var(--surface-subtle)' }}>
                     <span className="metric-label">SQL Injection Attacks</span>
                     <span className="metric-value" style={{ fontSize: '24px' }}>{reportData.metrics.sqlInjections}</span>
                     <span className="metric-sub">Signature database matches</span>
                   </div>
-                  <div className="report-metric-card" style={{ background: 'rgba(255,255,255,0.01)' }}>
+                  <div className="report-metric-card" style={{ background: 'var(--surface-subtle)' }}>
                     <span className="metric-label">Cross-Site Scripting (XSS)</span>
                     <span className="metric-value" style={{ fontSize: '24px' }}>{reportData.metrics.xssAttacks}</span>
                     <span className="metric-sub">Browser payloads filtered</span>
                   </div>
-                  <div className="report-metric-card" style={{ background: 'rgba(255,255,255,0.01)' }}>
+                  <div className="report-metric-card" style={{ background: 'var(--surface-subtle)' }}>
                     <span className="metric-label">Primary Attack Vector</span>
                     <span className="metric-value" style={{ fontSize: '20px', color: 'var(--accent-color)' }}>{reportData.metrics.topAttackType}</span>
                     <span className="metric-sub">Most frequent category</span>
                   </div>
                 </div>
 
-                <h3 style={{ marginTop: '24px' }}>🌍 Top Threat Originators</h3>
+                <h3 style={{ marginTop: '24px' }}>Top Threat Originators</h3>
                 <div className="report-table-wrapper">
                   <table className="report-table">
                     <thead>
@@ -408,7 +535,7 @@ export default function SecurityReports() {
             <div className="report-sections-layout">
               {/* Compliance checks */}
               <div className="report-section-box">
-                <h3>⚖️ System Configuration & Compliance</h3>
+                <h3>System Configuration & Compliance</h3>
                 <div className="report-table-wrapper">
                   <table className="report-table">
                     <thead>
@@ -420,23 +547,48 @@ export default function SecurityReports() {
                     <tbody>
                       <tr>
                         <td>CyberSentinel Engine Enforcement</td>
-                        <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>ENFORCING</td>
+                        {(() => {
+                          const on = reportData.compliance.engineEnforcement;
+                          if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
+                          return on === 'On'
+                            ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENFORCING</td>
+                            : <td style={{ textAlign: 'right', color: 'var(--danger-color)', fontWeight: 600 }}>NOT ENFORCING</td>;
+                        })()}
                       </tr>
                       <tr>
-                        <td>SSL/TLS Dynamic Cipher Hardening</td>
-                        <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>ENABLED</td>
+                        <td>SSL/TLS Dynamic Cipher Hardening (HSTS)</td>
+                        {(() => {
+                          const on = reportData.compliance.tlsHardening;
+                          if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
+                          return on
+                            ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENABLED</td>
+                            : <td style={{ textAlign: 'right', color: 'var(--sev-high)', fontWeight: 600 }}>DISABLED</td>;
+                        })()}
                       </tr>
                       <tr>
                         <td>Dynamic Web Anti-Defacement Integrity Check</td>
-                        <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>{reportData.health.antiDefacement}</td>
+                        <td style={{
+                          textAlign: 'right', fontWeight: 600,
+                          color: reportData.health.antiDefacement === 'ACTIVE' ? 'var(--success-color)' : 'var(--text-secondary)',
+                        }}>{reportData.health.antiDefacement}</td>
                       </tr>
                       <tr>
                         <td>Admin Authentication Logging & Audits</td>
-                        <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>ENFORCED</td>
+                        {(() => {
+                          const on = reportData.compliance.adminAuditLogging;
+                          if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
+                          return on
+                            ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENFORCED</td>
+                            : <td style={{ textAlign: 'right', color: 'var(--danger-color)', fontWeight: 600 }}>DISABLED</td>;
+                        })()}
                       </tr>
                       <tr>
                         <td>Active Protected Virtual Hosts</td>
-                        <td style={{ textAlign: 'right', fontWeight: 600 }}>ACTIVE</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                          {reportData.compliance.activeProtectedHosts == null
+                            ? 'UNABLE TO VERIFY'
+                            : `${reportData.compliance.activeProtectedHosts} / ${reportData.compliance.totalProtectedHosts} ACTIVE`}
+                        </td>
                       </tr>
                     </tbody>
                   </table>
@@ -445,7 +597,7 @@ export default function SecurityReports() {
 
               {/* Security Audit Events */}
               <div className="report-section-box">
-                <h3>📝 Security Audit Event Types</h3>
+                <h3>Security Audit Event Types</h3>
                 <div className="report-table-wrapper">
                   <table className="report-table">
                     <thead>
@@ -479,18 +631,20 @@ export default function SecurityReports() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
               <div>
                 <div className="summary-label">GATEWAY NODE STATUS</div>
-                <div className="summary-value" style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#10b981' }}>
+                <div
+                  className="summary-value"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    color: reportData.health.status === 'HEALTHY' ? 'var(--success-color)' : 'var(--sev-high)',
+                  }}
+                >
                   <ShieldCheck size={14} />
-                  <span>{reportData.health.status} (100% UPTIME)</span>
+                  <span>{reportData.health.status}</span>
                 </div>
               </div>
               <div>
                 <div className="summary-label">WAF CORE ENGINE</div>
                 <div className="summary-value">{reportData.health.engine}</div>
-              </div>
-              <div>
-                <div className="summary-label">INTEGRITY FIRMWARE</div>
-                <div className="summary-value">{reportData.health.version}</div>
               </div>
             </div>
           </div>
@@ -506,10 +660,10 @@ export default function SecurityReports() {
         }
 
         .report-controls-panel {
-          background: rgba(255, 255, 255, 0.02);
+          background: var(--surface-subtle);
           backdrop-filter: blur(12px);
           -webkit-backdrop-filter: blur(12px);
-          border: 1px solid rgba(255, 255, 255, 0.08);
+          border: 1px solid var(--surface-strong);
           border-radius: 12px;
           padding: 20px 24px;
           display: flex;
@@ -531,21 +685,21 @@ export default function SecurityReports() {
         }
 
         .report-btn.active {
-          background: rgba(0, 212, 255, 0.1);
-          border-color: rgba(0, 212, 255, 0.3);
+          background: rgba(79, 70, 229, 0.1);
+          border-color: rgba(79, 70, 229, 0.3);
           color: var(--accent-color);
-          box-shadow: 0 0 12px rgba(0, 212, 255, 0.15);
+          box-shadow: 0 0 12px rgba(79, 70, 229, 0.15);
         }
 
         .report-btn:hover:not(.active) {
-          background: rgba(255,255,255,0.05);
+          background: var(--surface-hover);
           color: var(--text-primary);
         }
 
         .report-select {
           padding: 8px 36px 8px 16px;
-          background: rgba(255,255,255,0.03);
-          border: 1px solid rgba(255,255,255,0.1);
+          background: var(--surface-subtle);
+          border: 1px solid var(--border-strong);
           border-radius: 6px;
           color: var(--text-primary);
           font-size: 13px;
@@ -563,7 +717,7 @@ export default function SecurityReports() {
 
         .report-select:focus, .report-select:hover {
           border-color: var(--accent-color);
-          background-color: rgba(0,212,255,0.02);
+          background-color: rgba(79, 70, 229, 0.05);
         }
 
         .report-action-btn {
@@ -580,26 +734,26 @@ export default function SecurityReports() {
         }
 
         .report-action-btn.primary {
-          background: linear-gradient(135deg, #00d4ff 0%, #0099ff 100%);
-          color: #000;
-          box-shadow: 0 4px 14px rgba(0, 212, 255, 0.25);
+          background: var(--accent-color);
+          color: #fff;
+          box-shadow: 0 4px 14px rgba(79, 70, 229, 0.25);
           border: none;
         }
 
         .report-action-btn.primary:hover:not(:disabled) {
-          box-shadow: 0 6px 20px rgba(0, 212, 255, 0.4);
+          box-shadow: 0 6px 20px rgba(79, 70, 229, 0.4);
           transform: translateY(-1px);
         }
 
         .report-action-btn.secondary {
-          background: rgba(255,255,255,0.03);
-          border-color: rgba(255,255,255,0.1);
+          background: var(--surface-subtle);
+          border-color: var(--border-strong);
           color: var(--text-secondary);
         }
 
         .report-action-btn.secondary:hover:not(:disabled) {
-          background: rgba(255,255,255,0.08);
-          border-color: rgba(255,255,255,0.2);
+          background: var(--surface-strong);
+          border-color: var(--border-strong);
           color: var(--text-primary);
           transform: translateY(-1px);
         }
@@ -633,7 +787,7 @@ export default function SecurityReports() {
         }
 
         .report-header-card {
-          border-bottom: 2px solid rgba(255,255,255,0.06);
+          border-bottom: 2px solid var(--border-color);
           padding-bottom: 24px;
           margin-bottom: 24px;
         }
@@ -657,8 +811,8 @@ export default function SecurityReports() {
         }
 
         .report-metric-card {
-          background: rgba(255,255,255,0.02);
-          border: 1px solid rgba(255,255,255,0.05);
+          background: var(--surface-subtle);
+          border: 1px solid var(--surface-hover);
           border-radius: 8px;
           padding: 20px;
           display: flex;
@@ -694,8 +848,8 @@ export default function SecurityReports() {
         }
 
         .report-section-box {
-          background: rgba(255,255,255,0.01);
-          border: 1px solid rgba(255,255,255,0.04);
+          background: var(--surface-subtle);
+          border: 1px solid var(--border-subtle);
           border-radius: 12px;
           padding: 24px;
         }
@@ -705,7 +859,7 @@ export default function SecurityReports() {
           font-weight: 700;
           color: var(--text-primary);
           margin: 0 0 16px 0;
-          border-bottom: 1px solid rgba(255,255,255,0.05);
+          border-bottom: 1px solid var(--surface-hover);
           padding-bottom: 10px;
         }
 
@@ -724,7 +878,7 @@ export default function SecurityReports() {
           padding: 8px 12px;
           color: var(--text-secondary);
           font-weight: 600;
-          border-bottom: 1px solid rgba(255,255,255,0.08);
+          border-bottom: 1px solid var(--surface-strong);
           font-size: 11px;
           text-transform: uppercase;
           letter-spacing: 0.5px;
@@ -732,19 +886,19 @@ export default function SecurityReports() {
 
         .report-table td {
           padding: 10px 12px;
-          border-bottom: 1px solid rgba(255,255,255,0.04);
+          border-bottom: 1px solid var(--border-subtle);
           color: var(--text-primary);
         }
 
         .report-table tr:hover td {
-          background: rgba(255,255,255,0.01);
+          background: var(--surface-subtle);
         }
 
         .report-footer-card {
           margin-top: 32px;
           padding: 20px 24px;
-          background: rgba(0,0,0,0.15);
-          border: 1px solid rgba(255,255,255,0.05);
+          background: var(--inset-bg);
+          border: 1px solid var(--surface-hover);
           border-radius: 8px;
         }
 
@@ -764,6 +918,10 @@ export default function SecurityReports() {
         }
 
         .print-header {
+          display: none;
+        }
+
+        .print-footer {
           display: none;
         }
 
@@ -812,6 +970,19 @@ export default function SecurityReports() {
             grid-template-columns: repeat(4, 1fr);
             font-size: 11px;
             color: #444;
+          }
+
+          .print-footer {
+            display: block !important;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 9px;
+            color: #666;
+            border-top: 1px solid #ddd;
+            padding-top: 6px;
           }
 
           .report-header-card {

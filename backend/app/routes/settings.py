@@ -50,6 +50,13 @@ from typing import List
 
 
 class PositiveSecurityModel(BaseModel):
+    # Not actually used to validate the request body — update_positive_security
+    # below takes an EncodedPayloadModel and decodes it manually (see the
+    # WAF_BYPASS_ handling there). Kept here to document the real shape of
+    # what's stored/generated into NGINX. Defaults to disabled: turning this
+    # on enforces allowed_methods/allowed_content_types/restricted_extensions
+    # for every protected app's traffic — never the dashboard's own API.
+    enabled: bool = False
     allowed_methods: List[str]
     allowed_content_types: List[str]
     restricted_extensions: List[str]
@@ -187,9 +194,18 @@ async def update_positive_security(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload")
 
-    # Simulate saving this to CRS configuration files
-    await asyncio.sleep(0.5)
-    return settings_manager.update_positive_security(settings_dict)
+    saved_settings = settings_manager.update_positive_security(settings_dict)
+
+    from app.services import nginx_manager
+
+    success, err_msg = nginx_manager.apply_positive_security_settings(saved_settings)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply and reload Positive Security policy in NGINX. {err_msg}",
+        )
+
+    return saved_settings
 
 
 # 3.7 Auto-Learning Settings Routes
@@ -248,12 +264,12 @@ async def update_ddos_bot_mitigation(
     # Apply to NGINX
     from app.services import nginx_manager
 
-    success = nginx_manager.apply_ddos_settings(saved_settings)
+    success, err_msg = nginx_manager.apply_ddos_settings(saved_settings)
     if not success:
-        logger.error("Failed to apply DDoS config to NGINX. Check permissions.")
+        logger.error(f"Failed to apply DDoS config to NGINX: {err_msg}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to apply and reload DDoS settings in NGINX. Check system permissions.",
+            detail=f"Failed to apply and reload DDoS settings in NGINX. {err_msg}",
         )
 
     return saved_settings
@@ -307,12 +323,12 @@ async def update_hardening_settings(
     # Apply to NGINX
     from app.services import nginx_manager
 
-    success = nginx_manager.apply_hardening_settings(saved_settings)
+    success, err_msg = nginx_manager.apply_hardening_settings(saved_settings)
     if not success:
-        logger.error("Failed to apply hardening settings to NGINX. Check permissions.")
+        logger.error(f"Failed to apply hardening settings to NGINX: {err_msg}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to apply and reload settings in NGINX. Check system permissions.",
+            detail=f"Failed to apply and reload settings in NGINX. {err_msg}",
         )
 
     return saved_settings
@@ -355,11 +371,12 @@ async def change_password(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect current password"
         )
-    if not payload.newPassword or len(payload.newPassword.strip()) < 8:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="New password must be at least 8 characters long",
-        )
+    from app.models.user_models import _validate_password_strength
+
+    try:
+        _validate_password_strength((payload.newPassword or "").strip())
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     user_service.set_password(user["id"], payload.newPassword)
     return {"message": "Password updated successfully!"}
 

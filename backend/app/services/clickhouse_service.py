@@ -65,6 +65,49 @@ def is_available() -> bool:
     return _get_client() is not None
 
 
+def reset_fabricated_api_discovery_fields() -> None:
+    """
+    One-time migration: api_discovery.has_https/content_encoding used to be
+    fabricated (has_https hardcoded to 1, content_encoding guessed from the
+    HTTP status code — see api_discovery.py) instead of measured from the
+    request. Reset any pre-existing rows to the "unknown" sentinel (2 /
+    "unknown") so old fabricated data doesn't keep misrepresenting endpoints
+    under the new, honest scoring logic. Fresh log lines (which now carry
+    $scheme/$sent_http_content_encoding) repopulate real values on the next
+    discovery pass.
+
+    ClickHouse has no per-install init-script re-run (configs/clickhouse/init.sql
+    only executes on a brand-new container), so this mirrors db_service.py's
+    marker-column trick: attempt to ADD COLUMN a marker; if that succeeds,
+    this is the first time the process has run against this table, so also
+    fire the mutation. If the column already exists, ClickHouse raises and
+    we skip — the reset already happened on a prior startup.
+    """
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        client.command(
+            "ALTER TABLE api_discovery ADD COLUMN https_encoding_reset_done UInt8 DEFAULT 0"
+        )
+    except ClickHouseError:
+        return  # Column already exists — reset already ran on a prior startup
+    except Exception as e:
+        logger.warning(f"ClickHouse api_discovery migration marker check failed: {e}")
+        return
+
+    try:
+        client.command(
+            "ALTER TABLE api_discovery UPDATE has_https = 2, content_encoding = 'unknown' WHERE 1"
+        )
+        logger.info(
+            "One-time reset of ClickHouse api_discovery.has_https/content_encoding "
+            "to 'unknown' — previous values were fabricated, not measured."
+        )
+    except Exception as e:
+        logger.error(f"ClickHouse api_discovery fabricated-field reset failed: {e}")
+
+
 # ---------------------------------------------------------------------------
 # waf_events — Write
 # ---------------------------------------------------------------------------
@@ -977,9 +1020,12 @@ def insert_api_discovery(records: List[Dict[str, Any]]) -> int:
             int(r.get("suspicious_count", 0)),
             int(r.get("external_hit_count", 0)),
             int(r.get("internal_hit_count", 0)),
-            int(r.get("has_https", 1)),
+            # 0=confirmed http, 1=confirmed https, 2=not measured (see
+            # api_discovery.py's HTTPS_UNKNOWN/ENCODING_UNKNOWN) — default to
+            # "not measured" rather than fabricating "secure"/"compressed".
+            int(r.get("has_https", 2)),
             int(r.get("has_versioning", 0)),
-            str(r.get("content_encoding", "none")),
+            str(r.get("content_encoding", "unknown")),
             float(r.get("avg_response_time_ms", 0.0)),
             ts,
         ])
@@ -1024,9 +1070,19 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
                        sum(suspicious_count)   AS suspicious_count,
                        sum(external_hit_count) AS external_hit_count,
                        sum(internal_hit_count) AS internal_hit_count,
-                       max(has_https)       AS has_https,
+                       -- 0=confirmed http, 1=confirmed https, 2=unknown — min()
+                       -- means a confirmed-insecure hit always wins (a real
+                       -- finding), then confirmed-secure, then unknown last.
+                       min(has_https)       AS has_https,
                        max(has_versioning)  AS has_versioning,
-                       any(content_encoding) AS content_encoding,
+                       -- Prefer any row with a real measurement over the
+                       -- "unknown" sentinel; only report "unknown" if every
+                       -- row for this endpoint is still unmeasured.
+                       if(
+                           countIf(content_encoding != 'unknown') > 0,
+                           anyIf(content_encoding, content_encoding != 'unknown'),
+                           'unknown'
+                       ) AS content_encoding,
                        sum(avg_response_time_ms * hit_count) AS weighted_response_sum
                 FROM api_discovery
                 GROUP BY uri, method

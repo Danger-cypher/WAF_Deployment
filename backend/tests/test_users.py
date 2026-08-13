@@ -22,7 +22,7 @@ def test_admin_can_create_user(admin_session):
     r = client.post(
         "/users",
         headers={"X-XSRF-TOKEN": csrf},
-        json={"username": "newanalyst", "password": "NewPass123!", "role": "analyst"},
+        json={"username": "newanalyst", "password": "NewPassw123!", "role": "analyst"},
     )
     assert r.status_code == 201
     body = r.json()
@@ -37,7 +37,7 @@ def test_create_user_duplicate_username_conflicts(admin_session):
     r = client.post(
         "/users",
         headers={"X-XSRF-TOKEN": csrf},
-        json={"username": user["username"], "password": "NewPass123!", "role": "analyst"},
+        json={"username": user["username"], "password": "NewPassw123!", "role": "analyst"},
     )
     assert r.status_code == 409
 
@@ -47,7 +47,7 @@ def test_analyst_cannot_create_user(analyst_session):
     r = client.post(
         "/users",
         headers={"X-XSRF-TOKEN": csrf},
-        json={"username": "sneaky", "password": "NewPass123!", "role": "admin"},
+        json={"username": "sneaky", "password": "NewPassw123!", "role": "admin"},
     )
     assert r.status_code == 403
 

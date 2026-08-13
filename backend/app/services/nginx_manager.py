@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import tempfile
 import ipaddress
 import logging
 import redis
@@ -9,6 +10,24 @@ logger = logging.getLogger(__name__)
 
 DDOS_CONF_PATH = "/etc/nginx/conf.d/waf_ddos.conf"
 HARDENING_CONF_PATH = "/etc/nginx/conf.d/waf_hardening.conf"
+# NOT Included globally from modsec/main.conf (that applies to every server
+# block, including the WAF GUI's own dashboard on port 3020 — confirmed via
+# nginx.conf's `modsecurity_rules_file /etc/nginx/modsec/main.conf;` at the
+# http{} level). Instead, sync_protected_apps_to_nginx() references this
+# file with a per-server-block `modsecurity_rules_file` directive inside
+# each PROTECTED APP's own generated server{} block only — the same scoping
+# pattern already used by the dashboard's own vhost
+# (configs/nginx/sites-available/cybersentinel) for its CRS exclusions.
+# This is what keeps a Positive Security policy from ever applying to the
+# dashboard's own admin traffic, without needing any URI-prefix guessing.
+POSITIVE_SECURITY_CONF_PATH = "/etc/nginx/modsec/positive-security.conf"
+
+# Per-protected-app require-auth (Phase 3) rule files. One file per app
+# (not a shared global one) since each app can configure its own header/
+# cookie name — same modsecurity_rules_file-per-server-block scoping as
+# POSITIVE_SECURITY_CONF_PATH above, just app-specific instead of shared.
+APP_AUTH_CONF_DIR = "/etc/nginx/modsec/app-auth"
+
 REDIS_SECRET_FILE = "/etc/cybersentinel/redis.secret"  # nosec B105
 
 
@@ -52,7 +71,81 @@ def _validate_ip_or_cidr(ip: str) -> bool:
         return False
 
 
-def apply_ddos_settings(settings: dict) -> bool:
+def _atomic_write(path: str, content: str) -> None:
+    """
+    Writes `content` to `path` via temp file + os.replace() so a crash or
+    power loss mid-write can never leave a truncated/corrupt config file on
+    disk — same pattern as rule_manager's override-file writer.
+    """
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".nginxcfg-", suffix=".tmp")
+    try:
+        # mkstemp() creates the file at mode 0600 (owner read/write only) and
+        # os.replace() carries that mode over — nginx configs need to stay
+        # world-readable like the files they replace, or OpenResty running as
+        # a different uid (or any non-root debugging/backup tooling on the
+        # host) silently loses the ability to read its own config.
+        os.chmod(tmp_path, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+def write_and_apply_configs(file_contents: dict) -> tuple[bool, str]:
+    """
+    Writes one or more generated NGINX config files, validates the *full*
+    config syntax with test_nginx_config(), and only reloads if it's valid —
+    restoring every file to its prior state (or deleting it, if it didn't
+    exist before) on failure.
+
+    This matters because `nginx -s reload`'s exit code only reflects whether
+    the running master process could be *signaled*, not whether it accepted
+    the new config: nginx re-validates asynchronously inside the master
+    after the reload command has already returned, so a caller that trusts
+    reload_nginx()'s return value alone can silently believe a bad config
+    was applied when nginx actually rejected it and kept running the old
+    one. Callers should surface the returned message to the admin instead
+    of a generic "failed" — it's the actual nginx config test output.
+    """
+    backups = {}
+    try:
+        for path, content in file_contents.items():
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    backups[path] = f.read()
+            else:
+                backups[path] = None
+            _atomic_write(path, content)
+    except Exception as e:
+        logger.error(f"Failed to write NGINX config file(s): {e}")
+        return False, f"Failed to write configuration file(s): {e}"
+
+    valid, err_msg = test_nginx_config()
+    if not valid:
+        for path, old_content in backups.items():
+            try:
+                if old_content is None:
+                    if os.path.exists(path):
+                        os.remove(path)
+                else:
+                    _atomic_write(path, old_content)
+            except Exception as restore_err:
+                logger.error(f"Failed to restore {path} after invalid config: {restore_err}")
+        logger.error(f"NGINX config validation failed, changes rolled back: {err_msg}")
+        return False, f"NGINX configuration validation failed (changes rolled back): {err_msg}"
+
+    if not reload_nginx():
+        return False, "NGINX configuration is valid but the reload command failed. Check system permissions and sudoers/docker exec access."
+
+    return True, ""
+
+
+def apply_ddos_settings(settings: dict) -> tuple[bool, str]:
     """
     Generates NGINX rate-limiting configuration based on the provided settings
     and reloads NGINX to apply them.
@@ -236,8 +329,17 @@ def apply_ddos_settings(settings: dict) -> bool:
                 elif param_type == "IP":
                     nginx_var = "$remote_addr"
                 elif param_type == "Session":
+                    # cookie_name comes straight from the admin-supplied rule
+                    # payload with no character restriction — embedded raw
+                    # into an nginx variable-name token, an unsanitized value
+                    # containing e.g. a newline or `{` could break out of the
+                    # generated map block into arbitrary config injection.
                     cookie_name = param_value.strip() or "session"
-                    nginx_var = f"$cookie_{cookie_name.lower().replace('-', '_')}"
+                    safe_cookie_name = re.sub(r"[^A-Za-z0-9_-]", "", cookie_name).lower().replace("-", "_")
+                    if not safe_cookie_name:
+                        logger.warning(f"Skipping rule '{rule_name}': cookie name is empty after sanitization.")
+                        continue
+                    nginx_var = f"$cookie_{safe_cookie_name}"
                     limit_by_value = True
                 elif param_type == "Country":
                     if not geoip2_module_enabled or not has_country_db:
@@ -259,15 +361,22 @@ def apply_ddos_settings(settings: dict) -> bool:
                         nginx_var = "$geoip2_data_org"
                 elif param_type == "Header":
                     # Custom header parsing (e.g. "X-API-Key: value" or just "X-API-Key")
+                    # Same raw-embedding risk as the Session/cookie case above —
+                    # header_name is sanitized to a safe variable-name charset
+                    # before being spliced into the generated $http_<name> token.
                     if ":" in param_value:
                         parts = param_value.split(":", 1)
                         header_name = parts[0].strip()
                         param_value = parts[1].strip()
-                        nginx_var = "$http_" + header_name.lower().replace("-", "_")
                     else:
                         header_name = param_value.strip()
-                        nginx_var = "$http_" + header_name.lower().replace("-", "_")
                         limit_by_value = True
+
+                    safe_header_name = re.sub(r"[^A-Za-z0-9_-]", "", header_name).lower().replace("-", "_")
+                    if not safe_header_name:
+                        logger.warning(f"Skipping rule '{rule_name}': header name is empty after sanitization.")
+                        continue
+                    nginx_var = "$http_" + safe_header_name
 
                 if limit_by_value:
                     config_lines.append(
@@ -308,18 +417,14 @@ def apply_ddos_settings(settings: dict) -> bool:
 
         config_content = "\n".join(config_lines) + "\n"
 
-        # Since the backend runs as root (via sudo), it can write directly
-        with open(DDOS_CONF_PATH, "w", encoding="utf-8") as f:
-            f.write(config_content)
+        logger.info(f"Generated NGINX DDoS config for {DDOS_CONF_PATH}, validating before apply...")
 
-        logger.info(f"Successfully generated NGINX DDoS config at {DDOS_CONF_PATH}")
-
-        # Reload NGINX to apply
-        return reload_nginx()
+        # Validate + apply + reload (rolls back this file if the new config is invalid)
+        return write_and_apply_configs({DDOS_CONF_PATH: config_content})
 
     except Exception as e:
         logger.error(f"Failed to apply DDoS settings: {e}")
-        return False
+        return False, str(e)
 
 
 def reload_nginx() -> bool:
@@ -378,7 +483,7 @@ def get_redis_client():
     return get_centralized_client()
 
 
-def apply_hardening_settings(settings: dict) -> bool:
+def apply_hardening_settings(settings: dict) -> tuple[bool, str]:
     """
     Generates NGINX hardening configuration (server_tokens) and stores whitelisted/blacklisted
     IPs dynamically in Redis to enable zero-reload IP blocking.
@@ -443,21 +548,136 @@ def apply_hardening_settings(settings: dict) -> bool:
 
         if existing_content == config_content:
             logger.info("NGINX hardening config (server_tokens) is unchanged. Skipping NGINX reload.")
-            return True
+            return True, ""
 
-        with open(HARDENING_CONF_PATH, "w", encoding="utf-8") as f:
-            f.write(config_content)
-
-        logger.info(
-            f"Successfully generated NGINX hardening config at {HARDENING_CONF_PATH}"
-        )
-        return reload_nginx()
+        logger.info(f"Generated NGINX hardening config for {HARDENING_CONF_PATH}, validating before apply...")
+        return write_and_apply_configs({HARDENING_CONF_PATH: config_content})
     except Exception as e:
         logger.error(f"Failed to apply hardening settings: {e}")
-        return False
+        return False, str(e)
 
 
-def sync_protected_apps_to_nginx() -> bool:
+def apply_positive_security_settings(settings: dict) -> tuple[bool, str]:
+    """
+    Generates ModSecurity rules enforcing the Positive Security allowlist
+    (allowed HTTP methods, allowed request Content-Types, restricted file
+    extensions) and reloads to apply. Disabled by default — settings.get
+    ("enabled") must be explicitly true, since these defaults (e.g.
+    allowed_methods: GET/POST/HEAD only) would otherwise silently start
+    rejecting any protected app that legitimately uses PUT/DELETE/PATCH the
+    moment this feature shipped. When disabled, writes a comment-only file,
+    which correctly removes any previously-active rules.
+
+    Any of the three lists being empty just skips generating that specific
+    check (not "block everything") — an accidentally-cleared field should
+    degrade to "not enforced", not "deny all traffic".
+
+    Scoping to protected-app traffic only (never the dashboard) is done by
+    WHERE this file gets referenced (see POSITIVE_SECURITY_CONF_PATH's
+    docstring above) — no skip rule needed here.
+    """
+    try:
+        enabled = bool(settings.get("enabled", False))
+        config_lines = [
+            "# Auto-generated by CyberSentinel WAF GUI — Positive Security policy",
+            "# Do not edit manually",
+        ]
+
+        if not enabled:
+            config_lines.append("# Positive Security is currently disabled — no active rules.")
+            config_content = "\n".join(config_lines) + "\n"
+            logger.info("Positive Security is disabled — applying an empty policy.")
+            return write_and_apply_configs({POSITIVE_SECURITY_CONF_PATH: config_content})
+
+        allowed_methods = [m.strip().upper() for m in settings.get("allowed_methods", []) if m.strip()]
+        allowed_content_types = [c.strip() for c in settings.get("allowed_content_types", []) if c.strip()]
+        restricted_extensions = [e.strip().lower().lstrip(".") for e in settings.get("restricted_extensions", []) if e.strip()]
+
+        config_lines.append("")
+
+        if allowed_methods:
+            method_pattern = "^(" + "|".join(re.escape(m) for m in allowed_methods) + ")$"
+            config_lines.append(
+                f'SecRule REQUEST_METHOD "!@rx {method_pattern}" '
+                f'"id:5900002,phase:1,deny,status:405,log,'
+                f"msg:'Method not allowed by Positive Security policy'\""
+            )
+            config_lines.append("")
+
+        if allowed_content_types:
+            ct_pattern = "^(" + "|".join(re.escape(c) for c in allowed_content_types) + ")"
+            config_lines.append(
+                'SecRule REQUEST_METHOD "@rx ^(POST|PUT|PATCH)$" '
+                '"id:5900003,phase:1,chain,deny,status:415,log,'
+                "msg:'Content-Type not allowed by Positive Security policy'\""
+            )
+            config_lines.append(
+                f'    SecRule REQUEST_HEADERS:Content-Type "!@rx {ct_pattern}" ""'
+            )
+            config_lines.append("")
+
+        if restricted_extensions:
+            ext_pattern = r"\.(" + "|".join(re.escape(e) for e in restricted_extensions) + ")$"
+            config_lines.append(
+                f'SecRule REQUEST_FILENAME "@rx {ext_pattern}" '
+                f'"id:5900004,phase:1,deny,status:403,log,t:lowercase,'
+                f"msg:'Restricted file extension blocked by Positive Security policy'\""
+            )
+            config_lines.append("")
+
+        config_content = "\n".join(config_lines) + "\n"
+        logger.info(
+            f"Generated Positive Security policy for {POSITIVE_SECURITY_CONF_PATH} "
+            f"({len(allowed_methods)} allowed methods, {len(allowed_content_types)} allowed "
+            f"content-types, {len(restricted_extensions)} restricted extensions), "
+            "validating before apply..."
+        )
+        return write_and_apply_configs({POSITIVE_SECURITY_CONF_PATH: config_content})
+    except Exception as e:
+        logger.error(f"Failed to apply positive security settings: {e}")
+        return False, str(e)
+
+
+def app_auth_conf_path(app_id) -> str:
+    return f"{APP_AUTH_CONF_DIR}/app_{app_id}.conf"
+
+
+def _generate_app_auth_conf(app: dict) -> str:
+    """
+    Generates a ModSecurity rule denying (401) any request missing a
+    configured header or cookie — a PRESENCE check, not token validation
+    (the token isn't verified, just that something was sent). Comment-only
+    when require_auth is off, same "always reference the file, content
+    decides" pattern as apply_positive_security_settings().
+    """
+    lines = [
+        "# Auto-generated by CyberSentinel WAF GUI — per-app auth requirement",
+        "# Do not edit manually",
+    ]
+
+    if not app.get("require_auth"):
+        lines.append("# Authentication requirement is disabled for this app — no active rules.")
+        return "\n".join(lines) + "\n"
+
+    check_type = app.get("auth_check_type") or "header"
+    raw_name = (app.get("auth_header_name") or "Authorization").strip()
+    # Header/cookie names are restricted to token characters (RFC 7230) —
+    # stripping anything else both sanitizes for safe embedding in the
+    # ModSecurity variable name and rejects nonsense input safely.
+    safe_name = re.sub(r"[^A-Za-z0-9!#$%&'*+\-.^_`|~]", "", raw_name) or "Authorization"
+
+    variable = f"REQUEST_COOKIES:{safe_name}" if check_type == "cookie" else f"REQUEST_HEADERS:{safe_name}"
+    app_id = app.get("id")
+
+    lines.append(
+        f'SecRule &{variable} "@eq 0" '
+        f'"id:{5_910_000 + int(app_id)},phase:1,deny,status:401,log,'
+        f"msg:'Request missing required authentication'\""
+    )
+    return "\n".join(lines) + "\n"
+
+
+def sync_protected_apps_to_nginx() -> tuple[bool, str]:
     """
     Generates NGINX virtual host configurations for all active protected applications
     and reloads NGINX.
@@ -484,11 +704,6 @@ def sync_protected_apps_to_nginx() -> bool:
             
         rate_limits_content = "\n".join(rate_limit_lines) + "\n"
         rate_limits_conf_path = "/etc/nginx/conf.d/waf_app_rate_limits.conf"
-        
-        with open(rate_limits_conf_path, "w", encoding="utf-8") as f:
-            f.write(rate_limits_content)
-            
-        logger.info(f"Successfully generated dynamic rate limits config at {rate_limits_conf_path}")
 
         config_lines = [
             "# =============================================================================",
@@ -519,6 +734,11 @@ def sync_protected_apps_to_nginx() -> bool:
             ""
         ]
 
+        # Populated per-app inside the loop below; must exist regardless of
+        # which branch runs so the final write_and_apply_configs() call
+        # (outside both branches) can always reference it.
+        app_auth_files = {}
+
         if not active_apps:
             logger.warning("No active protected applications found in database. Generating fallback server block.")
             config_lines.extend([
@@ -540,7 +760,7 @@ def sync_protected_apps_to_nginx() -> bool:
             ])
         else:
             has_wildcard_default = any(app.get("domain") == "_" for app in active_apps)
-            
+
             for idx, app in enumerate(active_apps):
                 app_id = app.get("id")
                 name = app.get("name", f"App {app_id}")
@@ -584,6 +804,9 @@ def sync_protected_apps_to_nginx() -> bool:
                     active_cert = DEFAULT_CERT
                     active_key  = DEFAULT_KEY
 
+                auth_conf_path = app_auth_conf_path(app_id)
+                app_auth_files[auth_conf_path] = _generate_app_auth_conf(app)
+
                 config_lines.extend([
                     f"# --- Upstream App {app_id}: {name} ({domain}) ---",
                     f"upstream upstream_app_{app_id} {{",
@@ -601,6 +824,14 @@ def sync_protected_apps_to_nginx() -> bool:
                     f"    ssl_certificate_key {active_key};",
                     "",
                     "    resolver 127.0.0.11 valid=30s ipv6=off;",
+                    "",
+                    # Scoped to this protected app's own server block only —
+                    # never the WAF GUI's own dashboard (a separate vhost on
+                    # port 3020 that doesn't reference this file). Content is
+                    # comment-only when Positive Security is disabled, so
+                    # this reference is always safe to include.
+                    f"    modsecurity_rules_file {POSITIVE_SECURITY_CONF_PATH};",
+                    f"    modsecurity_rules_file {auth_conf_path};",
                     "",
                     "    location @json_forbidden {",
                     "        default_type application/json;",
@@ -646,15 +877,19 @@ def sync_protected_apps_to_nginx() -> bool:
             
         config_content = "\n".join(config_lines) + "\n"
         apps_conf_path = "/etc/nginx/sites-enabled/mssp"
-        
-        with open(apps_conf_path, "w", encoding="utf-8") as f:
-            f.write(config_content)
-            
-        logger.info(f"Successfully generated dynamic WAF apps config at {apps_conf_path}")
-        return reload_nginx()
+
+        logger.info(
+            f"Generated dynamic WAF apps config for {apps_conf_path} "
+            f"({len(active_apps)} active app(s)), validating before apply..."
+        )
+        return write_and_apply_configs({
+            rate_limits_conf_path: rate_limits_content,
+            apps_conf_path: config_content,
+            **app_auth_files,
+        })
     except Exception as e:
         logger.error(f"Failed to sync protected apps to NGINX: {e}")
-        return False
+        return False, str(e)
 
 
 def test_nginx_config() -> tuple[bool, str]:

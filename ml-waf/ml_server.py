@@ -8,7 +8,8 @@ import time
 import requests
 from datetime import datetime
 import pytz
-from fastapi import FastAPI, BackgroundTasks, Response, status
+import secrets
+from fastapi import FastAPI, BackgroundTasks, Response, status, Header, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 import feature_pipeline
@@ -189,6 +190,32 @@ init_sqlite_db()
 # Initialize FastAPI App
 app = FastAPI(title="ML-Enhanced WAF Prediction Daemon")
 
+INTERNAL_ALERT_TRIGGER_KEY = os.environ.get("INTERNAL_ALERT_TRIGGER_KEY", "")
+
+
+def verify_internal_key(x_internal_key: str = Header(default=None)) -> None:
+    """
+    Guards administrative endpoints (retrain/rollback/reload/model-internals)
+    with the same shared secret the backend already uses for its own
+    internal endpoint (see app/routes/alerts.py's verify_internal_key).
+    Previously these had no auth of their own and relied entirely on Docker
+    network topology (waf-ml is `expose`d, not `ports`-published) — any other
+    container on waf-network could otherwise trigger a model rollback or
+    retrain. /health and /predict are intentionally NOT guarded: /health is
+    polled by Docker's own healthcheck with no header, and /predict is the
+    per-request hot path called by OpenResty's access_by_lua_file on every
+    request, which is out of scope for this fix (see PRODUCTION_GUIDE / audit
+    notes — wiring auth into the Lua request path is a separate, higher-risk
+    change to the live traffic-blocking path).
+    """
+    if not INTERNAL_ALERT_TRIGGER_KEY:
+        # No key configured (e.g. local dev without .env) — degrade to
+        # network-topology-only protection rather than locking out every
+        # admin action.
+        return
+    if not x_internal_key or not secrets.compare_digest(x_internal_key, INTERNAL_ALERT_TRIGGER_KEY):
+        raise HTTPException(status_code=403, detail="Invalid or missing internal service credentials.")
+
 class RequestTelemetry(BaseModel):
     unique_id: str = Field(default="", description="Unique request/transaction ID")
     crs_score: float = Field(default=0.0, description="Anomaly score calculated by OWASP CRS")
@@ -300,7 +327,7 @@ def health_check():
         "model_metadata": model_meta
     }
 
-@app.post("/reload")
+@app.post("/reload", dependencies=[Depends(verify_internal_key)])
 def reload_models():
     """Dynamically reloads model binaries from disk into memory."""
     global PASSIVE_MODE
@@ -449,13 +476,13 @@ def _periodic_drift_check_loop():
 threading.Thread(target=_periodic_drift_check_loop, daemon=True).start()
 
 
-@app.get("/drift/history")
+@app.get("/drift/history", dependencies=[Depends(verify_internal_key)])
 def get_drift_history_endpoint():
     """Recent drift checks (metrics + whether they triggered a retrain)."""
     return {"data": drift_monitor.get_drift_history(limit=50)}
 
 
-@app.post("/retrain")
+@app.post("/retrain", dependencies=[Depends(verify_internal_key)])
 def trigger_retrain(background_tasks: BackgroundTasks):
     """Triggers the model retraining pipeline asynchronously."""
     if not _try_claim_retrain_slot():
@@ -464,7 +491,7 @@ def trigger_retrain(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_retrain_subprocess)
     return {"status": "success", "message": "Retraining triggered successfully"}
 
-@app.get("/retrain/status")
+@app.get("/retrain/status", dependencies=[Depends(verify_internal_key)])
 def get_retrain_status():
     """Returns the current retraining pipeline status and tail of training log file."""
     log_path = os.path.join(BASE_DIR, "logs/retrain.log")
@@ -484,7 +511,7 @@ def get_retrain_status():
         "logs": logs[-20000:]
     }
 
-@app.get("/models/backups")
+@app.get("/models/backups", dependencies=[Depends(verify_internal_key)])
 def get_model_backups():
     """Lists available historical model weight backups on disk."""
     backup_dir = os.path.join(BASE_DIR, "models/backups")
@@ -517,7 +544,7 @@ def get_model_backups():
 class RollbackPayload(BaseModel):
     timestamp: str
 
-@app.post("/models/rollback")
+@app.post("/models/rollback", dependencies=[Depends(verify_internal_key)])
 def rollback_models(payload: RollbackPayload):
     """Restores pickeled models from backup and dynamically updates active references."""
     global PASSIVE_MODE
@@ -557,7 +584,7 @@ def rollback_models(payload: RollbackPayload):
         logger.error(f"Failed to execute rollback: {e}")
         return {"status": "error", "message": str(e)}
 
-@app.get("/models/feature-importance")
+@app.get("/models/feature-importance", dependencies=[Depends(verify_internal_key)])
 def get_feature_importance():
     """Extracts features score coefficients from currently loaded XGBoost model."""
     if xgb_model is None:

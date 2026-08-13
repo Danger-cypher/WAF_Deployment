@@ -3,12 +3,15 @@ import { createPortal } from 'react-dom';
 import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check } from 'lucide-react';
 import { formatLocalTime } from '../utils/helpers';
 import HighlightedJson from './JsonViewer';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
   const [copied, setCopied] = useState(false);
   const [showReqHeaders, setShowReqHeaders] = useState(false);
   const [showResHeaders, setShowResHeaders] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
+
+  useEscapeToClose(onClose, isOpen);
 
   useEffect(() => {
     if (copied) {
@@ -64,14 +67,14 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
       onClick={toggle}
       style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '10px 14px', background: 'rgba(255,255,255,0.03)',
-        border: '1px solid rgba(255,255,255,0.07)',
+        padding: '10px 14px', background: 'var(--surface-subtle)',
+        border: '1px solid var(--glass-border)',
         borderRadius: open ? '6px 6px 0 0' : '6px',
         cursor: 'pointer', userSelect: 'none',
       }}
     >
-      <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>{label}{count !== undefined ? ` (${count})` : ''}</span>
-      <span style={{ color: '#a1a1aa', fontSize: '12px' }}>{open ? '▼' : '►'}</span>
+      <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{label}{count !== undefined ? ` (${count})` : ''}</span>
+      <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>{open ? '▼' : '►'}</span>
     </div>
   );
 
@@ -106,27 +109,27 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
       <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '680px' }}>
         <div className="modal-header">
           <div className="modal-title">
-            <AlertIcon size={20} color="#ef4444" />
-            <span>Inspection: Log Transaction ID: <span style={{ fontFamily: 'monospace', color: '#3b82f6' }}>{log.id}</span></span>
+            <AlertIcon size={20} color="var(--danger-color)" />
+            <span>Inspection: Log Transaction ID: <span style={{ fontFamily: 'monospace', color: 'var(--sev-low)' }}>{log.id}</span></span>
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close log details">
             <X size={18} />
           </button>
         </div>
         <div className="modal-body" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
 
           {/* Metadata Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '8px', border: '1px solid var(--surface-hover)' }}>
             <div>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Timestamp</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Timestamp</div>
               <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{formatLocalTime(log.timestamp)}</div>
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Attacker IP</div>
-              <div style={{ fontSize: '14px', fontWeight: 500, fontFamily: 'monospace', color: '#3b82f6', marginTop: '4px' }}>{log.client_ip}</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Attacker IP</div>
+              <div style={{ fontSize: '14px', fontWeight: 500, fontFamily: 'monospace', color: 'var(--sev-low)', marginTop: '4px' }}>{log.client_ip}</div>
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Attack Vector</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Attack Vector</div>
               <div style={{ fontSize: '14px', marginTop: '4px' }}>
                 <span className={`severity-badge severity-${(log.severity || 'low').toLowerCase()}`} style={{ marginRight: '8px' }}>
                   {log.severity}
@@ -135,30 +138,30 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
               </div>
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Country</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Country</div>
               <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Globe size={14} color="#3b82f6" />
+                <Globe size={14} color="var(--sev-low)" />
                 <span>{log.country || 'Unknown'}</span>
               </div>
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Source ASN / Org</div>
-              <div style={{ fontSize: '14px', fontWeight: 500, fontFamily: 'monospace', color: '#93c5fd', marginTop: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={log.source_asn_org}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Source ASN / Org</div>
+              <div style={{ fontSize: '14px', fontWeight: 500, fontFamily: 'monospace', color: 'var(--sev-low)', marginTop: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={log.source_asn_org}>
                 {log.source_asn_org || 'Unknown'}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>HTTP Response</div>
-              <div style={{ fontSize: '14px', fontFamily: 'monospace', fontWeight: 700, color: '#ef4444', marginTop: '4px' }}>{log.http_code || '403'}</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>HTTP Response</div>
+              <div style={{ fontSize: '14px', fontFamily: 'monospace', fontWeight: 700, color: 'var(--danger-color)', marginTop: '4px' }}>{log.http_code || '403'}</div>
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Target Application</div>
-              <div style={{ fontSize: '13px', color: '#34d399', fontWeight: 500, marginTop: '4px' }}>{targetApp}</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Target Application</div>
+              <div style={{ fontSize: '13px', color: 'var(--success-color)', fontWeight: 500, marginTop: '4px' }}>{targetApp}</div>
             </div>
             <div style={{ gridColumn: 'span 2' }}>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase' }}>Requested URI</div>
-              <div style={{ fontSize: '13px', fontFamily: 'monospace', color: '#ef4444', wordBreak: 'break-all', marginTop: '4px' }}>
-                <span style={{ color: '#a1a1aa', fontWeight: 600, marginRight: '6px' }}>{log.method}</span>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Requested URI</div>
+              <div style={{ fontSize: '13px', fontFamily: 'monospace', color: 'var(--danger-color)', wordBreak: 'break-all', marginTop: '4px' }}>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, marginRight: '6px' }}>{log.method}</span>
                 {log.uri}
               </div>
             </div>
@@ -166,20 +169,20 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
 
           {/* ── User-Agent ── */}
           {userAgent && (
-            <div style={{ ...sectionStyle, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '12px 14px' }}>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '6px' }}>🌐 User-Agent (Client Tool / Browser)</div>
-              <div style={{ fontSize: '12px', fontFamily: 'monospace', color: '#93c5fd', wordBreak: 'break-all' }}>{userAgent}</div>
+            <div style={{ ...sectionStyle, background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 14px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '6px' }}>🌐 User-Agent (Client Tool / Browser)</div>
+              <div style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--sev-low)', wordBreak: 'break-all' }}>{userAgent}</div>
               {(userAgent.toLowerCase().includes('sqlmap') || userAgent.toLowerCase().includes('nikto') || userAgent.toLowerCase().includes('nmap') || userAgent.toLowerCase().includes('dirbuster') || userAgent.toLowerCase().includes('burp')) && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px', background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: '4px', padding: '2px 8px', fontSize: '11px', color: '#fb923c', fontWeight: 600 }}>⚠ Known Attack Tool Detected</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px', background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: '4px', padding: '2px 8px', fontSize: '11px', color: 'var(--sev-high)', fontWeight: 600 }}>⚠ Known Attack Tool Detected</span>
               )}
             </div>
           )}
 
           {/* ── Referer ── */}
           {referer && (
-            <div style={{ ...sectionStyle, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '12px 14px' }}>
-              <div style={{ fontSize: '11px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '6px' }}>🔗 Referer (Attack Origin Page)</div>
-              <div style={{ fontSize: '12px', fontFamily: 'monospace', color: '#86efac', wordBreak: 'break-all' }}>{referer}</div>
+            <div style={{ ...sectionStyle, background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 14px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '6px' }}>🔗 Referer (Attack Origin Page)</div>
+              <div style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--success-color)', wordBreak: 'break-all' }}>{referer}</div>
             </div>
           )}
 
@@ -187,16 +190,16 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
           <div style={sectionStyle}>
             {collapsibleHeader('Request Headers', Object.keys(reqHeaders).length, showReqHeaders, () => setShowReqHeaders(!showReqHeaders))}
             {showReqHeaders && (
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid rgba(255,255,255,0.05)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+              <div style={{ background: 'var(--inset-bg)', padding: '12px', border: '1px solid var(--surface-hover)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
                 {Object.keys(reqHeaders).length === 0 ? (
-                  <div style={{ color: '#a1a1aa', fontSize: '12px', textAlign: 'center', padding: '10px' }}>No request headers recorded.</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>No request headers recorded.</div>
                 ) : (
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
                     {Object.entries(reqHeaders)
                       .map(([k, v]) => (
-                        <tr key={k} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                          <td style={{ color: '#a1a1aa', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
-                          <td style={{ color: '#e4e4e7', padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
+                        <tr key={k} style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                          <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
+                          <td style={{ color: 'var(--text-primary)', padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
                         </tr>
                       ))}
                   </tbody></table>
@@ -209,20 +212,20 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
           <div style={sectionStyle}>
             {collapsibleHeader('Response Headers', Object.keys(log.response_headers || {}).length, showResHeaders, () => setShowResHeaders(!showResHeaders))}
             {showResHeaders && (
-              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid rgba(255,255,255,0.05)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+              <div style={{ background: 'var(--inset-bg)', padding: '12px', border: '1px solid var(--surface-hover)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
                 {Object.keys(log.response_headers || {}).length === 0 ? (
-                  <div style={{ color: '#a1a1aa', fontSize: '12px', textAlign: 'center', padding: '10px' }}>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>
                     No response headers recorded.
                     {log.http_code && (log.http_code.startsWith('4') || log.http_code.startsWith('5')) && (
-                      <div style={{ marginTop: '6px', fontSize: '11px', color: '#71717a' }}>ℹ️ Blocked requests (HTTP {log.http_code}) may not log backend response headers.</div>
+                      <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>ℹ️ Blocked requests (HTTP {log.http_code}) may not log backend response headers.</div>
                     )}
                   </div>
                 ) : (
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
                     {Object.entries(log.response_headers || {}).map(([k, v]) => (
-                      <tr key={k} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                        <td style={{ color: '#a1a1aa', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
-                        <td style={{ color: '#e4e4e7', padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
+                      <tr key={k} style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                        <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
+                        <td style={{ color: 'var(--text-primary)', padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
                       </tr>
                     ))}
                   </tbody></table>
@@ -239,21 +242,21 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
               style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 padding: '10px 14px',
-                background: 'rgba(255,255,255,0.02)',
-                border: '1px solid rgba(255,255,255,0.06)',
+                background: 'var(--surface-subtle)',
+                border: '1px solid var(--border-color)',
                 borderRadius: showRawJson ? '6px 6px 0 0' : '6px',
                 cursor: 'pointer', userSelect: 'none',
               }}
             >
-              <span style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Raw Audit Log (JSON)</span>
+              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Raw Audit Log (JSON)</span>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 {onMarkFalsePositive && (
                   <button
                     className="pagination-btn"
                     onClick={(e) => { e.stopPropagation(); onMarkFalsePositive(log); }}
-                    style={{ padding: '3px 8px', fontSize: '11px', borderColor: 'rgba(16, 185, 129, 0.4)', background: 'rgba(16, 185, 129, 0.05)', color: '#a7f3d0' }}
+                    style={{ padding: '3px 8px', fontSize: '11px', borderColor: 'rgba(16, 185, 129, 0.4)', background: 'rgba(16, 185, 129, 0.05)', color: 'var(--success-color)' }}
                   >
-                    <ShieldCheck size={13} color="#10b981" />
+                    <ShieldCheck size={13} color="var(--success-color)" />
                     <span>Mark as FP</span>
                   </button>
                 )}
@@ -262,14 +265,14 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
                   onClick={(e) => { e.stopPropagation(); handleCopy(); }}
                   style={{ padding: '3px 8px', fontSize: '11px' }}
                 >
-                  {copied ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
+                  {copied ? <Check size={13} color="var(--success-color)" /> : <Copy size={13} />}
                   <span>{copied ? 'Copied!' : 'Copy JSON'}</span>
                 </button>
-                <span style={{ color: '#52525b', fontSize: '12px' }}>{showRawJson ? '▼' : '►'}</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{showRawJson ? '▼' : '►'}</span>
               </div>
             </div>
             {showRawJson && (
-              <div style={{ border: '1px solid rgba(255,255,255,0.06)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', overflow: 'hidden' }}>
+              <div style={{ border: '1px solid var(--border-color)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', overflow: 'hidden' }}>
                 <HighlightedJson json={log.raw_log || log} />
               </div>
             )}

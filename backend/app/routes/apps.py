@@ -2,6 +2,7 @@ import re
 import os
 import shutil
 import subprocess
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
@@ -21,6 +22,17 @@ class ProtectedAppBase(BaseModel):
     rate_limit_rps: int = Field(50, ge=1, le=10000, description="RPS limit per client IP")
     burst_tolerance: int = Field(100, ge=1, le=20000, description="Rate limit burst allowance")
     ssl_option: str = Field("self-signed", description="SSL mode: 'letsencrypt', 'custom', 'self-signed'")
+    require_auth: int = Field(0, ge=0, le=1, description="1 = deny requests missing the configured auth header/cookie")
+    auth_check_type: str = Field("header", description="'header' or 'cookie' — where to check for auth_header_name")
+    auth_header_name: str = Field("Authorization", min_length=1, description="Header or cookie name whose mere presence is required")
+
+    @field_validator("auth_check_type")
+    @classmethod
+    def validate_auth_check_type(cls, value: str) -> str:
+        allowed = {"header", "cookie"}
+        if value not in allowed:
+            raise ValueError(f"auth_check_type must be one of: {', '.join(allowed)}")
+        return value
 
     @field_validator("domain")
     @classmethod
@@ -29,6 +41,13 @@ class ProtectedAppBase(BaseModel):
         cleaned = value.strip().lower()
         if not re.match(r'^[a-zA-Z0-9\-._*]+$', cleaned):
             raise ValueError("Domain contains invalid characters. Only alphanumeric, hyphens, dots, underscores, and '*' are allowed.")
+        # `domain` is used directly as a path segment for SSL cert storage
+        # (os.path.join(SSL_DIR, "letsencrypt"/"custom", domain)) — the regex
+        # above allows '.', so a value like ".." would otherwise pass through
+        # unsanitized and let a cert get written one directory level outside
+        # its intended per-app sandbox. No valid domain ever contains "..".
+        if ".." in cleaned:
+            raise ValueError("Domain cannot contain '..'.")
         return cleaned
 
     @field_validator("upstream_host")
@@ -99,6 +118,9 @@ async def add_app(app_data: ProtectedAppCreate, current_user: TokenData = Depend
         rate_limit_rps=app_data.rate_limit_rps,
         burst_tolerance=app_data.burst_tolerance,
         ssl_option=app_data.ssl_option,
+        require_auth=app_data.require_auth,
+        auth_check_type=app_data.auth_check_type,
+        auth_header_name=app_data.auth_header_name,
     )
     if not app:
         raise HTTPException(
@@ -107,13 +129,13 @@ async def add_app(app_data: ProtectedAppCreate, current_user: TokenData = Depend
         )
 
     # Sync configurations with Nginx
-    success = nginx_manager.sync_protected_apps_to_nginx()
+    success, err_msg = nginx_manager.sync_protected_apps_to_nginx()
     if not success:
         # Revert database insertion if sync failed to keep system in sync
         db_service.delete_protected_app(app["id"])
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate Nginx config or reload service. Reverting database registration."
+            detail=f"Failed to generate Nginx config or reload service. Reverting database registration. {err_msg}"
         )
 
     return app
@@ -149,6 +171,9 @@ async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: To
         rate_limit_rps=app_data.rate_limit_rps,
         burst_tolerance=app_data.burst_tolerance,
         ssl_option=app_data.ssl_option,
+        require_auth=app_data.require_auth,
+        auth_check_type=app_data.auth_check_type,
+        auth_header_name=app_data.auth_header_name,
     )
     if not app:
         raise HTTPException(
@@ -157,9 +182,11 @@ async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: To
         )
 
     # Sync configurations with Nginx
-    success = nginx_manager.sync_protected_apps_to_nginx()
+    success, err_msg = nginx_manager.sync_protected_apps_to_nginx()
     if not success:
-        # Revert database update on Nginx reload failure
+        # Revert database update on Nginx reload failure. Also restores
+        # ssl_option (previously missing here — would've silently reset to
+        # 'self-signed' on rollback) alongside the new require_auth fields.
         db_service.update_protected_app(
             app_id=app_id,
             name=existing_app["name"],
@@ -169,11 +196,15 @@ async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: To
             protocol=existing_app["protocol"],
             is_active=existing_app["is_active"],
             rate_limit_rps=existing_app.get("rate_limit_rps", 50),
-            burst_tolerance=existing_app.get("burst_tolerance", 100)
+            burst_tolerance=existing_app.get("burst_tolerance", 100),
+            ssl_option=existing_app.get("ssl_option", "self-signed"),
+            require_auth=existing_app.get("require_auth", 0),
+            auth_check_type=existing_app.get("auth_check_type", "header"),
+            auth_header_name=existing_app.get("auth_header_name", "Authorization"),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate Nginx config or reload service. Reverting database changes."
+            detail=f"Failed to generate Nginx config or reload service. Reverting database changes. {err_msg}"
         )
 
     return app
@@ -199,9 +230,12 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_admi
         )
 
     # Sync configurations with Nginx
-    success_nginx = nginx_manager.sync_protected_apps_to_nginx()
+    success_nginx, err_msg = nginx_manager.sync_protected_apps_to_nginx()
     if not success_nginx:
-        # Revert database deletion if Nginx reload fails
+        # Revert database deletion if Nginx reload fails. Restores ssl_option
+        # and the provisioned cert paths too (previously missing — a
+        # recreated app would've lost a provisioned Let's Encrypt/custom
+        # cert reference here), alongside the new require_auth fields.
         db_service.create_protected_app(
             name=existing_app["name"],
             domain=existing_app["domain"],
@@ -210,11 +244,17 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_admi
             protocol=existing_app["protocol"],
             is_active=existing_app["is_active"],
             rate_limit_rps=existing_app.get("rate_limit_rps", 50),
-            burst_tolerance=existing_app.get("burst_tolerance", 100)
+            burst_tolerance=existing_app.get("burst_tolerance", 100),
+            ssl_option=existing_app.get("ssl_option", "self-signed"),
+            ssl_cert_path=existing_app.get("ssl_cert_path"),
+            ssl_key_path=existing_app.get("ssl_key_path"),
+            require_auth=existing_app.get("require_auth", 0),
+            auth_check_type=existing_app.get("auth_check_type", "header"),
+            auth_header_name=existing_app.get("auth_header_name", "Authorization"),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update Nginx config or reload service. Reverting database changes."
+            detail=f"Failed to update Nginx config or reload service. Reverting database changes. {err_msg}"
         )
 
     return {"message": "Protected application deleted successfully!"}
@@ -243,11 +283,15 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
         protocol=app["protocol"],
         is_active=new_status,
         rate_limit_rps=app.get("rate_limit_rps", 50),
-        burst_tolerance=app.get("burst_tolerance", 100)
+        burst_tolerance=app.get("burst_tolerance", 100),
+        ssl_option=app.get("ssl_option", "self-signed"),
+        require_auth=app.get("require_auth", 0),
+        auth_check_type=app.get("auth_check_type", "header"),
+        auth_header_name=app.get("auth_header_name", "Authorization"),
     )
 
     # Sync configurations with Nginx
-    success = nginx_manager.sync_protected_apps_to_nginx()
+    success, err_msg = nginx_manager.sync_protected_apps_to_nginx()
     if not success:
         # Revert database status update on Nginx reload failure
         db_service.update_protected_app(
@@ -259,11 +303,15 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
             protocol=app["protocol"],
             is_active=app["is_active"],
             rate_limit_rps=app.get("rate_limit_rps", 50),
-            burst_tolerance=app.get("burst_tolerance", 100)
+            burst_tolerance=app.get("burst_tolerance", 100),
+            ssl_option=app.get("ssl_option", "self-signed"),
+            require_auth=app.get("require_auth", 0),
+            auth_check_type=app.get("auth_check_type", "header"),
+            auth_header_name=app.get("auth_header_name", "Authorization"),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate Nginx config or reload service. Reverting status change."
+            detail=f"Failed to generate Nginx config or reload service. Reverting status change. {err_msg}"
         )
 
     return updated_app
@@ -276,6 +324,21 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
 # Shared directory for per-domain certs (inside the container's nginx ssl dir)
 SSL_DIR = "/etc/nginx/ssl"
 ACME_WEBROOT = "/etc/nginx/acme-challenge"
+
+
+def _safe_cert_dir(subdir: str, domain: str) -> str:
+    """
+    Builds the per-domain cert directory and verifies the resolved path is
+    still inside SSL_DIR/subdir. The `domain` validator already rejects '..'
+    for new/updated apps, but this is a second, independent check at the
+    point the path is actually used — so a pre-existing DB row from before
+    that validator existed can't write outside its per-app sandbox either.
+    """
+    base = os.path.realpath(os.path.join(SSL_DIR, subdir))
+    cert_dir = os.path.realpath(os.path.join(base, domain))
+    if cert_dir != base and not cert_dir.startswith(base + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid domain: resolves outside the SSL certificate directory.")
+    return cert_dir
 
 
 @router.post("/apps/{app_id}/provision-ssl")
@@ -300,7 +363,7 @@ async def provision_letsencrypt(
         )
 
     # Cert + key will be written here by certbot, then symlinked to nginx ssl dir
-    cert_dir = os.path.join(SSL_DIR, "letsencrypt", domain)
+    cert_dir = _safe_cert_dir("letsencrypt", domain)
     os.makedirs(cert_dir, exist_ok=True)
     os.makedirs(ACME_WEBROOT, exist_ok=True)
 
@@ -333,7 +396,11 @@ async def provision_letsencrypt(
         last_error = None
         for cmd in certbot_cmds:
             try:
-                result = subprocess.run(
+                # subprocess.run() blocks — up to 120s per attempt, up to two
+                # attempts. Running that inline on the event loop would stall
+                # every other logged-in user's request for the same duration.
+                result = await asyncio.to_thread(
+                    subprocess.run,
                     cmd, capture_output=True, text=True, timeout=120  # nosec B603
                 )
                 if result.returncode == 0:
@@ -383,7 +450,19 @@ async def provision_letsencrypt(
         )
 
         # Regenerate Nginx config to use the real cert
-        nginx_manager.sync_protected_apps_to_nginx()
+        nginx_synced, nginx_err = nginx_manager.sync_protected_apps_to_nginx()
+        if not nginx_synced:
+            # The cert was issued and persisted, but nginx isn't serving it
+            # yet — surface that clearly instead of a bare "success".
+            return {
+                "status": "partial",
+                "message": (
+                    f"Let's Encrypt certificate issued for {domain}, but applying it to "
+                    f"NGINX failed: {nginx_err}. The certificate is saved and will be used "
+                    f"once the config is successfully synced (e.g. by saving the app again)."
+                ),
+                "cert_path": fullchain,
+            }
 
         return {
             "status": "success",
@@ -429,7 +508,7 @@ async def upload_custom_cert(
                 detail=f"Invalid file type '{ext}'. Allowed: {', '.join(allowed_exts)}"
             )
 
-    cert_dir = os.path.join(SSL_DIR, "custom", domain)
+    cert_dir = _safe_cert_dir("custom", domain)
     os.makedirs(cert_dir, exist_ok=True)
 
     cert_path = os.path.join(cert_dir, "cert.pem")
@@ -475,7 +554,17 @@ async def upload_custom_cert(
     )
 
     # Regenerate Nginx config
-    nginx_manager.sync_protected_apps_to_nginx()
+    nginx_synced, nginx_err = nginx_manager.sync_protected_apps_to_nginx()
+    if not nginx_synced:
+        return {
+            "status": "partial",
+            "message": (
+                f"Custom certificate saved for {domain}, but applying it to NGINX failed: "
+                f"{nginx_err}. The certificate is saved and will be used once the config is "
+                f"successfully synced (e.g. by saving the app again)."
+            ),
+            "cert_path": cert_path,
+        }
 
     return {
         "status": "success",

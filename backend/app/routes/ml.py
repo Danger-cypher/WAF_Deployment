@@ -86,7 +86,11 @@ async def get_ml_stats(current_user: TokenData = Depends(require_any_role)):
             "top_anomalous_ips": top_ips,
         }
     except Exception as e:
-        return {"error": str(e)}
+        # Returning {"error": ...} with a 200 status leaves the frontend
+        # silently rendering "0 evaluations" for what's actually a DB
+        # failure — indistinguishable from "no ML events yet." A real
+        # failure must fail visibly.
+        raise HTTPException(status_code=500, detail=f"Failed to load ML stats: {e}")
 
 
 @router.get("/ml/logs")
@@ -143,7 +147,9 @@ async def get_ml_logs(
         conn.close()
         return {"data": data, "total": total, "page": page, "size": size}
     except Exception as e:
-        return {"error": str(e), "data": [], "total": 0, "page": page, "size": size}
+        # A 200 with "total": 0 here is indistinguishable from "no matching
+        # ML events" — a real DB error must surface as one.
+        raise HTTPException(status_code=500, detail=f"Failed to load ML logs: {e}")
 
 
 class MlEventLabelPayload(BaseModel):
@@ -206,93 +212,70 @@ async def get_ml_timeline(current_user: TokenData = Depends(require_any_role)):
         conn.close()
         return {"data": data}
     except Exception as e:
-        return {"error": str(e), "data": []}
+        raise HTTPException(status_code=500, detail=f"Failed to load ML timeline: {e}")
 
 from pydantic import BaseModel
+import asyncio
+import requests
 
 class RollbackPayload(BaseModel):
     timestamp: str
 
-@router.get("/ml/model-info")
-async def get_ml_model_info(current_user: TokenData = Depends(require_any_role)):
-    import requests
+
+async def _ml_api_request(method: str, path: str, **kwargs) -> dict:
+    """
+    Proxies a request to the ML sidecar. requests.get/post() is a blocking
+    call — run directly inside these async routes it would stall the whole
+    FastAPI event loop (every other logged-in user's request, not just this
+    one) for up to the 5s timeout whenever the ML container is slow or down.
+    asyncio.to_thread offloads it to a worker thread instead.
+
+    Sends the same shared secret used for the reverse direction (waf-ml ->
+    backend, see app/routes/alerts.py's verify_internal_key) — waf-ml's
+    administrative endpoints (retrain/rollback/reload/model-internals) now
+    require it too, since they previously had no auth of their own beyond
+    Docker network topology.
+    """
     ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
+    headers = kwargs.pop("headers", {}) or {}
+    internal_key = os.environ.get("INTERNAL_ALERT_TRIGGER_KEY")
+    if internal_key:
+        headers["X-Internal-Key"] = internal_key
     try:
-        res = requests.get(f"{ml_api}/health", timeout=5)
+        res = await asyncio.to_thread(
+            requests.request, method, f"{ml_api}{path}", timeout=5, headers=headers, **kwargs
+        )
         if res.status_code == 200:
             return res.json()
         return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/ml/model-info")
+async def get_ml_model_info(current_user: TokenData = Depends(require_any_role)):
+    return await _ml_api_request("GET", "/health")
 
 @router.post("/ml/retrain")
 async def trigger_ml_retrain(current_user: TokenData = Depends(require_admin)):
-    import requests
-    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
-    try:
-        res = requests.post(f"{ml_api}/retrain", timeout=5)
-        if res.status_code == 200:
-            return res.json()
-        return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return await _ml_api_request("POST", "/retrain")
 
 @router.get("/ml/retrain/status")
 async def get_ml_retrain_status(current_user: TokenData = Depends(require_any_role)):
-    import requests
-    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
-    try:
-        res = requests.get(f"{ml_api}/retrain/status", timeout=5)
-        if res.status_code == 200:
-            return res.json()
-        return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return await _ml_api_request("GET", "/retrain/status")
 
 @router.get("/ml/backups")
 async def get_ml_backups(current_user: TokenData = Depends(require_any_role)):
-    import requests
-    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
-    try:
-        res = requests.get(f"{ml_api}/models/backups", timeout=5)
-        if res.status_code == 200:
-            return res.json()
-        return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return await _ml_api_request("GET", "/models/backups")
 
 @router.post("/ml/rollback")
 async def rollback_ml_model(payload: RollbackPayload, current_user: TokenData = Depends(require_admin)):
-    import requests
-    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
-    try:
-        res = requests.post(f"{ml_api}/models/rollback", json=payload.model_dump(), timeout=5)
-        if res.status_code == 200:
-            return res.json()
-        return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return await _ml_api_request("POST", "/models/rollback", json=payload.model_dump())
 
 @router.get("/ml/drift-history")
 async def get_ml_drift_history(current_user: TokenData = Depends(require_any_role)):
-    import requests
-    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
-    try:
-        res = requests.get(f"{ml_api}/drift/history", timeout=5)
-        if res.status_code == 200:
-            return res.json()
-        return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return await _ml_api_request("GET", "/drift/history")
 
 @router.get("/ml/feature-importance")
 async def get_ml_feature_importance(current_user: TokenData = Depends(require_any_role)):
-    import requests
-    ml_api = os.environ.get("ML_API", "http://waf-ml:9000")
-    try:
-        res = requests.get(f"{ml_api}/models/feature-importance", timeout=5)
-        if res.status_code == 200:
-            return res.json()
-        return {"status": "error", "message": f"ML service returned HTTP {res.status_code}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return await _ml_api_request("GET", "/models/feature-importance")

@@ -877,6 +877,53 @@ export async function getApiProtectionAnalytics() {
 }
 
 /**
+ * List endpoints currently blocked via API Protection's generated rules
+ */
+export async function getBlockedEndpoints() {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/blocked-endpoints`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch blocked endpoints:", error);
+    throw error;
+  }
+}
+
+/**
+ * Block a specific method+URI via a generated ModSecurity rule
+ */
+export async function blockEndpoint(method, uri) {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/endpoints/block`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, uri })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to block ${method} ${uri}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Remove a previously-generated endpoint block
+ */
+export async function unblockEndpoint(method, uri) {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/endpoints/unblock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, uri })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to unblock ${method} ${uri}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Fetch Infrastructure Hardening & Cloaking settings
  */
 export async function getHardeningSettings() {
@@ -1141,6 +1188,70 @@ export async function toggleProtectedApp(appId) {
     return await handleResponse(response);
   } catch (error) {
     console.error(`Failed to toggle active status for protected application ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Trigger Let's Encrypt certificate provisioning for a protected app's domain
+ */
+export async function provisionLetsEncrypt(appId) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}/provision-ssl`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to provision Let's Encrypt certificate for app ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Upload a custom TLS certificate + private key for a protected app
+ */
+export async function uploadCustomCert(appId, certFile, keyFile) {
+  try {
+    const formData = new FormData();
+    formData.append('cert_file', certFile);
+    formData.append('key_file', keyFile);
+    const response = await fetch(`${BASE_URL}/apps/${appId}/upload-cert`, {
+      method: 'POST',
+      body: formData
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to upload custom certificate for app ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Get the WAF server's own public IP (for DNS configuration guidance)
+ */
+export async function getWafServerIp() {
+  try {
+    const response = await fetch(`${BASE_URL}/system/waf-ip`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch WAF server IP:", error);
+    throw error;
+  }
+}
+
+/**
+ * Verify whether a domain's DNS currently resolves to this WAF server
+ */
+export async function verifyDns(domain) {
+  try {
+    const response = await fetch(`${BASE_URL}/system/verify-dns`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to verify DNS for domain ${domain}:`, error);
     throw error;
   }
 }

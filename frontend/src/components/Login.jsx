@@ -509,7 +509,7 @@ const Login = ({ setAuth, onLoginSuccess }) => {
                 <button
                   type="button"
                   className="login-btn"
-                  style={{ background: 'rgba(255,255,255,0.05)', marginTop: '8px', border: '1px solid rgba(255,255,255,0.1)' }}
+                  style={{ background: 'var(--surface-hover)', marginTop: '8px', border: '1px solid var(--border-strong)' }}
                   onClick={() => {
                     setShowMfa(false);
                     setOtpCode('');

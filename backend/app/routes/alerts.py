@@ -20,6 +20,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 db = AlertDatabaseService()
 
+# Config keys that hold live credentials (SMTP passwords, Slack/PagerDuty
+# webhook URLs and keys act as bearer secrets, arbitrary webhook headers may
+# carry an Authorization token). GET /alerts/channels is require_any_role
+# (analysts need to see what channels exist), so these are masked unless
+# the caller is an admin — otherwise any analyst could read every
+# configured integration's credentials straight off this page.
+_SECRET_CONFIG_KEYS = {"password", "webhook_url", "integration_key"}
+_REDACTED = "••••••••"
+
+
+def _redact_channel_config(config: dict) -> dict:
+    redacted = dict(config)
+    for key in redacted:
+        if key in _SECRET_CONFIG_KEYS and redacted[key]:
+            redacted[key] = _REDACTED
+    if isinstance(redacted.get("headers"), dict):
+        redacted["headers"] = {k: _REDACTED for k in redacted["headers"]}
+    return redacted
+
 
 # ============================================================================
 # Alert Channels API
@@ -54,6 +73,8 @@ async def get_channels(enabled_only: bool = False, current_user: TokenData = Dep
             if isinstance(c["config"], str):
                 import json
                 c["config"] = json.loads(c["config"])
+            if current_user.role != "admin":
+                c["config"] = _redact_channel_config(c["config"])
         return chans
     except Exception as e:
         logger.error(f"Error getting notification channels: {e}")
@@ -75,6 +96,8 @@ async def get_channel(channel_id: int, current_user: TokenData = Depends(require
     if isinstance(chan["config"], str):
         import json
         chan["config"] = json.loads(chan["config"])
+    if current_user.role != "admin":
+        chan["config"] = _redact_channel_config(chan["config"])
     return chan
 
 

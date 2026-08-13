@@ -7,7 +7,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Cybersentinel WAF</title>
   <!-- Content-Security-Policy is set via nginx response headers (configs/nginx/nginx.conf) -
-       that is the single source of truth; do not duplicate it here. -->
+       that is the single source of truth; do not duplicate it here. NOTE: that policy's
+       font-src/style-src currently only allow 'self', so these Google Fonts requests are
+       blocked by the browser in production regardless of this tag — see index.css's
+       comment on the --font-* tokens. Left in place (moved here from a render-blocking
+       CSS @import) since it's harmless and becomes correct the moment font-src/style-src
+       are widened, but the real fix is self-hosting these files or updating the CSP. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 </head>
 
 <body>

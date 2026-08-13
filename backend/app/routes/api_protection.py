@@ -1,7 +1,11 @@
-from fastapi import APIRouter, Depends
+import hashlib
+import os
+import re
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.services import db_service
-from app.services.auth import require_any_role, TokenData
+from app.services.auth import require_admin, require_any_role, TokenData
 from app.services.api_discovery import run_api_discovery
 
 router = APIRouter()
@@ -33,17 +37,22 @@ def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
         ) / hit_count
         score -= int(threat_ratio * 50)
 
-    # 4. HTTPS deduction
-    if not ep.get("has_https", 1):
+    # 4. HTTPS deduction — has_https is a tri-state (0=confirmed http,
+    # 1=confirmed https, 2=not yet measured; see api_discovery.py). Only
+    # deduct on a confirmed-insecure hit — an unmeasured endpoint (older log
+    # lines that predate scheme capture) is unknown, not guilty.
+    if ep.get("has_https", 2) == 0:
         score -= 20
 
     # 5. Versioning deduction
     if not ep.get("has_versioning", 0):
         score -= 10
 
-    # 6. Compression deduction
-    encoding = ep.get("content_encoding", "")
-    if not encoding or encoding == "none":
+    # 6. Compression deduction — content_encoding is "" only when a real
+    # response was checked and had no Content-Encoding header; "unknown"
+    # means not yet measured and must not be treated as "known absent".
+    encoding = ep.get("content_encoding", "unknown")
+    if encoding == "":
         score -= 5
 
     # Clamp score
@@ -143,3 +152,168 @@ def get_api_protection_analytics(current_user: TokenData = Depends(require_any_r
         },
         "total_endpoints_count": len(scored_endpoints),
     }
+
+
+# ============================================================================
+# "Block this endpoint" — generates a ModSecurity rule denying a specific
+# method+URI. Shares custom-rules.conf with Virtual Patching (routes/rules.py)
+# and reuses nginx_manager's validate-before-apply pipeline, but only ever
+# touches its own clearly-delimited, machine-managed section of the file so
+# an admin's hand-written Virtual Patching rules are never disturbed.
+# ============================================================================
+
+CUSTOM_RULES_FILE = "/etc/nginx/modsec/custom-rules.conf"
+
+_SECTION_START_MARKER = "# >>> API-PROTECTION-AUTO-GENERATED-START (do not edit manually) >>>"
+_SECTION_END_MARKER = "# <<< API-PROTECTION-AUTO-GENERATED-END <<<"
+_BLOCK_MARKER_RE = re.compile(r"^# api-protection-block: (\S+) (.+)$")
+
+
+class EndpointBlockRequest(BaseModel):
+    method: str
+    uri: str
+
+
+def _sanitize_for_rule(value: str) -> str:
+    """Strips characters that could break out of the generated SecRule's
+    quoted operand/msg strings, AND out of the marker comment line — a
+    newline in particular would terminate the '#' comment and let the rest
+    of the string inject arbitrary lines into custom-rules.conf. Callers
+    must sanitize method/uri with this BEFORE passing them to any of the
+    _block_marker/_generate_block_snippet/_rule_id_for/_upsert_block/
+    _remove_block helpers below — they all trust their input is clean."""
+    return re.sub(r"[\"'\\\n\r]", "", value)
+
+
+def _block_marker(method: str, uri: str) -> str:
+    return f"# api-protection-block: {method} {uri}"
+
+
+def _rule_id_for(method: str, uri: str) -> int:
+    """Deterministic rule ID so the same endpoint always maps to the same
+    ID (add/remove stays idempotent across restarts). Landed in a band
+    clearly outside CRS's own 900000-999999 range and the 999999 paranoia
+    SecAction already used elsewhere in this codebase. Uses SHA-256, not
+    Python's built-in hash(), which is randomized per-process and would
+    make the same endpoint map to a different ID on every restart."""
+    digest = hashlib.sha256(f"{method}:{uri}".encode("utf-8")).hexdigest()
+    return 5_000_000 + (int(digest, 16) % 900_000)
+
+
+def _generate_block_snippet(method: str, uri: str) -> str:
+    rule_id = _rule_id_for(method, uri)
+    return (
+        f"{_block_marker(method, uri)}\n"
+        f'SecRule REQUEST_METHOD "@streq {method}" '
+        f'"id:{rule_id},phase:1,deny,status:403,log,'
+        f"msg:'Blocked by API Protection: {method} {uri}',chain\"\n"
+        f'    SecRule REQUEST_FILENAME "@streq {uri}" ""\n'
+    )
+
+
+def _read_custom_rules() -> str:
+    if not os.path.exists(CUSTOM_RULES_FILE):
+        return ""
+    with open(CUSTOM_RULES_FILE, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _list_blocked_endpoints(content: str) -> List[Dict[str, str]]:
+    blocked = []
+    for line in content.split("\n"):
+        m = _BLOCK_MARKER_RE.match(line.strip())
+        if m:
+            blocked.append({"method": m.group(1), "uri": m.group(2)})
+    return blocked
+
+
+def _upsert_block(content: str, method: str, uri: str) -> str:
+    """Adds a block rule for (method, uri), creating the auto-generated
+    section if it doesn't exist yet. No-op if already blocked."""
+    if _block_marker(method, uri) in content:
+        return content
+
+    snippet = _generate_block_snippet(method, uri)
+
+    if _SECTION_START_MARKER in content and _SECTION_END_MARKER in content:
+        return content.replace(_SECTION_END_MARKER, snippet + _SECTION_END_MARKER)
+
+    separator = "\n" if content and not content.endswith("\n") else ""
+    return (
+        content + separator +
+        f"\n{_SECTION_START_MARKER}\n" + snippet + f"{_SECTION_END_MARKER}\n"
+    )
+
+
+def _remove_block(content: str, method: str, uri: str) -> str:
+    """Removes the 3-line block group (marker + chained SecRule pair) for
+    (method, uri) if present. Leaves an otherwise-empty auto-generated
+    section in place rather than also tidying up the wrapper markers —
+    keeps this idempotent and simple; an empty section is harmless."""
+    marker = _block_marker(method, uri)
+    if marker not in content:
+        return content
+    lines = content.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() == marker:
+            i += 3  # marker line + SecRule line + chained SecRule line
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
+@router.get("/api-protection/blocked-endpoints")
+def get_blocked_endpoints(current_user: TokenData = Depends(require_any_role)):
+    """Lists endpoints currently blocked via API Protection's generated rules."""
+    return _list_blocked_endpoints(_read_custom_rules())
+
+
+@router.post("/api-protection/endpoints/block")
+def block_endpoint(req: EndpointBlockRequest, current_user: TokenData = Depends(require_admin)):
+    """Generates and applies a ModSecurity rule that denies every request
+    to this exact method+URI (Admin only — this can take down a live,
+    legitimately-used endpoint if used carelessly)."""
+    from app.services.nginx_manager import write_and_apply_configs
+
+    method = _sanitize_for_rule(req.method.strip().upper())
+    uri = _sanitize_for_rule(req.uri.strip())
+    if not method or not uri:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="method and uri are required.")
+
+    current_content = _read_custom_rules()
+    new_content = _upsert_block(current_content, method, uri)
+    if new_content == current_content:
+        return {"message": f"{method} {uri} is already blocked."}
+
+    success, err_msg = write_and_apply_configs({CUSTOM_RULES_FILE: new_content})
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply endpoint block: {err_msg}",
+        )
+    return {"message": f"{method} {uri} is now blocked."}
+
+
+@router.post("/api-protection/endpoints/unblock")
+def unblock_endpoint(req: EndpointBlockRequest, current_user: TokenData = Depends(require_admin)):
+    """Removes a previously-generated block rule for this endpoint (Admin only)."""
+    from app.services.nginx_manager import write_and_apply_configs
+
+    method = _sanitize_for_rule(req.method.strip().upper())
+    uri = _sanitize_for_rule(req.uri.strip())
+
+    current_content = _read_custom_rules()
+    new_content = _remove_block(current_content, method, uri)
+    if new_content == current_content:
+        return {"message": f"{method} {uri} was not blocked."}
+
+    success, err_msg = write_and_apply_configs({CUSTOM_RULES_FILE: new_content})
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove endpoint block: {err_msg}",
+        )
+    return {"message": f"{method} {uri} is no longer blocked."}

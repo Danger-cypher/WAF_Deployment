@@ -13,14 +13,14 @@ export default function ProtectionSection({ appsRefreshKey, onOpenWizard }) {
       label: 'Virtual Hosts',
       icon: Server,
       description: 'Manage reverse-proxy protected applications and SSL termination',
-      statusColor: '#10b981',
+      statusColor: 'var(--success-color)',
     },
     {
       id: 'ddos',
       label: 'DDoS & Bot Shield',
       icon: ShieldAlert,
       description: 'Layer-7 rate limiting, bot mitigation and live traffic analytics',
-      statusColor: '#f59e0b',
+      statusColor: 'var(--warning-color)',
     },
   ];
 
@@ -36,23 +36,23 @@ export default function ProtectionSection({ appsRefreshKey, onOpenWizard }) {
         justifyContent: 'space-between',
         marginBottom: '20px',
         paddingBottom: '16px',
-        borderBottom: '1px solid rgba(255,255,255,0.06)',
+        borderBottom: '1px solid var(--border-color)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {ActiveIcon && (
             <div style={{
               width: '36px', height: '36px', borderRadius: '10px',
-              background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)',
+              background: 'var(--sev-low-bg)', border: '1px solid var(--sev-low-border)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              <ActiveIcon size={18} color="#3b82f6" />
+              <ActiveIcon size={18} color="var(--sev-low)" />
             </div>
           )}
           <div>
-            <div style={{ fontSize: '15px', fontWeight: 700, color: '#f4f4f5', lineHeight: 1.2 }}>
+            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
               {activeTabMeta?.label}
             </div>
-            <div style={{ fontSize: '12px', color: '#71717a', marginTop: '2px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
               {activeTabMeta?.description}
             </div>
           </div>
@@ -61,9 +61,9 @@ export default function ProtectionSection({ appsRefreshKey, onOpenWizard }) {
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '4px 10px', borderRadius: '20px',
           background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)',
-          fontSize: '11px', fontWeight: 600, color: '#34d399',
+          fontSize: '11px', fontWeight: 600, color: 'var(--success-color)',
         }}>
-          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
+          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--success-color)' }} />
           ACTIVE ENFORCEMENT
         </div>
       </div>

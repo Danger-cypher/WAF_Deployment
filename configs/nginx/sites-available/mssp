@@ -41,6 +41,9 @@ server {
 
     resolver 127.0.0.11 valid=30s ipv6=off;
 
+    modsecurity_rules_file /etc/nginx/modsec/positive-security.conf;
+    modsecurity_rules_file /etc/nginx/modsec/app-auth/app_7.conf;
+
     location @json_forbidden {
         default_type application/json;
         add_header Content-Type 'application/json; charset=utf-8' always;

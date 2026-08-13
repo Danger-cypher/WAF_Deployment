@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Check, Code, RefreshCw } from 'lucide-react';
 import { getCustomRules, saveCustomRules } from '../services/api';
+import Button from '../components/Button';
 
 // Custom Rules Editor (Virtual Patching) Component
 export default function CustomRulesEditor({ userRole }) {
@@ -46,52 +47,46 @@ export default function CustomRulesEditor({ userRole }) {
   };
 
   return (
-    <div style={{ background: '#121319', borderRadius: '12px', border: '1px solid #1e2230', padding: '24px' }}>
+    <div style={{ background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border-color)', padding: '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h3 style={{ margin: 0, color: '#f4f4f5', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Code size={20} color="#3b82f6" />
+          <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Code size={20} color="var(--sev-low)" />
             Virtual Patching (Custom CyberSentinel Engine Rules)
           </h3>
-          <p style={{ margin: '4px 0 0 0', color: '#71717a', fontSize: '13px' }}>
+          <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: '13px' }}>
             Write custom CyberSentinel Engine rules to mitigate zero-day vulnerabilities in real time. Rules are validated for syntax before reload.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button
+          <Button
+            variant="secondary"
+            icon={RefreshCw}
+            loading={loading}
+            disabled={saving}
             onClick={fetchRules}
-            disabled={loading || saving}
-            style={{
-              padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px',
-              background: '#1e2230', color: '#a1a1aa', border: '1px solid #2a2e3d', borderRadius: '6px',
-              cursor: (loading || saving) ? 'not-allowed' : 'pointer', opacity: (loading || saving) ? 0.6 : 1, fontWeight: 500
-            }}
           >
-            <RefreshCw size={14} className={loading ? 'spin' : ''} />
-            <span>Reload File</span>
-          </button>
-          <button
+            Reload File
+          </Button>
+          <Button
+            variant="primary"
+            icon={Check}
+            loading={saving}
+            disabled={loading || userRole !== 'admin'}
             onClick={handleSave}
-            disabled={loading || saving || userRole !== 'admin'}
-            style={{
-              padding: '8px 20px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px',
-              background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px',
-              cursor: (loading || saving || userRole !== 'admin') ? 'not-allowed' : 'pointer',
-              opacity: (loading || saving || userRole !== 'admin') ? 0.6 : 1, fontWeight: 600
-            }}
+            style={{ background: 'var(--sev-low)', color: '#fff' }}
           >
-            {saving ? <RefreshCw size={14} className="spin" /> : <Check size={14} />}
-            <span>{saving ? 'Validating & Applying...' : 'Apply & Reload WAF'}</span>
-          </button>
+            {saving ? 'Validating & Applying...' : 'Apply & Reload WAF'}
+          </Button>
         </div>
       </div>
 
       {message.text && (
         <div style={{
           padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px', fontWeight: 500,
-          background: message.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-          border: message.type === 'success' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
-          color: message.type === 'success' ? '#34d399' : '#f87171',
+          background: message.type === 'success' ? 'var(--success-bg)' : 'var(--danger-bg)',
+          border: message.type === 'success' ? '1px solid var(--success-glow)' : '1px solid var(--danger-border)',
+          color: message.type === 'success' ? 'var(--success-color)' : 'var(--danger-color)',
           whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)'
         }}>
           {message.text}
@@ -100,42 +95,42 @@ export default function CustomRulesEditor({ userRole }) {
 
       {/* Quick Snippet Helpers */}
       <div style={{ marginBottom: '16px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 600 }}>Quick Patch Templates:</span>
+        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>Quick Patch Templates:</span>
         <button
           onClick={() => insertSnippet(`SecRule REQUEST_HEADERS:User-Agent "@contains BadBot" "id:${1000000 + Math.floor(Math.random()*900000)},phase:1,deny,status:403,msg:'Blocked Bad Bot'"`)}
-          style={{ background: '#1e2230', border: '1px solid #2a2e3d', color: '#38bdf8', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+          style={{ background: 'var(--surface-hover)', border: '1px solid var(--border-strong)', color: 'var(--editor-key)', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
         >
           + Block User-Agent
         </button>
         <button
           onClick={() => insertSnippet(`SecRule REQUEST_URI "@contains /vulnerable-endpoint" "id:${1000000 + Math.floor(Math.random()*900000)},phase:1,deny,status:403,msg:'Virtual Patch Endpoint'"`)}
-          style={{ background: '#1e2230', border: '1px solid #2a2e3d', color: '#38bdf8', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+          style={{ background: 'var(--surface-hover)', border: '1px solid var(--border-strong)', color: 'var(--editor-key)', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
         >
           + Block URI Endpoint
         </button>
         <button
           onClick={() => insertSnippet(`SecRule REMOTE_ADDR "@ipMatch 192.168.1.100" "id:${1000000 + Math.floor(Math.random()*900000)},phase:1,deny,status:403,msg:'Blocked Attacker IP'"`)}
-          style={{ background: '#1e2230', border: '1px solid #2a2e3d', color: '#38bdf8', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+          style={{ background: 'var(--surface-hover)', border: '1px solid var(--border-strong)', color: 'var(--editor-key)', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
         >
           + Block IP Address
         </button>
         <button
           onClick={() => insertSnippet(`SecRule ARGS:payload "@rx (?i)<script>" "id:${1000000 + Math.floor(Math.random()*900000)},phase:2,deny,status:403,msg:'Parameter Regex Filter'"`)}
-          style={{ background: '#1e2230', border: '1px solid #2a2e3d', color: '#38bdf8', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+          style={{ background: 'var(--surface-hover)', border: '1px solid var(--border-strong)', color: 'var(--editor-key)', padding: '5px 12px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
         >
           + Parameter Regex Filter
         </button>
       </div>
 
       {/* Code Editor */}
-      <div style={{ position: 'relative', borderRadius: '8px', border: '1px solid #27272a', overflow: 'hidden' }}>
-        <div style={{ background: '#18181b', padding: '8px 16px', borderBottom: '1px solid #27272a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '12px', color: '#a1a1aa', fontFamily: 'var(--font-mono)' }}>/etc/nginx/modsec/custom-rules.conf</span>
+      <div style={{ position: 'relative', borderRadius: '8px', border: '1px solid var(--editor-border)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--editor-header-bg)', padding: '8px 16px', borderBottom: '1px solid var(--editor-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>/etc/nginx/modsec/custom-rules.conf</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '11px', color: '#34d399', background: 'rgba(52, 211, 153, 0.1)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+            <span style={{ fontSize: '11px', color: 'var(--success-color)', background: 'var(--success-bg)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
               {rulesContent.split('\n').filter(line => line.trim().startsWith('SecRule')).length} Active Custom Rules
             </span>
-            <span style={{ fontSize: '11px', color: '#52525b' }}>CyberSentinel Engine v2.0</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>CyberSentinel Engine v2.0</span>
           </div>
         </div>
         <textarea
@@ -146,8 +141,8 @@ export default function CustomRulesEditor({ userRole }) {
           rows={18}
           style={{
             width: '100%',
-            background: '#09090b',
-            color: '#34d399',
+            background: 'var(--editor-bg)',
+            color: 'var(--editor-string)',
             fontFamily: 'Consolas, Monaco, "Andale Mono", "Ubuntu Mono", monospace',
             fontSize: '13px',
             lineHeight: '1.6',

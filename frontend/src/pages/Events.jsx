@@ -1,12 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Activity, ChevronLeft, ChevronRight, Code, FileText, Globe, Search, ShieldCheck } from 'lucide-react';
 import { getLogs, getGeneralSettings } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import LogDetailsModal from '../components/LogDetailsModal';
 import { NoLogsEmptyState, NoSearchResultsEmptyState } from '../components/EmptyStates';
+import { useToast } from '../hooks/useToast';
+import Toast from '../components/Toast';
 
 export default function LiveLogs({ onMarkFalsePositive }) {
+  const { toast, showToast } = useToast();
   const [logs, setLogs] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -47,7 +50,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
 
   const handleExportReport = () => {
     if (!logs || logs.length === 0) {
-      alert('No log data available to export. Please wait for data to load.');
+      showToast('No log data available to export. Please wait for data to load.', 'error');
       return;
     }
     // Build CSV from currently displayed (filtered) logs
@@ -121,7 +124,14 @@ export default function LiveLogs({ onMarkFalsePositive }) {
     return () => clearTimeout(timer);
   }, [search, severityFilter, attackFilter, focusMode, trafficTab]);
 
+  const isFetchingLogsRef = useRef(false);
+
   const fetchLogs = async () => {
+    // setInterval fires unconditionally regardless of whether the previous
+    // fetch resolved — under any latency spike this stacks overlapping
+    // requests, each one adding more backend load than the last cycle.
+    if (isFetchingLogsRef.current) return;
+    isFetchingLogsRef.current = true;
     try {
       const filters = {};
       if (search.trim()) filters.search = search;
@@ -141,6 +151,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
       console.error('Error fetching logs', err);
     } finally {
       setLoading(false);
+      isFetchingLogsRef.current = false;
     }
   };
 
@@ -168,29 +179,35 @@ export default function LiveLogs({ onMarkFalsePositive }) {
     }
   };
 
-  const sortedLogs = [...logs]
-    .filter(log => {
-      if (trafficTab === 'web') return log.uri && !log.uri.startsWith('/api');
-      if (trafficTab === 'api') return log.uri && log.uri.startsWith('/api');
-      return true;
-    })
-    .sort((a, b) => {
-      let valA = a[sortField] || '';
-      let valB = b[sortField] || '';
+  // Recomputing this filter+sort on every render (including renders
+  // triggered by unrelated state like search-box keystrokes or row hover)
+  // is wasted work on a security log table meant to grow — memoize it to
+  // only re-run when the inputs that actually affect the result change.
+  const sortedLogs = useMemo(() => {
+    return [...logs]
+      .filter(log => {
+        if (trafficTab === 'web') return log.uri && !log.uri.startsWith('/api');
+        if (trafficTab === 'api') return log.uri && log.uri.startsWith('/api');
+        return true;
+      })
+      .sort((a, b) => {
+        let valA = a[sortField] || '';
+        let valB = b[sortField] || '';
 
-      if (sortField === 'timestamp') {
-        valA = Date.parse(valA) || 0;
-        valB = Date.parse(valB) || 0;
-      } else if (sortField === 'severity') {
-        const severityOrder = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
-        valA = severityOrder[valA] || 0;
-        valB = severityOrder[valB] || 0;
-      }
+        if (sortField === 'timestamp') {
+          valA = Date.parse(valA) || 0;
+          valB = Date.parse(valB) || 0;
+        } else if (sortField === 'severity') {
+          const severityOrder = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
+          valA = severityOrder[valA] || 0;
+          valB = severityOrder[valB] || 0;
+        }
 
-      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
-      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
-      return 0;
-    });
+        if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+        if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+        return 0;
+      });
+  }, [logs, trafficTab, sortField, sortOrder]);
 
   const totalPages = Math.ceil(total / size);
 
@@ -208,7 +225,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
     >
       <div className="card-title" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <Activity size={20} color="#3b82f6" />
+          <Activity size={20} color="var(--sev-low)" />
           <span>Real-Time CyberSentinel Engine Logs</span>
           <div className="pulse-container">
             <div className="pulse-dot"></div>
@@ -217,7 +234,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
 
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
           <div className="search-input-wrapper">
-            <Search size={14} color="#a1a1aa" style={{ position: 'absolute', left: '12px' }} />
+            <Search size={14} color="var(--text-secondary)" style={{ position: 'absolute', left: '12px' }} />
             <input
               type="text"
               placeholder="Search IP, URI, rule..."
@@ -277,17 +294,17 @@ export default function LiveLogs({ onMarkFalsePositive }) {
               padding: '8px 14px',
               borderRadius: '8px',
               border: focusMode
-                ? '1px solid rgba(239, 68, 68, 0.7)'
+                ? '1px solid var(--danger-border)'
                 : '1px solid rgba(161, 161, 170, 0.3)',
               background: focusMode
-                ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(249, 115, 22, 0.15))'
-                : 'rgba(255,255,255,0.04)',
-              color: focusMode ? '#fca5a5' : '#a1a1aa',
+                ? 'linear-gradient(135deg, var(--danger-border), var(--sev-high-border))'
+                : 'var(--border-subtle)',
+              color: focusMode ? 'var(--danger-color)' : 'var(--text-secondary)',
               fontSize: '13px',
               fontWeight: 600,
               cursor: 'pointer',
               transition: 'all 0.2s ease',
-              boxShadow: focusMode ? '0 0 12px rgba(239, 68, 68, 0.25)' : 'none',
+              boxShadow: focusMode ? '0 0 12px var(--danger-border)' : 'none',
               whiteSpace: 'nowrap',
             }}
           >
@@ -307,7 +324,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
               borderRadius: '8px',
               border: '1px solid rgba(16, 185, 129, 0.35)',
               background: 'rgba(16, 185, 129, 0.08)',
-              color: '#6ee7b7',
+              color: 'var(--success-color)',
               fontSize: '13px',
               fontWeight: 600,
               cursor: 'pointer',
@@ -339,14 +356,14 @@ export default function LiveLogs({ onMarkFalsePositive }) {
           marginTop: '12px',
           padding: '8px 14px',
           borderRadius: '8px',
-          background: 'rgba(239, 68, 68, 0.07)',
-          border: '1px solid rgba(239, 68, 68, 0.2)',
+          background: 'var(--danger-bg)',
+          border: '1px solid var(--danger-border)',
           fontSize: '12px',
-          color: '#71717a',
+          color: 'var(--text-muted)',
           transition: 'all 0.3s ease',
         }}>
-          <ShieldCheck size={13} color="#f87171" style={{ flexShrink: 0 }} />
-          <span><strong style={{ color: '#fca5a5' }}>Focus Mode active</strong> · Showing Critical &amp; High severity events only · <span style={{ color: '#a1a1aa' }}>{total} event{total !== 1 ? 's' : ''} matched</span></span>
+          <ShieldCheck size={13} color="var(--danger-color)" style={{ flexShrink: 0 }} />
+          <span><strong style={{ color: 'var(--danger-color)' }}>Focus Mode active</strong> · Showing Critical &amp; High severity events only · <span style={{ color: 'var(--text-secondary)' }}>{total} event{total !== 1 ? 's' : ''} matched</span></span>
         </div>
       )}
 
@@ -358,8 +375,8 @@ export default function LiveLogs({ onMarkFalsePositive }) {
         marginTop: '16px',
         marginBottom: '16px',
         padding: '4px',
-        background: 'rgba(0, 0, 0, 0.2)',
-        border: '1px solid rgba(255, 255, 255, 0.05)',
+        background: 'var(--inset-bg)',
+        border: '1px solid var(--surface-hover)',
         borderRadius: '12px',
         backdropFilter: 'blur(10px)',
       }}>
@@ -368,7 +385,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             id: 'all',
             label: 'All Traffic',
             icon: Activity,
-            color: '#a1a1aa',
+            color: 'var(--text-secondary)',
             activeBg: 'rgba(161,161,170,0.15)',
             activeBorder: 'rgba(161,161,170,0.3)',
           },
@@ -376,7 +393,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             id: 'api',
             label: 'API Traffic',
             icon: Code,
-            color: '#f59e0b',
+            color: 'var(--warning-color)',
             activeBg: 'rgba(245,158,11,0.15)',
             activeBorder: 'rgba(245,158,11,0.3)',
           },
@@ -384,9 +401,9 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             id: 'web',
             label: 'Web Application',
             icon: Globe,
-            color: '#3b82f6',
-            activeBg: 'rgba(59,130,246,0.15)',
-            activeBorder: 'rgba(59,130,246,0.3)',
+            color: 'var(--sev-low)',
+            activeBg: 'var(--sev-low-border)',
+            activeBorder: 'var(--sev-low-border)',
           },
         ].map(tab => {
           const isActive = trafficTab === tab.id;
@@ -404,7 +421,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                 border: `1px solid ${isActive ? tab.activeBorder : 'transparent'}`,
                 borderRadius: '8px',
                 cursor: 'pointer',
-                color: isActive ? '#f4f4f5' : '#71717a',
+                color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
                 fontSize: '13px',
                 fontWeight: isActive ? 600 : 500,
                 transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -413,13 +430,13 @@ export default function LiveLogs({ onMarkFalsePositive }) {
               }}
               onMouseEnter={(e) => {
                 if (!isActive) {
-                  e.currentTarget.style.color = '#a1a1aa';
-                  e.currentTarget.style.background = 'rgba(255,255,255,0.02)';
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.background = 'var(--surface-subtle)';
                 }
               }}
               onMouseLeave={(e) => {
                 if (!isActive) {
-                  e.currentTarget.style.color = '#71717a';
+                  e.currentTarget.style.color = 'var(--text-muted)';
                   e.currentTarget.style.background = 'transparent';
                 }
               }}
@@ -434,7 +451,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                   marginLeft: '4px',
                   padding: '2px 6px',
                   borderRadius: '6px',
-                  background: 'rgba(0,0,0,0.3)',
+                  background: 'var(--inset-bg)',
                   border: `1px solid ${tab.activeBorder}`,
                   color: tab.color,
                   fontSize: '11px',
@@ -467,7 +484,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             <tbody>
                 {loading && sortedLogs.length === 0 ? (
                   <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', padding: '60px', color: '#a1a1aa' }}>
+                    <td colSpan="8" style={{ textAlign: 'center', padding: '60px', color: 'var(--text-secondary)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
                         <Activity className="animate-spin" size={20} /> Loading live CyberSentinel Engine logs...
                       </div>
@@ -506,7 +523,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                             borderLeft: isNewLog ? '3px solid var(--accent-color)' : 'none'
                           }}
                         >
-                          <td style={{ color: '#a1a1aa', whiteSpace: 'nowrap' }}>{formatLocalTime(log?.timestamp)}</td>
+                          <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{formatLocalTime(log?.timestamp)}</td>
                           <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 600 }}>
                             <span style={{ marginRight: '6px' }} title={log?.severity}>
                               {log?.severity === 'Critical' ? '💀' : log?.severity === 'High' ? '🔥' : 'ℹ️'}
@@ -538,7 +555,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                           </td>
                           <td className="payload-cell"
                             onClick={() => toggleExpand(rowId)}
-                            style={{ fontFamily: 'monospace', fontSize: '12px', color: '#e2e8f0', maxBreakWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}
+                            style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-primary)', maxBreakWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}
                             title={reconstructedCommand}
                           >
                             {log?.uri || '-'}
@@ -552,7 +569,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                                     e.stopPropagation();
                                     onMarkFalsePositive(log);
                                   }}
-                                  style={{ borderColor: 'rgba(16, 185, 129, 0.4)', color: '#a7f3d0' }}
+                                  style={{ borderColor: 'rgba(16, 185, 129, 0.4)', color: 'var(--success-color)' }}
                                 >
                                   Mark as FP
                                 </button>
@@ -572,10 +589,10 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                         </tr>
                         {expandedLogs.has(rowId) && (
                           <tr className="expanded-log-row">
-                            <td colSpan="8" style={{ padding: '16px 24px', background: 'rgba(59, 130, 246, 0.08)', borderBottom: '1px solid rgba(59, 130, 246, 0.2)' }}>
-                              <div style={{ fontFamily: 'monospace', fontSize: '13px', color: '#93c5fd', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
-                                <strong style={{ color: '#bfdbfe', marginRight: '8px' }}>RECONSTRUCTED COMMAND:</strong><br />
-                                <span style={{ marginTop: '8px', display: 'block', padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                            <td colSpan="8" style={{ padding: '16px 24px', background: 'var(--sev-low-bg)', borderBottom: '1px solid var(--sev-low-border)' }}>
+                              <div style={{ fontFamily: 'monospace', fontSize: '13px', color: 'var(--sev-low)', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
+                                <strong style={{ color: 'var(--sev-low)', marginRight: '8px' }}>RECONSTRUCTED COMMAND:</strong><br />
+                                <span style={{ marginTop: '8px', display: 'block', padding: '12px', background: 'var(--inset-bg)', borderRadius: '6px', border: '1px solid var(--surface-hover)' }}>
                                   {reconstructedCommand}
                                 </span>
                               </div>
@@ -600,7 +617,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
               <ChevronLeft size={16} /> Previous
             </button>
             <span className="pagination-info">
-              Page <strong style={{ color: '#fff' }}>{page}</strong> of <strong style={{ color: '#fff' }}>{totalPages}</strong> ({total} total logs)
+              Page <strong style={{ color: 'var(--text-primary)' }}>{page}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong> ({total} total logs)
             </span>
             <button
               className="pagination-btn"
@@ -621,6 +638,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
           }}
           onMarkFalsePositive={onMarkFalsePositive}
         />
+        <Toast toast={toast} />
     </motion.div>
   );
 }

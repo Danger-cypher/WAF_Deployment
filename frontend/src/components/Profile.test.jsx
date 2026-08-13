@@ -66,7 +66,7 @@ describe('Profile', () => {
     expect(infoChip).not.toHaveStyle({ textDecoration: 'line-through' });
   });
 
-  it('rejects a new password shorter than 8 characters without calling the API', async () => {
+  it('rejects a new password shorter than 12 characters without calling the API', async () => {
     const user = userEvent.setup();
     render(<Profile onClose={() => {}} />);
     await screen.findByText('admin');
@@ -75,7 +75,7 @@ describe('Profile', () => {
     await user.type(screen.getByPlaceholderText(/new password/i), 'short');
     await user.click(screen.getByRole('button', { name: /update password/i }));
 
-    expect(await screen.findByText(/at least 8 characters/i)).toBeInTheDocument();
+    expect(await screen.findByText(/at least 12 characters/i)).toBeInTheDocument();
     expect(api.changeMyPassword).not.toHaveBeenCalled();
   });
 

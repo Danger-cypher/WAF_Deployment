@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Database, Lock, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, CheckSquare, Database, Lock, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, X } from 'lucide-react';
 import {
   getGeneralSettings, saveGeneralSettings, getLogSettings, saveLogSettings,
   getWafSettings, saveWafSettings,
   changeAdminPassword, restartWafEngine, reloadNginxProxy, purgeStatsCache, syncSignatures,
   getHardeningSettings, saveHardeningSettings, getAntiDefacementSettings, saveAntiDefacementSettings,
+  getPositiveSecurity, savePositiveSecurity,
 } from '../services/api';
+import { useToast } from '../hooks/useToast';
+import Toast from '../components/Toast';
+import { useConfirm } from '../hooks/useConfirm';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 export default function Settings({ onLogout }) {
   // General Settings
@@ -45,21 +50,41 @@ export default function Settings({ onLogout }) {
   const [defacementFiles, setDefacementFiles] = useState("");
   const [checkInterval, setCheckInterval] = useState(5);
 
+  // Positive Security Settings — applies only to protected apps' own
+  // traffic (never the WAF GUI's own dashboard API, see backend/app/
+  // services/nginx_manager.py for how that's scoped).
+  const [posSecEnabled, setPosSecEnabled] = useState(false);
+  const [posSecMethods, setPosSecMethods] = useState("");
+  const [posSecContentTypes, setPosSecContentTypes] = useState("");
+  const [posSecExtensions, setPosSecExtensions] = useState("");
+
   // Notifications & State Controls
-  const [toast, setToast] = useState(null);
+  const { toast, showToast } = useToast();
+  const confirm = useConfirm();
   const [dangerModal, setDangerModal] = useState(null);
+  useEscapeToClose(() => setDangerModal(null), !!dangerModal);
   const [loadingAction, setLoadingAction] = useState(false);
   const [activeSettingTab, setActiveSettingTab] = useState('general');
+  // Previously a failed initial load only did console.error, leaving every
+  // tab showing hardcoded defaults with zero visible signal that they don't
+  // reflect real WAF config — an admin could edit and save right over real
+  // settings without ever knowing the load failed.
+  const [settingsLoadError, setSettingsLoadError] = useState('');
 
   useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const [gen, logs, waf, hardening, defacement] = await Promise.all([
+    fetchSettings();
+  }, []);
+
+  const fetchSettings = async () => {
+    setSettingsLoadError('');
+    try {
+        const [gen, logs, waf, hardening, defacement, positiveSecurity] = await Promise.all([
           getGeneralSettings(),
           getLogSettings(),
           getWafSettings(),
           getHardeningSettings(),
-          getAntiDefacementSettings()
+          getAntiDefacementSettings(),
+          getPositiveSecurity(),
         ]);
 
         if (gen) {
@@ -91,16 +116,16 @@ export default function Settings({ onLogout }) {
           if (defacement.monitored_files !== undefined) setDefacementFiles(defacement.monitored_files.join(', '));
           if (defacement.check_interval_seconds !== undefined) setCheckInterval(defacement.check_interval_seconds);
         }
-      } catch (err) {
-        console.error("Failed to load WAF settings from API", err);
-      }
-    };
-    fetchSettings();
-  }, []);
-
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
+        if (positiveSecurity) {
+          if (positiveSecurity.enabled !== undefined) setPosSecEnabled(positiveSecurity.enabled);
+          if (positiveSecurity.allowed_methods !== undefined) setPosSecMethods(positiveSecurity.allowed_methods.join(', '));
+          if (positiveSecurity.allowed_content_types !== undefined) setPosSecContentTypes(positiveSecurity.allowed_content_types.join(', '));
+          if (positiveSecurity.restricted_extensions !== undefined) setPosSecExtensions(positiveSecurity.restricted_extensions.join(', '));
+        }
+    } catch (err) {
+      console.error("Failed to load WAF settings from API", err);
+      setSettingsLoadError(err.message || 'Could not reach the backend API.');
+    }
   };
 
   const handleSaveGeneral = async (e) => {
@@ -178,6 +203,42 @@ export default function Settings({ onLogout }) {
     }
   };
 
+  const handleSavePositiveSecurity = async (e) => {
+    e.preventDefault();
+    if (posSecEnabled && !(await confirm({
+      title: 'Enable Positive Security',
+      message:
+        "Enabling Positive Security will start denying any request to a protected app that doesn't match " +
+        "the allowed methods / content-types below, or that hits a restricted file extension. This applies " +
+        "immediately to ALL protected apps. Continue?",
+      confirmLabel: 'Enable',
+      danger: true,
+    }))) {
+      return;
+    }
+    setLoadingAction(true);
+    try {
+      const methods = posSecMethods.split(',').map(m => m.trim()).filter(m => m);
+      const contentTypes = posSecContentTypes.split(',').map(c => c.trim()).filter(c => c);
+      const extensions = posSecExtensions.split(',').map(x => x.trim()).filter(x => x);
+      await savePositiveSecurity({
+        enabled: posSecEnabled,
+        allowed_methods: methods,
+        allowed_content_types: contentTypes,
+        restricted_extensions: extensions,
+      });
+      showToast(
+        posSecEnabled
+          ? "Positive Security policy updated and applied to protected apps."
+          : "Positive Security disabled."
+      );
+    } catch (err) {
+      showToast("Failed to update Positive Security settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
   const handleSaveLogs = async (e) => {
     e.preventDefault();
     setLoadingAction(true);
@@ -232,7 +293,7 @@ export default function Settings({ onLogout }) {
         showToast(res.message || "Dashboard analytics cache purged and rebuilt.");
       } else if (action === 'sync') {
         const res = await syncSignatures();
-        showToast(res.message || "OWASP CRS signatures synced successfully.");
+        showToast(res.message || "ModSecurity reloaded with the current on-disk rule set.");
       }
     } catch (err) {
       showToast(err.message || "Administrative action failed.", "error");
@@ -249,35 +310,7 @@ export default function Settings({ onLogout }) {
       transition={{ duration: 0.4 }}
     >
       {/* Toast Alert overlay */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className={`toast-alert ${toast.type === 'error' ? 'error' : 'success'}`}
-            style={{
-              position: 'fixed',
-              top: '24px',
-              right: '24px',
-              zIndex: 9999,
-              padding: '12px 24px',
-              borderRadius: '8px',
-              boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              background: toast.type === 'error' ? 'rgba(239, 68, 68, 0.95)' : 'rgba(16, 185, 129, 0.95)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              color: '#fff',
-              fontWeight: 500
-            }}
-          >
-            <ShieldAlert size={18} />
-            <span>{toast.message}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Toast toast={toast} />
 
       {/* Danger Modal confirmation prompt */}
       <AnimatePresence>
@@ -285,23 +318,23 @@ export default function Settings({ onLogout }) {
           <div className="modal-overlay" style={{ zIndex: 1100 }}>
             <motion.div
               className="modal-content pulse-warning"
-              style={{ maxWidth: '480px', border: '1px solid rgba(239, 68, 68, 0.35)' }}
+              style={{ maxWidth: '480px', border: '1px solid var(--danger-border)' }}
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
             >
-              <div className="modal-header" style={{ background: 'rgba(239, 68, 68, 0.03)', borderBottom: '1px solid rgba(239,68,68,0.15)' }}>
-                <div className="modal-title" style={{ color: '#fca5a5' }}>
-                  <AlertTriangle size={20} color="#ef4444" />
+              <div className="modal-header" style={{ background: 'var(--danger-bg)', borderBottom: '1px solid var(--danger-border)' }}>
+                <div className="modal-title" style={{ color: 'var(--danger-color)' }}>
+                  <AlertTriangle size={20} color="var(--danger-color)" />
                   <span>Administrative Action Confirmation</span>
                 </div>
-                <button className="modal-close-btn" onClick={() => setDangerModal(null)}>
+                <button className="modal-close-btn" onClick={() => setDangerModal(null)} aria-label="Close">
                   <X size={18} />
                 </button>
               </div>
 
               <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ fontSize: '13px', color: '#e4e4e7', lineHeight: '1.5' }}>
+                <div style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: '1.5' }}>
                   {dangerModal === 'restart' && "Are you sure you want to restart the CyberSentinel WAF protection engine? This will momentarily disrupt active connection guards."}
                   {dangerModal === 'nginx' && "Are you sure you want to gracefully reload NGINX configurations? This will apply all pending rule changes."}
                   {dangerModal === 'cache' && "Are you sure you want to clear the dashboard local metrics cache? The dashboard data will reload from raw logs."}
@@ -312,14 +345,14 @@ export default function Settings({ onLogout }) {
                   <button
                     onClick={() => setDangerModal(null)}
                     className="action-btn-inspect"
-                    style={{ background: 'transparent', color: '#a1a1aa', borderColor: 'rgba(255,255,255,0.1)' }}
+                    style={{ background: 'transparent', color: 'var(--text-secondary)', borderColor: 'var(--border-strong)' }}
                   >
                     Cancel
                   </button>
                   <button
                     onClick={confirmDangerAction}
                     className="action-btn-inspect"
-                    style={{ background: '#ef4444', color: '#fff', borderColor: 'transparent', padding: '6px 16px' }}
+                    style={{ background: 'var(--danger-color)', color: '#fff', borderColor: 'transparent', padding: '6px 16px' }}
                   >
                     Confirm Action
                   </button>
@@ -334,7 +367,7 @@ export default function Settings({ onLogout }) {
 
         {/* Sidebar Navigation */}
         <div className="settings-sidebar">
-          <div style={{ fontSize: '12px', fontWeight: 600, color: '#71717a', textTransform: 'uppercase', letterSpacing: '1.2px', marginBottom: '10px', paddingLeft: '16px' }}>Configuration</div>
+          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.2px', marginBottom: '10px', paddingLeft: '16px' }}>Configuration</div>
 
           <button onClick={() => setActiveSettingTab('general')} className={`settings-tab-btn ${activeSettingTab === 'general' ? 'active' : ''}`}>
             <SettingsIcon size={20} /> General Setup
@@ -348,6 +381,9 @@ export default function Settings({ onLogout }) {
           <button onClick={() => setActiveSettingTab('hardening')} className={`settings-tab-btn ${activeSettingTab === 'hardening' ? 'active' : ''}`}>
             <Server size={20} /> Server Hardening
           </button>
+          <button onClick={() => setActiveSettingTab('positive-security')} className={`settings-tab-btn ${activeSettingTab === 'positive-security' ? 'active' : ''}`}>
+            <CheckSquare size={20} /> Positive Security
+          </button>
           <button onClick={() => setActiveSettingTab('defacement')} className={`settings-tab-btn ${activeSettingTab === 'defacement' ? 'active' : ''}`}>
             <ShieldAlert size={20} /> Anti-Defacement
           </button>
@@ -358,19 +394,39 @@ export default function Settings({ onLogout }) {
 
         {/* Main Content Area */}
         <div className="settings-content-area">
+          {settingsLoadError && (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+              padding: '12px 16px', marginBottom: '16px', borderRadius: '8px',
+              background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', color: 'var(--danger-color)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px' }}>
+                <AlertTriangle size={18} />
+                <span>Couldn't load current settings from the backend ({settingsLoadError}). The fields below may not reflect the live configuration — saving now could overwrite real settings with these defaults.</span>
+              </div>
+              <button
+                type="button"
+                onClick={fetchSettings}
+                className="action-btn-inspect"
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 'none', background: 'var(--danger-border)', color: 'var(--danger-color)', borderColor: 'var(--danger-border)', padding: '6px 12px' }}
+              >
+                <RotateCw size={14} /> Retry
+              </button>
+            </div>
+          )}
           <AnimatePresence mode="wait">
 
             {activeSettingTab === 'general' && (
               <motion.div key="general" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
                 <div className="settings-section-title">
-                  <SettingsIcon size={20} color="#3b82f6" />
+                  <SettingsIcon size={20} color="var(--sev-low)" />
                   General Settings
                 </div>
                 <div className="settings-section-subtitle">Configure dashboard behavior and real-time updates.</div>
 
                 <form onSubmit={handleSaveGeneral} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Dashboard Refresh Interval</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Dashboard Refresh Interval</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={refreshInterval} onChange={(e) => setRefreshInterval(e.target.value)}>
                       <option value="3s">3 Seconds (Sync Active)</option>
                       <option value="5s">5 Seconds (Recommended)</option>
@@ -380,7 +436,7 @@ export default function Settings({ onLogout }) {
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Live Logs Per Page</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Live Logs Per Page</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={logsPerPage} onChange={(e) => setLogsPerPage(e.target.value)}>
                       <option value="10">10 entries</option>
                       <option value="15">15 entries</option>
@@ -389,16 +445,16 @@ export default function Settings({ onLogout }) {
                       <option value="100">100 entries</option>
                     </select>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: '#e4e4e7' }}>Live Inbound Stream</span>
-                      <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Stream logs dynamically from the backend</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Live Inbound Stream</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Stream logs dynamically from the backend</span>
                     </div>
                     <div className={`toggle-switch ${liveUpdates ? 'active' : ''}`} onClick={() => setLiveUpdates(!liveUpdates)}>
                       <div className="toggle-knob"></div>
                     </div>
                   </div>
-                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
                       Save General Preferences
                     </button>
@@ -410,14 +466,14 @@ export default function Settings({ onLogout }) {
             {activeSettingTab === 'waf' && (
               <motion.div key="waf" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
                 <div className="settings-section-title">
-                  <ShieldCheck size={20} color="#3b82f6" />
+                  <ShieldCheck size={20} color="var(--sev-low)" />
                   WAF Engine Policies
                 </div>
                 <div className="settings-section-subtitle">Manage CyberSentinel Engine ruleset behaviors and blocking modes.</div>
 
                 <form onSubmit={handleSaveWAF} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>SecRuleEngine Posture</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>SecRuleEngine Posture</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={secRuleEngine} onChange={(e) => setSecRuleEngine(e.target.value)}>
                       <option value="On">On (Active Blocking Guard)</option>
                       <option value="DetectionOnly">DetectionOnly (Simulate Attacks)</option>
@@ -425,16 +481,16 @@ export default function Settings({ onLogout }) {
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Response Filtering Mode</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Response Filtering Mode</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={detectionMode} onChange={(e) => setDetectionMode(e.target.value)}>
                       <option value="Blocking">Strict Block & Drop (403 Forbidden)</option>
                       <option value="Detection">Log Analysis Only (Bypass drops)</option>
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', justifyContent: 'space-between' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>
                       <span>Global Paranoia Setting</span>
-                      <strong style={{ color: '#3b82f6', fontSize: '14px' }}>PL{paranoiaLevel}</strong>
+                      <strong style={{ color: 'var(--sev-low)', fontSize: '14px' }}>PL{paranoiaLevel}</strong>
                     </label>
                     <input
                       type="range"
@@ -442,16 +498,16 @@ export default function Settings({ onLogout }) {
                       max="4"
                       value={paranoiaLevel}
                       onChange={(e) => setParanoiaLevel(parseInt(e.target.value))}
-                      style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', outline: 'none', appearance: 'none', accentColor: '#3b82f6', marginTop: '8px' }}
+                      style={{ width: '100%', height: '8px', background: 'var(--border-color)', borderRadius: '4px', outline: 'none', appearance: 'none', accentColor: 'var(--sev-low)', marginTop: '8px' }}
                     />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#71717a', marginTop: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
                       <span>PL1: Standard</span>
                       <span>PL2</span>
                       <span>PL3</span>
                       <span>PL4: Paranoid</span>
                     </div>
                   </div>
-                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
                       {loadingAction ? 'Updating Ruleset...' : 'Update WAF Policies'}
                     </button>
@@ -463,16 +519,16 @@ export default function Settings({ onLogout }) {
             {activeSettingTab === 'logs' && (
               <motion.div key="logs" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
                 <div className="settings-section-title">
-                  <Database size={20} color="#3b82f6" />
+                  <Database size={20} color="var(--sev-low)" />
                   Log Pipeline Configuration
                 </div>
                 <div className="settings-section-subtitle">Configure SecAuditEngine and log retention policies.</div>
 
                 <form onSubmit={handleSaveLogs} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: '#e4e4e7' }}>SecAuditEngine Logging</span>
-                      <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Record details of flagged transactions</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>SecAuditEngine Logging</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Record details of flagged transactions</span>
                     </div>
                     <div className={`toggle-switch ${auditEnabled ? 'active' : ''}`} onClick={() => setAuditEnabled(!auditEnabled)}>
                       <div className="toggle-knob"></div>
@@ -480,17 +536,17 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Audit Log Structure Formats</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Audit Log Structure Formats</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={logFormat} onChange={(e) => setLogFormat(e.target.value)}>
                       <option value="JSON">Structured JSON (RFC 8259 Standard)</option>
                       <option value="Native">CyberSentinel Engine Native Audit Structure</option>
                     </select>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: '#e4e4e7' }}>Concurrent Multi-Threading</span>
-                      <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Non-blocking log processing pipeline</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Concurrent Multi-Threading</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Non-blocking log processing pipeline</span>
                     </div>
                     <div className={`toggle-switch ${concurrentLogging ? 'active' : ''}`} onClick={() => setConcurrentLogging(!concurrentLogging)}>
                       <div className="toggle-knob"></div>
@@ -498,7 +554,7 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Log Retention Period</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Log Retention Period</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={retention} onChange={(e) => setRetention(e.target.value)}>
                       <option value="7 Days">7 Days</option>
                       <option value="30 Days">30 Days</option>
@@ -508,7 +564,7 @@ export default function Settings({ onLogout }) {
                     </select>
                   </div>
 
-                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
                       Update Logging Configuration
                     </button>
@@ -520,16 +576,16 @@ export default function Settings({ onLogout }) {
             {activeSettingTab === 'hardening' && (
               <motion.div key="hardening" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
                 <div className="settings-section-title">
-                  <Server size={20} color="#3b82f6" />
+                  <Server size={20} color="var(--sev-low)" />
                   Infrastructure Hardening
                 </div>
                 <div className="settings-section-subtitle">Manage HSTS, server cloaking, and IP restrictions.</div>
 
                 <form onSubmit={handleSaveHardening} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: '#e4e4e7' }}>Strict HTTPS (HSTS)</span>
-                      <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Enforce Strict-Transport-Security header</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Strict HTTPS (HSTS)</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Enforce Strict-Transport-Security header</span>
                     </div>
                     <div className={`toggle-switch ${hstsEnabled ? 'active' : ''}`} onClick={() => setHstsEnabled(!hstsEnabled)}>
                       <div className="toggle-knob"></div>
@@ -540,7 +596,7 @@ export default function Settings({ onLogout }) {
                     {hstsEnabled && (
                       <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '10px' }}>
-                          <label style={{ fontSize: '13px', color: '#a1a1aa' }}>HSTS Max Age (Seconds)</label>
+                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>HSTS Max Age (Seconds)</label>
                           <input
                             type="number"
                             className="settings-input"
@@ -554,10 +610,10 @@ export default function Settings({ onLogout }) {
                     )}
                   </AnimatePresence>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: '#e4e4e7' }}>Server Cloaking</span>
-                      <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Scrub NGINX tokens & Express header disclosures</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Server Cloaking</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Scrub NGINX tokens & Express header disclosures</span>
                     </div>
                     <div className={`toggle-switch ${serverCloaking ? 'active' : ''}`} onClick={() => setServerCloaking(!serverCloaking)}>
                       <div className="toggle-knob"></div>
@@ -565,7 +621,7 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Global IP Blacklist (Comma separated)</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Global IP Blacklist (Comma separated)</label>
                     <textarea
                       className="settings-input"
                       style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
@@ -576,7 +632,7 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Global IP Whitelist (Comma separated)</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Global IP Whitelist (Comma separated)</label>
                     <textarea
                       className="settings-input"
                       style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
@@ -586,9 +642,97 @@ export default function Settings({ onLogout }) {
                     />
                   </div>
 
-                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
                       Apply Infrastructure Changes
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            )}
+
+            {activeSettingTab === 'positive-security' && (
+              <motion.div key="positive-security" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
+                <div className="settings-section-title">
+                  <CheckSquare size={20} color="var(--sev-low)" />
+                  Positive Security
+                </div>
+                <div className="settings-section-subtitle">
+                  Allowlist HTTP methods, Content-Types, and deny requests for restricted file extensions.
+                </div>
+
+                <div style={{
+                  display: 'flex', gap: '10px', background: 'var(--sev-low-bg)',
+                  border: '1px solid var(--sev-low-border)', borderRadius: '10px',
+                  padding: '14px 16px', marginBottom: '20px', maxWidth: '600px',
+                }}>
+                  <AlertTriangle size={16} color="var(--sev-low)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                    This policy applies only to traffic for your <strong style={{ color: 'var(--text-primary)' }}>protected apps</strong> —
+                    it never affects this dashboard's own API. Disabled by default: turning it on with an
+                    incomplete allowlist can immediately block legitimate traffic to every protected app, so
+                    review the lists below carefully before enabling.
+                  </span>
+                </div>
+
+                <form onSubmit={handleSavePositiveSecurity} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Positive Security</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no rules are active until enabled</span>
+                    </div>
+                    <div className={`toggle-switch ${posSecEnabled ? 'active' : ''}`} onClick={() => setPosSecEnabled(!posSecEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Allowed HTTP Methods (Comma separated)</label>
+                    <textarea
+                      className="settings-input"
+                      style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
+                      value={posSecMethods}
+                      onChange={(e) => setPosSecMethods(e.target.value)}
+                      placeholder="GET, POST, HEAD"
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Requests using any other method get a 405. Leave empty to skip this check entirely.
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Allowed Content-Types (Comma separated)</label>
+                    <textarea
+                      className="settings-input"
+                      style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
+                      value={posSecContentTypes}
+                      onChange={(e) => setPosSecContentTypes(e.target.value)}
+                      placeholder="application/json, application/x-www-form-urlencoded, multipart/form-data"
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Only checked on POST/PUT/PATCH requests. Requests with any other Content-Type get a 415.
+                      Leave empty to skip this check entirely.
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Restricted File Extensions (Comma separated)</label>
+                    <textarea
+                      className="settings-input"
+                      style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
+                      value={posSecExtensions}
+                      onChange={(e) => setPosSecExtensions(e.target.value)}
+                      placeholder=".bak, .config, .env, .log, .sql, .ini"
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Any request whose path ends in one of these gets a 403 (case-insensitive). Leave empty
+                      to skip this check entirely.
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      {loadingAction ? 'Applying to NGINX...' : 'Apply Positive Security Policy'}
                     </button>
                   </div>
                 </form>
@@ -598,16 +742,16 @@ export default function Settings({ onLogout }) {
             {activeSettingTab === 'defacement' && (
               <motion.div key="defacement" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
                 <div className="settings-section-title">
-                  <ShieldAlert size={20} color="#ef4444" />
+                  <ShieldAlert size={20} color="var(--danger-color)" />
                   Anti-Defacement Protection
                 </div>
                 <div className="settings-section-subtitle">Real-time integrity monitoring for critical assets.</div>
 
                 <form onSubmit={handleSaveDefacement} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: '#e4e4e7' }}>Real-time Integrity Monitor</span>
-                      <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Revert unauthorized content modifications instantly</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Real-time Integrity Monitor</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Revert unauthorized content modifications instantly</span>
                     </div>
                     <div className={`toggle-switch ${defacementEnabled ? 'active' : ''}`} onClick={() => setDefacementEnabled(!defacementEnabled)}>
                       <div className="toggle-knob"></div>
@@ -615,7 +759,7 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Audit Scan Interval (Seconds)</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Audit Scan Interval (Seconds)</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={checkInterval} onChange={(e) => setCheckInterval(parseInt(e.target.value))}>
                       <option value="2">2 Seconds (High sensitivity)</option>
                       <option value="5">5 Seconds (Recommended)</option>
@@ -625,7 +769,7 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Monitored Asset Filepaths (Comma separated)</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Monitored Asset Filepaths (Comma separated)</label>
                     <textarea
                       className="settings-input"
                       style={{ width: '100%', minHeight: '100px', resize: 'vertical' }}
@@ -634,12 +778,12 @@ export default function Settings({ onLogout }) {
                       placeholder="/var/www/html/index.html"
                       required
                     />
-                    <span style={{ fontSize: '11px', color: '#71717a', marginTop: '4px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                       System background service prefetches and locks these files.
                     </span>
                   </div>
 
-                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px', background: 'var(--danger-color)' }}>
                       {loadingAction ? 'Applying...' : 'Apply Defacement Protection'}
                     </button>
@@ -651,7 +795,7 @@ export default function Settings({ onLogout }) {
             {activeSettingTab === 'security' && (
               <motion.div key="security" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
                 <div className="settings-section-title">
-                  <Lock size={20} color="#3b82f6" />
+                  <Lock size={20} color="var(--sev-low)" />
                   Admin Security & Danger Zone
                 </div>
                 <div className="settings-section-subtitle">Manage portal access credentials and system overrides.</div>
@@ -660,22 +804,22 @@ export default function Settings({ onLogout }) {
 
                   {/* Password Form */}
                   <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div style={{ fontSize: '15px', fontWeight: 600, color: '#f4f4f5', marginBottom: '8px' }}>Portal Authentication</div>
+                    <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>Portal Authentication</div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Current Admin Password</label>
+                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Current Admin Password</label>
                       <input type="password" placeholder="••••••••" className="settings-input" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label style={{ fontSize: '13px', color: '#a1a1aa' }}>New Security Password</label>
+                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>New Security Password</label>
                       <input type="password" placeholder="••••••••" className="settings-input" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Confirm New Password</label>
+                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Confirm New Password</label>
                       <input type="password" placeholder="••••••••" className="settings-input" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-                      <label style={{ fontSize: '13px', color: '#a1a1aa' }}>Portal Session Timeout</label>
+                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Portal Session Timeout</label>
                       <select className="filter-select" style={{ width: '100%', padding: '12px' }} value={sessionTimeout} onChange={(e) => setSessionTimeout(e.target.value)}>
                         <option value="15m">15 Minutes</option>
                         <option value="30m">30 Minutes</option>
@@ -689,52 +833,52 @@ export default function Settings({ onLogout }) {
                       <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px' }}>
                         Update Credentials
                       </button>
-                      <button type="button" onClick={onLogout} className="action-btn-inspect" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.2)', padding: '12px 24px', fontSize: '13px' }}>
+                      <button type="button" onClick={onLogout} className="action-btn-inspect" style={{ background: 'var(--danger-bg)', color: 'var(--danger-color)', borderColor: 'var(--danger-border)', padding: '12px 24px', fontSize: '13px' }}>
                         Terminate Session
                       </button>
                     </div>
                   </form>
 
                   {/* Danger Zone */}
-                  <div style={{ background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.05) 0%, rgba(0, 0, 0, 0) 100%)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '16px', padding: '24px' }}>
-                    <div style={{ fontSize: '15px', fontWeight: 600, color: '#fca5a5', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <AlertTriangle size={18} color="#ef4444" />
+                  <div style={{ background: 'linear-gradient(135deg, var(--danger-bg) 0%, rgba(0, 0, 0, 0) 100%)', border: '1px solid var(--danger-border)', borderRadius: '16px', padding: '24px' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--danger-color)', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertTriangle size={18} color="var(--danger-color)" />
                       System Overrides
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'rgba(239,68,68,0.04)', borderRadius: '10px', border: '1px solid rgba(239,68,68,0.1)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'var(--danger-bg)', borderRadius: '10px', border: '1px solid var(--danger-bg)' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#fca5a5' }}>Restart CyberSentinel Engine WAF Engine</span>
-                          <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Force service instance container reload</span>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>Restart CyberSentinel Engine WAF Engine</span>
+                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Force service instance container reload</span>
                         </div>
-                        <button type="button" onClick={() => setDangerModal('restart')} className="action-btn-inspect" style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', borderColor: 'rgba(239,68,68,0.3)', padding: '8px 16px' }}>
+                        <button type="button" onClick={() => setDangerModal('restart')} className="action-btn-inspect" style={{ background: 'var(--danger-border)', color: 'var(--danger-color)', borderColor: 'var(--danger-border)', padding: '8px 16px' }}>
                           Restart Engine
                         </button>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'rgba(239,68,68,0.04)', borderRadius: '10px', border: '1px solid rgba(239,68,68,0.1)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'var(--danger-bg)', borderRadius: '10px', border: '1px solid var(--danger-bg)' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#fca5a5' }}>Reload System NGINX Proxy</span>
-                          <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Rebuild active NGINX process configurations</span>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>Reload System NGINX Proxy</span>
+                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rebuild active NGINX process configurations</span>
                         </div>
-                        <button type="button" onClick={() => setDangerModal('nginx')} className="action-btn-inspect" style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', borderColor: 'rgba(239,68,68,0.3)', padding: '8px 16px' }}>
+                        <button type="button" onClick={() => setDangerModal('nginx')} className="action-btn-inspect" style={{ background: 'var(--danger-border)', color: 'var(--danger-color)', borderColor: 'var(--danger-border)', padding: '8px 16px' }}>
                           Reload NGINX
                         </button>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'rgba(239,68,68,0.04)', borderRadius: '10px', border: '1px solid rgba(239,68,68,0.1)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'var(--danger-bg)', borderRadius: '10px', border: '1px solid var(--danger-bg)' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#fca5a5' }}>Purge Local UI Cache</span>
-                          <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Invalidate local storage metrics data cache</span>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>Purge Local UI Cache</span>
+                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Invalidate local storage metrics data cache</span>
                         </div>
-                        <button type="button" onClick={() => setDangerModal('cache')} className="action-btn-inspect" style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', borderColor: 'rgba(239,68,68,0.3)', padding: '8px 16px' }}>
+                        <button type="button" onClick={() => setDangerModal('cache')} className="action-btn-inspect" style={{ background: 'var(--danger-border)', color: 'var(--danger-color)', borderColor: 'var(--danger-border)', padding: '8px 16px' }}>
                           Purge Cache
                         </button>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'rgba(239,68,68,0.04)', borderRadius: '10px', border: '1px solid rgba(239,68,68,0.1)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'var(--danger-bg)', borderRadius: '10px', border: '1px solid var(--danger-bg)' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#fca5a5' }}>Sync Signatures (OWASP CRS)</span>
-                          <span style={{ fontSize: '12px', color: '#a1a1aa' }}>Download and synchronize latest CRS rules</span>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>Reload Signatures (OWASP CRS)</span>
+                          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Reload ModSecurity with the CRS rules currently on disk (does not fetch new signatures)</span>
                         </div>
-                        <button type="button" onClick={() => setDangerModal('sync')} className="action-btn-inspect" style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5', borderColor: 'rgba(239,68,68,0.3)', padding: '8px 16px' }}>
+                        <button type="button" onClick={() => setDangerModal('sync')} className="action-btn-inspect" style={{ background: 'var(--danger-border)', color: 'var(--danger-color)', borderColor: 'var(--danger-border)', padding: '8px 16px' }}>
                           Sync Signatures
                         </button>
                       </div>

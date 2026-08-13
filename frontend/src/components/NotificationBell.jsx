@@ -1,8 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, Wifi, WifiOff } from 'lucide-react';
+import { Bell, Wifi, WifiOff, X } from 'lucide-react';
 import { getAlertHistory, acknowledgeAlert, getMyNotificationPreferences, getLiveStreamWsUrl } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
+import Button from './Button';
+import { useToast } from '../hooks/useToast';
+import Toast from './Toast';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 // How long we'll go without a live WS connection before quietly falling
 // back to polling, so notifications keep working even if a proxy in front
@@ -15,6 +19,8 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const { toast, showToast } = useToast();
+  useEscapeToClose(() => setSelectedAlert(null), !!selectedAlert);
   const [wsConnected, setWsConnected] = useState(false);
   const dropdownRef = useRef(null);
   const prefsRef = useRef({ muted_severities: [], muted_event_types: [] });
@@ -122,7 +128,7 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
       }
       fetchUnread();
     } catch (err) {
-      alert("Failed to acknowledge notifications: " + err.message);
+      showToast("Failed to acknowledge notifications: " + err.message, "error");
     }
   };
 
@@ -132,7 +138,7 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
       await acknowledgeAlert(id);
       fetchUnread();
     } catch (err) {
-      alert("Failed to acknowledge alert: " + err.message);
+      showToast("Failed to acknowledge alert: " + err.message, "error");
     }
   };
 
@@ -190,12 +196,9 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
                 </span>
               </div>
               {unreadCount > 0 && (
-                <button 
-                  onClick={handleAckAll}
-                  style={{ background: 'none', border: 'none', color: 'var(--accent-color)', fontSize: '12px', cursor: 'pointer', fontWeight: 600 }}
-                >
+                <Button variant="ghost" size="sm" onClick={handleAckAll} style={{ color: 'var(--accent-color)' }}>
                   Ack All
-                </button>
+                </Button>
               )}
             </div>
 
@@ -284,7 +287,7 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
           <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '560px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Alert details: {selectedAlert.rule_name}</h3>
-              <button style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '18px', cursor: 'pointer' }} onClick={() => setSelectedAlert(null)}>X</button>
+              <Button variant="ghost" size="sm" icon={X} onClick={() => setSelectedAlert(null)} aria-label="Close alert details" />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px', color: 'var(--text-primary)' }}>
               <p><strong>Trigger message:</strong> {selectedAlert.message}</p>
@@ -297,6 +300,7 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
           </div>
         </div>
       )}
+      <Toast toast={toast} />
     </div>
   );
 }

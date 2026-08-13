@@ -71,12 +71,20 @@ async def login_for_access_token(
     # Get client IP (handle reverse proxy headers)
     client_ip = get_client_ip(request)
 
-    # 1. Rate limit check
+    # 1. Rate limit check — both per-IP AND per-username. Per-IP alone lets a
+    # distributed attacker (many source IPs) brute-force one specific
+    # account at unlimited aggregate rate, since no single IP ever crosses
+    # its own threshold. The username key is normalized/prefixed so it can
+    # never collide with a real IP address in the same Redis/fallback
+    # keyspace.
+    username_key = f"user:{username.strip().lower()}"
     is_allowed, rate_info = rate_limiter.check_rate_limit(client_ip)
+    if is_allowed:
+        is_allowed, rate_info = rate_limiter.check_rate_limit(username_key)
 
     if not is_allowed:
         logger.warning(
-            f"Rate limited login attempt from {client_ip} - "
+            f"Rate limited login attempt for user='{username}' from {client_ip} - "
             f"reason: {rate_info.get('block_reason', 'Unknown')}"
         )
 
@@ -130,6 +138,7 @@ async def login_for_access_token(
 
     # 3. Password verified.
     rate_limiter.record_success(client_ip)
+    rate_limiter.record_success(username_key)
 
     if user["mfa_enabled"]:
         # Don't issue a full session yet — only a short-lived pending token

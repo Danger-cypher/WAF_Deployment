@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, Activity } from 'lucide-react';
 import {
   getCurrentUser, logoutUser, markFalsePositive, updateFalsePositiveStatus, createExclusion,
 } from './services/api';
@@ -8,26 +8,43 @@ import {
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import NotificationBell from './components/NotificationBell';
-import AlertHistoryModal from './components/AlertHistoryModal';
-import SetupWizard from './components/SetupWizard';
-import ProtectedAppWizard from './components/ProtectedAppWizard';
-import SecurityReports from './components/SecurityReports';
-import UserManagement from './components/UserManagement';
-import Profile from './components/Profile';
-
-import ThreatAnalytics from './pages/Overview';
-import ProtectionSection from './pages/ProtectionSection';
-import LiveLogs from './pages/Events';
-import MLAnalytics from './pages/MLEngine';
-import FalsePositives, { FlagFpModal } from './pages/FalsePositives';
-import Exceptions, { CreateExceptionModal } from './pages/Exceptions';
-import Rules from './pages/Rules';
-import ApiProtection from './pages/ApiProtection';
-import AlertsIntegrations from './pages/AlertsIntegrations';
-import CustomRulesEditor from './pages/VirtualPatching';
-import Settings from './pages/Settings';
+import AccountMenu from './components/AccountMenu';
 
 import './index.css';
+
+// Code-split everything except core chrome (Login/Sidebar/NotificationBell/
+// AccountMenu render on every authenticated screen) and the tabs/modals
+// below, which only cost a network round-trip once the user actually
+// reaches them instead of bloating the initial bundle.
+const AlertHistoryModal = lazy(() => import('./components/AlertHistoryModal'));
+const SetupWizard = lazy(() => import('./components/SetupWizard'));
+const ProtectedAppWizard = lazy(() => import('./components/ProtectedAppWizard'));
+const SecurityReports = lazy(() => import('./components/SecurityReports'));
+const UserManagement = lazy(() => import('./components/UserManagement'));
+const Profile = lazy(() => import('./components/Profile'));
+
+const ThreatAnalytics = lazy(() => import('./pages/Overview'));
+const ProtectionSection = lazy(() => import('./pages/ProtectionSection'));
+const LiveLogs = lazy(() => import('./pages/Events'));
+const MLAnalytics = lazy(() => import('./pages/MLEngine'));
+const FalsePositives = lazy(() => import('./pages/FalsePositives'));
+const FlagFpModal = lazy(() => import('./pages/FalsePositives').then((m) => ({ default: m.FlagFpModal })));
+const Exceptions = lazy(() => import('./pages/Exceptions'));
+const CreateExceptionModal = lazy(() => import('./pages/Exceptions').then((m) => ({ default: m.CreateExceptionModal })));
+const Rules = lazy(() => import('./pages/Rules'));
+const ApiProtection = lazy(() => import('./pages/ApiProtection'));
+const AlertsIntegrations = lazy(() => import('./pages/AlertsIntegrations'));
+const CustomRulesEditor = lazy(() => import('./pages/VirtualPatching'));
+const Settings = lazy(() => import('./pages/Settings'));
+
+function TabLoadingFallback() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '300px', color: 'var(--text-secondary)', gap: '12px' }}>
+      <Activity className="animate-spin" size={24} color="var(--accent-color)" />
+      <span>Loading...</span>
+    </div>
+  );
+}
 
 const TAB_ROUTES = {
   overview:         '/dashboard',
@@ -210,13 +227,15 @@ function App() {
   // Show setup wizard for first-time users
   if (showSetupWizard) {
     return (
-      <SetupWizard 
-        onComplete={(setupData) => {
-          setShowSetupWizard(false);
-          setSetupComplete(true);
-          console.log('Setup completed with data:', setupData);
-        }}
-      />
+      <Suspense fallback={<TabLoadingFallback />}>
+        <SetupWizard
+          onComplete={(setupData) => {
+            setShowSetupWizard(false);
+            setSetupComplete(true);
+            console.log('Setup completed with data:', setupData);
+          }}
+        />
+      </Suspense>
     );
   }
 
@@ -256,20 +275,12 @@ function App() {
               onOpenHistory={() => setIsAlertHistoryModalOpen(true)}
               onOpenSettings={() => setActiveTab('integrations')}
             />
-            <div
-              className="user-profile-badge"
-              onClick={() => setShowProfile(true)}
-              title="View profile"
-              style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', padding: '5px 12px', borderRadius: '20px', cursor: 'pointer' }}
-            >
-              <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>@{username}</span>
-              <span style={{
-                fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '10px', textTransform: 'uppercase',
-                background: userRole === 'admin' ? 'rgba(244,63,94,0.15)' : 'rgba(99,102,241,0.15)',
-                color: userRole === 'admin' ? '#fca5a5' : '#a5b4fc',
-                border: userRole === 'admin' ? '1px solid rgba(244,63,94,0.3)' : '1px solid rgba(99,102,241,0.3)'
-              }}>{userRole}</span>
-            </div>
+            <AccountMenu
+              username={username}
+              userRole={userRole}
+              onOpenProfile={() => setShowProfile(true)}
+              onLogout={handleLogout}
+            />
           </div>
         </div>
         {/* Scrollable page content area */}
@@ -282,6 +293,7 @@ function App() {
           exit={{ opacity: 0, x: -15 }}
           transition={{ duration: 0.2, ease: 'easeOut' }}
         >
+        <Suspense fallback={<TabLoadingFallback />}>
           {/* Overview Tab */}
           {activeTab === 'overview' && <ThreatAnalytics key="overview" />}
 
@@ -334,51 +346,70 @@ function App() {
           {activeTab === 'settings' && userRole === 'admin' && (
             <Settings key="settings" onLogout={handleLogout} />
           )}
+        </Suspense>
         </motion.div>
 
-        <AlertHistoryModal
-          isOpen={isAlertHistoryModalOpen}
-          onClose={() => setIsAlertHistoryModalOpen(false)}
-          userRole={userRole}
-        />
+        {isAlertHistoryModalOpen && (
+          <Suspense fallback={null}>
+            <AlertHistoryModal
+              isOpen={isAlertHistoryModalOpen}
+              onClose={() => setIsAlertHistoryModalOpen(false)}
+              userRole={userRole}
+            />
+          </Suspense>
+        )}
 
-        <FlagFpModal
-          isOpen={isFpModalOpen}
-          log={logToFlag}
-          onClose={() => {
-            setIsFpModalOpen(false);
-            setLogToFlag(null);
-          }}
-          onSubmit={handleSaveFalsePositive}
-        />
+        {isFpModalOpen && (
+          <Suspense fallback={null}>
+            <FlagFpModal
+              isOpen={isFpModalOpen}
+              log={logToFlag}
+              onClose={() => {
+                setIsFpModalOpen(false);
+                setLogToFlag(null);
+              }}
+              onSubmit={handleSaveFalsePositive}
+            />
+          </Suspense>
+        )}
 
-        <CreateExceptionModal
-          isOpen={isExceptionModalOpen}
-          log={logToExclude}
-          onClose={() => {
-            setIsExceptionModalOpen(false);
-            setLogToExclude(null);
-          }}
-          onSubmit={handleSaveException}
-        />
+        {isExceptionModalOpen && (
+          <Suspense fallback={null}>
+            <CreateExceptionModal
+              isOpen={isExceptionModalOpen}
+              log={logToExclude}
+              onClose={() => {
+                setIsExceptionModalOpen(false);
+                setLogToExclude(null);
+              }}
+              onSubmit={handleSaveException}
+            />
+          </Suspense>
+        )}
 
-        <ProtectedAppWizard
-          isOpen={showAppWizard}
-          onClose={() => {
-            setShowAppWizard(false);
-            setEditingApp(null);
-          }}
-          existingApp={editingApp}
-          onComplete={() => {
-            setShowAppWizard(false);
-            setEditingApp(null);
-            setAppsRefreshKey(prev => prev + 1);
-          }}
-        />
+        {showAppWizard && (
+          <Suspense fallback={null}>
+            <ProtectedAppWizard
+              isOpen={showAppWizard}
+              onClose={() => {
+                setShowAppWizard(false);
+                setEditingApp(null);
+              }}
+              existingApp={editingApp}
+              onComplete={() => {
+                setShowAppWizard(false);
+                setEditingApp(null);
+                setAppsRefreshKey(prev => prev + 1);
+              }}
+            />
+          </Suspense>
+        )}
 
         <AnimatePresence>
           {showProfile && (
-            <Profile onClose={() => setShowProfile(false)} />
+            <Suspense fallback={null}>
+              <Profile onClose={() => setShowProfile(false)} />
+            </Suspense>
           )}
         </AnimatePresence>
 

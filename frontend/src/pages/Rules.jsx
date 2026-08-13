@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity, ShieldAlert, ShieldAlert as AlertIcon, AlertTriangle as AlertTriangleIcon,
-  ChevronLeft, ChevronRight, Clock, Code, Database, ShieldCheck, Search, X,
+  Clock, Code, Database, ShieldCheck, Search, X,
 } from 'lucide-react';
 import {
   getRules, enableRule, disableRule, setParanoiaLevel, getRulesStats, getRulesHistory,
@@ -11,6 +11,12 @@ import {
 } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import { HelpText } from '../components/Tooltip';
+import { useToast } from '../hooks/useToast';
+import Toast from '../components/Toast';
+import { useConfirm } from '../hooks/useConfirm';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import Pagination from '../components/Pagination';
+import { FetchErrorState } from '../components/EmptyStates';
 
 const CATEGORY_MAP = {
   "901": "Initialization",
@@ -54,6 +60,7 @@ export default function Rules({ userRole }) {
   });
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const size = 10;
@@ -74,13 +81,14 @@ export default function Rules({ userRole }) {
   const [disableReason, setDisableReason] = useState('');
   const [disableError, setDisableError] = useState('');
 
-  // Notification states
-  const [toast, setToast] = useState(null);
+  useEscapeToClose(() => {
+    if (ruleToDisable) setRuleToDisable(null);
+    else if (selectedRule) setSelectedRule(null);
+  }, !!(ruleToDisable || selectedRule));
 
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
+  // Notification states
+  const { toast, showToast } = useToast();
+  const confirm = useConfirm();
 
   const fetchRulesData = async () => {
     setLoading(true);
@@ -101,9 +109,15 @@ export default function Rules({ userRole }) {
       setTotal(rulesRes.total);
       setStats(statsRes);
       setHistory(historyRes);
+      setFetchError('');
     } catch (error) {
       console.error("Failed to load WAF rules data:", error);
+      // A toast that fades leaves the page showing stale/empty rule data
+      // with no lasting signal that the load actually failed — keep a
+      // persistent error state too so the rules list can't be mistaken for
+      // "this WAF genuinely has zero rules."
       showToast("Failed to fetch WAF rules from backend.", "error");
+      setFetchError(error.message || 'The dashboard could not reach the backend API.');
     } finally {
       setLoading(false);
     }
@@ -198,7 +212,12 @@ export default function Rules({ userRole }) {
 
   // Restore defaults
   const handleRestoreDefaults = async () => {
-    if (!window.confirm("Are you sure you want to restore all OWASP CRS rules and paranoia levels to WAF system defaults?")) {
+    if (!(await confirm({
+      title: 'Restore WAF defaults',
+      message: 'Are you sure you want to restore all OWASP CRS rules and paranoia levels to WAF system defaults?',
+      confirmLabel: 'Restore',
+      danger: true,
+    }))) {
       return;
     }
     setLoading(true);
@@ -228,35 +247,7 @@ export default function Rules({ userRole }) {
   return (
     <div className="rules-container">
       {/* Toast Alert overlay */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className={`toast-alert ${toast.type === 'error' ? 'error' : 'success'}`}
-            style={{
-              position: 'fixed',
-              top: '24px',
-              right: '24px',
-              zIndex: 9999,
-              padding: '12px 24px',
-              borderRadius: '8px',
-              boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              background: toast.type === 'error' ? 'rgba(239, 68, 68, 0.95)' : 'rgba(16, 185, 129, 0.95)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              color: '#fff',
-              fontWeight: 500
-            }}
-          >
-            <ShieldAlert size={18} />
-            <span>{toast.message}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Toast toast={toast} />
 
       {/* Top Header Card containing metrics summary and paranoia control */}
       <motion.div
@@ -267,14 +258,14 @@ export default function Rules({ userRole }) {
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
           <div className="card-title" style={{ margin: 0 }}>
-            <ShieldAlert size={20} color="#ef4444" />
+            <ShieldAlert size={20} color="var(--danger-color)" />
             WAF Rule Tuning & Administration
           </div>
           {userRole === 'admin' && (
             <button
               onClick={handleRestoreDefaults}
               className="action-btn-inspect"
-              style={{ borderColor: 'rgba(168, 85, 247, 0.3)', color: '#c084fc', background: 'rgba(168, 85, 247, 0.05)' }}
+              style={{ borderColor: 'rgba(168, 85, 247, 0.3)', color: 'var(--ml-color)', background: 'rgba(168, 85, 247, 0.05)' }}
             >
               Reset Overrides
             </button>
@@ -282,45 +273,45 @@ export default function Rules({ userRole }) {
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-          <div className="metric-box" style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '8px', padding: '12px 16px' }}>
-            <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Total CRS Rules</div>
-            <div style={{ fontSize: '24px', fontWeight: 600, color: '#f4f4f5', marginTop: '4px' }}>
+          <div className="metric-box" style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '12px 16px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Total CRS Rules</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '4px' }}>
               {stats.total_rules || rules.length}
             </div>
           </div>
           <div className="metric-box" style={{ background: 'rgba(16, 185, 129, 0.02)', border: '1px solid rgba(16, 185, 129, 0.1)', borderRadius: '8px', padding: '12px 16px' }}>
-            <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Active Guards</div>
-            <div style={{ fontSize: '24px', fontWeight: 600, color: '#10b981', marginTop: '4px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Active Guards</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--success-color)', marginTop: '4px' }}>
               {stats.enabled_rules}
             </div>
           </div>
-          <div className="metric-box" style={{ background: 'rgba(239, 68, 68, 0.02)', border: '1px solid rgba(239, 68, 68, 0.1)', borderRadius: '8px', padding: '12px 16px' }}>
-            <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Disabled Tuning Overrides</div>
-            <div style={{ fontSize: '24px', fontWeight: 600, color: '#ef4444', marginTop: '4px' }}>
+          <div className="metric-box" style={{ background: 'var(--danger-bg)', border: '1px solid var(--danger-bg)', borderRadius: '8px', padding: '12px 16px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Disabled Tuning Overrides</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--danger-color)', marginTop: '4px' }}>
               {stats.disabled_rules}
             </div>
           </div>
-          <div className="metric-box" style={{ background: 'rgba(59, 130, 246, 0.02)', border: '1px solid rgba(59, 130, 246, 0.1)', borderRadius: '8px', padding: '12px 16px' }}>
-            <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Paranoia Level</div>
-            <div style={{ fontSize: '24px', fontWeight: 600, color: '#3b82f6', marginTop: '4px' }}>
+          <div className="metric-box" style={{ background: 'var(--sev-low-bg)', border: '1px solid var(--sev-low-bg)', borderRadius: '8px', padding: '12px 16px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Paranoia Level</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--sev-low)', marginTop: '4px' }}>
               PL {stats.paranoia_level}
             </div>
           </div>
         </div>
 
         {/* Paranoia Selector Slider */}
-        <div style={{ background: 'rgba(255,255,255,0.01)', padding: '16px 20px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.04)' }}>
+        <div style={{ background: 'var(--surface-subtle)', padding: '16px 20px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5' }}>OWASP CRS Paranoia Level Setting</div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>OWASP CRS Paranoia Level Setting</div>
               <HelpText>
                 Paranoia Level controls how strict the WAF rules are. Level 1 (default) blocks common attacks with minimal false positives. Higher levels add more aggressive rules but may block legitimate traffic. Start with PL1 and increase only if needed.
               </HelpText>
             </div>
-            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: '2px' }}>Higher paranoia levels add strict rulesets to block advanced attacks but increase risk of false positives.</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>Higher paranoia levels add strict rulesets to block advanced attacks but increase risk of false positives.</div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '11px', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
+            <span style={{ fontSize: '11px', background: 'var(--sev-low-bg)', color: 'var(--sev-low)', border: '1px solid var(--sev-low-border)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
               ACTIVE: PL{stats.paranoia_level}
             </span>
           </div>
@@ -340,8 +331,8 @@ export default function Rules({ userRole }) {
                 disabled={userRole !== 'admin'}
                 title={userRole !== 'admin' ? "Only administrators can change paranoia level" : ""}
               >
-                <div style={{ fontWeight: 600, fontSize: '13px', color: stats.paranoia_level === item.level ? '#3b82f6' : '#e4e4e7' }}>{item.label}</div>
-                <div style={{ fontSize: '10px', color: '#a1a1aa', marginTop: '6px', lineHeight: '1.4' }}>{item.desc}</div>
+                <div style={{ fontWeight: 600, fontSize: '13px', color: stats.paranoia_level === item.level ? 'var(--sev-low)' : 'var(--text-primary)' }}>{item.label}</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: '1.4' }}>{item.desc}</div>
               </button>
             ))}
           </div>
@@ -359,7 +350,7 @@ export default function Rules({ userRole }) {
           animate={{ opacity: 1 }}
         >
           <div className="card-title" style={{ marginBottom: '20px' }}>
-            <Database size={18} color="#3b82f6" />
+            <Database size={18} color="var(--sev-low)" />
             OWASP Core Ruleset Registry
           </div>
 
@@ -420,9 +411,11 @@ export default function Rules({ userRole }) {
             <div style={{ display: 'flex', justifyContent: 'center', padding: '60px 0' }}>
               <div className="spinner"></div>
             </div>
+          ) : fetchError && rules.length === 0 ? (
+            <FetchErrorState message={fetchError} onRetry={fetchRulesData} />
           ) : rules.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 24px', color: '#a1a1aa' }}>
-              <ShieldCheck size={48} style={{ margin: '0 auto 12px', opacity: 0.3, color: '#10b981' }} />
+            <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--text-secondary)' }}>
+              <ShieldCheck size={48} style={{ margin: '0 auto 12px', opacity: 0.3, color: 'var(--success-color)' }} />
               <h3>No Rules Found</h3>
               <p style={{ fontSize: '13px', marginTop: '6px' }}>Adjust your keyword search or active filter dropdown parameters.</p>
             </div>
@@ -435,19 +428,19 @@ export default function Rules({ userRole }) {
                 >
                   <div className="rule-card-info">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '11px', fontFamily: 'monospace', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', padding: '1px 6px', borderRadius: '4px', fontWeight: 600, color: '#f4f4f5' }}>
+                      <span style={{ fontSize: '11px', fontFamily: 'monospace', background: 'var(--border-color)', border: '1px solid var(--surface-strong)', padding: '1px 6px', borderRadius: '4px', fontWeight: 600, color: 'var(--text-primary)' }}>
                         {rule.id}
                       </span>
-                      <span style={{ fontWeight: 600, fontSize: '14px', color: rule.enabled ? '#e4e4e7' : '#a1a1aa' }}>{rule.name}</span>
+                      <span style={{ fontWeight: 600, fontSize: '14px', color: rule.enabled ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{rule.name}</span>
 
                       {rule.paranoia_level > stats.paranoia_level && (
-                        <span style={{ fontSize: '9px', background: 'rgba(234, 179, 8, 0.05)', color: '#eab308', border: '1px solid rgba(234,179,8,0.15)', padding: '1px 5px', borderRadius: '3px', fontWeight: 500 }}>
+                        <span style={{ fontSize: '9px', background: 'var(--sev-medium-bg)', color: 'var(--sev-medium)', border: '1px solid var(--sev-medium-border)', padding: '1px 5px', borderRadius: '3px', fontWeight: 500 }}>
                           PL {rule.paranoia_level} (Inactive)
                         </span>
                       )}
                     </div>
 
-                    <p style={{ fontSize: '12px', color: '#a1a1aa', margin: '2px 0 6px', lineHeight: '1.4' }}>
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '2px 0 6px', lineHeight: '1.4' }}>
                       {rule.description}
                     </p>
 
@@ -455,13 +448,13 @@ export default function Rules({ userRole }) {
                       <span className="category-tag">{rule.category}</span>
                       <span className={`severity-pill ${rule.severity.toLowerCase()}`}>{rule.severity}</span>
                       {rule.hit_count > 0 && (
-                        <span style={{ fontSize: '11px', color: '#ef4444', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--danger-color)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <AlertTriangleIcon size={12} />
                           {rule.hit_count} hits recorded
                         </span>
                       )}
                       {rule.last_triggered && (
-                        <span style={{ fontSize: '11px', color: '#a1a1aa' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                           Last: {rule.last_triggered}
                         </span>
                       )}
@@ -500,31 +493,15 @@ export default function Rules({ userRole }) {
             </div>
           )}
 
-          {/* Pagination */}
-          {!loading && total > size && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '24px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-              <span style={{ fontSize: '13px', color: '#a1a1aa' }}>
-                Showing <strong>{Math.min(total, (page - 1) * size + 1)}</strong> to <strong>{Math.min(total, page * size)}</strong> of <strong>{total}</strong> rule entries
-              </span>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  disabled={page === 1}
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  className="action-btn-inspect"
-                  style={{ opacity: page === 1 ? 0.5 : 1, pointerEvents: page === 1 ? 'none' : 'auto' }}
-                >
-                  <ChevronLeft size={16} />
-                </button>
-                <button
-                  disabled={page * size >= total}
-                  onClick={() => setPage(p => p + 1)}
-                  className="action-btn-inspect"
-                  style={{ opacity: page * size >= total ? 0.5 : 1, pointerEvents: page * size >= total ? 'none' : 'auto' }}
-                >
-                  <ChevronRight size={16} />
-                </button>
-              </div>
-            </div>
+          {!loading && (
+            <Pagination
+              page={page}
+              totalPages={Math.max(1, Math.ceil(total / size))}
+              total={total}
+              itemLabel="rules"
+              onPrev={() => setPage((p) => Math.max(1, p - 1))}
+              onNext={() => setPage((p) => (p * size < total ? p + 1 : p))}
+            />
           )}
         </motion.div>
 
@@ -539,30 +516,30 @@ export default function Rules({ userRole }) {
             animate={{ opacity: 1 }}
           >
             <div className="card-title" style={{ marginBottom: '16px' }}>
-              <Activity size={18} color="#eab308" />
+              <Activity size={18} color="var(--sev-medium)" />
               Tuning Candidates (High Trigger Rates)
             </div>
 
             {stats.tuning_candidates && stats.tuning_candidates.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {stats.tuning_candidates.map(cand => (
-                  <div key={cand.rule_id} style={{ padding: '12px 14px', background: 'rgba(234, 179, 8, 0.02)', border: '1px solid rgba(234, 179, 8, 0.1)', borderRadius: '8px' }}>
+                  <div key={cand.rule_id} style={{ padding: '12px 14px', background: 'var(--sev-medium-bg)', border: '1px solid var(--sev-medium-bg)', borderRadius: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '11px', fontFamily: 'monospace', background: 'rgba(234, 179, 8, 0.1)', color: '#eab308', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 }}>
+                      <span style={{ fontSize: '11px', fontFamily: 'monospace', background: 'var(--sev-medium-bg)', color: 'var(--sev-medium)', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 }}>
                         {cand.rule_id}
                       </span>
-                      <span style={{ fontSize: '12px', color: '#fca5a5', fontWeight: 600 }}>{cand.hit_count} dynamic blocks</span>
+                      <span style={{ fontSize: '12px', color: 'var(--danger-color)', fontWeight: 600 }}>{cand.hit_count} dynamic blocks</span>
                     </div>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#f4f4f5' }}>{cand.name}</div>
-                    <div style={{ fontSize: '10px', color: '#a1a1aa', marginTop: '6px', lineHeight: '1.4' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>{cand.name}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '6px', lineHeight: '1.4' }}>
                       <strong>Recommendation:</strong> {cand.recommendation}
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div style={{ textSelf: 'center', textAlign: 'center', padding: '24px 12px', color: '#a1a1aa', fontSize: '12px' }}>
-                <ShieldCheck size={32} style={{ margin: '0 auto 8px', color: '#10b981', opacity: 0.5 }} />
+              <div style={{ textSelf: 'center', textAlign: 'center', padding: '24px 12px', color: 'var(--text-secondary)', fontSize: '12px' }}>
+                <ShieldCheck size={32} style={{ margin: '0 auto 8px', color: 'var(--success-color)', opacity: 0.5 }} />
                 No rule overrides recommended. Current trigger rates are stable.
               </div>
             )}
@@ -576,13 +553,13 @@ export default function Rules({ userRole }) {
             animate={{ opacity: 1 }}
           >
             <div className="card-title" style={{ marginBottom: '16px' }}>
-              <Clock size={18} color="#a855f7" />
+              <Clock size={18} color="var(--ml-color)" />
               Administrative Audit Logs
             </div>
 
             <div className="audit-list">
               {history.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '24px 12px', color: '#a1a1aa', fontSize: '12px' }}>
+                <div style={{ textAlign: 'center', padding: '24px 12px', color: 'var(--text-secondary)', fontSize: '12px' }}>
                   No changes recorded in overrides database.
                 </div>
               ) : (
@@ -597,12 +574,12 @@ export default function Rules({ userRole }) {
                         {log.action}
                       </span>
                       {log.rule_id && (
-                        <span style={{ fontFamily: 'monospace', fontSize: '11px', color: '#a1a1aa' }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--text-secondary)' }}>
                           ID: {log.rule_id}
                         </span>
                       )}
                     </div>
-                    <div style={{ color: '#e4e4e7', fontSize: '12px', lineHeight: '1.4', marginTop: '2px' }}>
+                    <div style={{ color: 'var(--text-primary)', fontSize: '12px', lineHeight: '1.4', marginTop: '2px' }}>
                       {log.details}
                     </div>
                   </div>
@@ -629,51 +606,51 @@ export default function Rules({ userRole }) {
               >
                 <div className="modal-header">
                   <div className="modal-title">
-                    <ShieldAlert size={20} color="#3b82f6" />
+                    <ShieldAlert size={20} color="var(--sev-low)" />
                     <span>Inspect Rule ID: {selectedRule.id}</span>
                   </div>
-                  <button className="modal-close-btn" onClick={() => setSelectedRule(null)}>
+                  <button className="modal-close-btn" onClick={() => setSelectedRule(null)} aria-label="Close rule details">
                     <X size={18} />
                   </button>
                 </div>
 
                 <div style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div>
-                    <h3 style={{ margin: '0 0 8px', color: '#f4f4f5' }}>{selectedRule.name}</h3>
-                    <p style={{ fontSize: '13px', color: '#a1a1aa', lineHeight: '1.5', margin: 0 }}>
+                    <h3 style={{ margin: '0 0 8px', color: 'var(--text-primary)' }}>{selectedRule.name}</h3>
+                    <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5', margin: 0 }}>
                       {selectedRule.description}
                     </p>
                   </div>
 
                   <div className="rule-drawer-grid">
                     <div className="rule-meta-box">
-                      <div style={{ fontSize: '11px', color: '#a1a1aa' }}>OWASP Category</div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5' }}>{selectedRule.category}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>OWASP Category</div>
+                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedRule.category}</div>
                     </div>
                     <div className="rule-meta-box">
-                      <div style={{ fontSize: '11px', color: '#a1a1aa' }}>Severity Level</div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5', display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Severity Level</div>
+                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', gap: '6px', alignItems: 'center' }}>
                         <span className={`severity-pill ${selectedRule.severity.toLowerCase()}`} style={{ display: 'inline-block' }}>{selectedRule.severity}</span>
                       </div>
                     </div>
                     <div className="rule-meta-box">
-                      <div style={{ fontSize: '11px', color: '#a1a1aa' }}>CRS Paranoia Level</div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5' }}>PL {selectedRule.paranoia_level}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>CRS Paranoia Level</div>
+                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>PL {selectedRule.paranoia_level}</div>
                     </div>
                     <div className="rule-meta-box">
-                      <div style={{ fontSize: '11px', color: '#a1a1aa' }}>Dynamic Logs Blocks</div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: '#ef4444' }}>{selectedRule.hit_count} triggers</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Dynamic Logs Blocks</div>
+                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>{selectedRule.hit_count} triggers</div>
                     </div>
                   </div>
 
                   {/* syntax block */}
                   <div>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#f4f4f5', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Code size={14} color="#3b82f6" />
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Code size={14} color="var(--sev-low)" />
                       CyberSentinel Engine Configuration Rule Syntax
                     </div>
                     {ruleDetailLoading ? (
-                      <div style={{ background: 'rgba(0,0,0,0.2)', padding: '24px', textAlign: 'center', borderRadius: '8px' }}>
+                      <div style={{ background: 'var(--inset-bg)', padding: '24px', textAlign: 'center', borderRadius: '8px' }}>
                         <div className="spinner" style={{ margin: '0 auto' }}></div>
                       </div>
                     ) : detailedRule ? (
@@ -685,14 +662,14 @@ export default function Rules({ userRole }) {
 
                   {/* trigger examples */}
                   <div>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#f4f4f5', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Database size={14} color="#10b981" />
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Database size={14} color="var(--success-color)" />
                       Simulated Payload / Attack Trigger Examples
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {getPayloadSample(selectedRule.category).map((sample, idx) => (
-                        <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', padding: '10px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <code style={{ fontSize: '12px', color: '#fca5a5', fontFamily: 'monospace' }}>{sample}</code>
+                        <div key={idx} style={{ background: 'var(--surface-subtle)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <code style={{ fontSize: '12px', color: 'var(--danger-color)', fontFamily: 'monospace' }}>{sample}</code>
                           <button
                             onClick={() => {
                               navigator.clipboard.writeText(sample);
@@ -709,7 +686,7 @@ export default function Rules({ userRole }) {
                   </div>
 
                   {/* file path */}
-                  <div style={{ fontSize: '11px', color: '#a1a1aa', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontFamily: 'monospace', wordBreak: 'break-all' }}>
                     <strong>VENDOR SOURCE:</strong> {selectedRule.file_path}
                   </div>
                 </div>
@@ -727,17 +704,17 @@ export default function Rules({ userRole }) {
             <div className="modal-overlay" style={{ zIndex: 1100 }}>
               <motion.div
                 className="modal-content pulse-warning"
-                style={{ maxWidth: '520px', border: '1px solid rgba(239, 68, 68, 0.35)' }}
+                style={{ maxWidth: '520px', border: '1px solid var(--danger-border)' }}
                 initial={{ scale: 0.95, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.95, opacity: 0 }}
               >
-                <div className="modal-header" style={{ background: 'rgba(239, 68, 68, 0.03)', borderBottom: '1px solid rgba(239,68,68,0.15)' }}>
-                  <div className="modal-title" style={{ color: '#fca5a5' }}>
-                    <AlertIcon size={20} color="#ef4444" />
+                <div className="modal-header" style={{ background: 'var(--danger-bg)', borderBottom: '1px solid var(--danger-border)' }}>
+                  <div className="modal-title" style={{ color: 'var(--danger-color)' }}>
+                    <AlertIcon size={20} color="var(--danger-color)" />
                     <span>Security Protection Override Warning</span>
                   </div>
-                  <button className="modal-close-btn" onClick={() => setRuleToDisable(null)}>
+                  <button className="modal-close-btn" onClick={() => setRuleToDisable(null)} aria-label="Close">
                     <X size={18} />
                   </button>
                 </div>
@@ -754,8 +731,8 @@ export default function Rules({ userRole }) {
                   </div>
 
                   <div>
-                    <label style={{ fontSize: '13px', fontWeight: 600, color: '#f4f4f5', display: 'block', marginBottom: '8px' }}>
-                      Tuning Override Justification <span style={{ color: '#ef4444' }}>*</span>
+                    <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', display: 'block', marginBottom: '8px' }}>
+                      Tuning Override Justification <span style={{ color: 'var(--danger-color)' }}>*</span>
                     </label>
                     <textarea
                       placeholder="Provide detailed white-listing reason (e.g. White-listing corporate webhook false positive on parameter x)"
@@ -767,18 +744,18 @@ export default function Rules({ userRole }) {
                       style={{
                         width: '100%',
                         height: '80px',
-                        background: 'rgba(0,0,0,0.2)',
-                        border: '1px solid rgba(255,255,255,0.06)',
+                        background: 'var(--inset-bg)',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '8px',
                         padding: '10px 12px',
-                        color: '#fff',
+                        color: 'var(--text-primary)',
                         fontSize: '13px',
                         outline: 'none',
                         resize: 'none'
                       }}
                     />
                     {disableError && (
-                      <span style={{ fontSize: '11px', color: '#ef4444', display: 'block', marginTop: '4px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--danger-color)', display: 'block', marginTop: '4px' }}>
                         {disableError}
                       </span>
                     )}
@@ -788,14 +765,14 @@ export default function Rules({ userRole }) {
                     <button
                       onClick={() => setRuleToDisable(null)}
                       className="action-btn-inspect"
-                      style={{ background: 'transparent', color: '#a1a1aa', borderColor: 'rgba(255,255,255,0.1)' }}
+                      style={{ background: 'transparent', color: 'var(--text-secondary)', borderColor: 'var(--border-strong)' }}
                     >
                       Cancel
                     </button>
                     <button
                       onClick={handleConfirmDisable}
                       className="action-btn-inspect"
-                      style={{ background: '#ef4444', color: '#fff', borderColor: 'transparent', padding: '6px 16px' }}
+                      style={{ background: 'var(--danger-color)', color: '#fff', borderColor: 'transparent', padding: '6px 16px' }}
                     >
                       Confirm Override
                     </button>

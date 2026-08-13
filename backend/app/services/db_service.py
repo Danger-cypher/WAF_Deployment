@@ -114,6 +114,29 @@ def init_db():
                 except Exception:
                     pass  # Column already exists — expected on re-init
 
+            # One-time migration: has_https used to be hardcoded true and
+            # content_encoding was guessed from the status code — neither was
+            # ever a real measurement (see api_discovery.py). Reset both to
+            # the "unknown" sentinel (2 / "unknown") so that old fabricated
+            # data doesn't keep misrepresenting endpoints; fresh log lines
+            # (which now carry $scheme/$sent_http_content_encoding) will
+            # repopulate real values on the next discovery pass. Guarded by
+            # a marker column so this only runs once, ever, per install.
+            try:
+                cursor.execute(
+                    "ALTER TABLE discovered_endpoints ADD COLUMN https_encoding_reset_done INTEGER DEFAULT 0"
+                )
+                cursor.execute(
+                    "UPDATE discovered_endpoints SET has_https = 2, content_encoding = 'unknown'"
+                )
+                conn.commit()
+                logger.info(
+                    "One-time reset of discovered_endpoints.has_https/content_encoding "
+                    "to 'unknown' — previous values were fabricated, not measured."
+                )
+            except Exception:
+                pass  # Column already exists — reset already ran on a prior startup
+
             # 5. Protected Applications table for dynamic multi-app proxying
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS protected_apps (
@@ -144,6 +167,22 @@ def init_db():
                 "ssl_option TEXT NOT NULL DEFAULT 'self-signed'",
                 "ssl_cert_path TEXT DEFAULT NULL",
                 "ssl_key_path TEXT DEFAULT NULL",
+            ]:
+                col_name = col_def.split()[0]
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE protected_apps ADD COLUMN {col_def}"
+                    )
+                except Exception:
+                    pass  # Column already exists — expected on re-init
+
+            # Require-auth (Phase 3) columns migration — disabled by default,
+            # a presence check only (not full token validation), scoped per
+            # app. See nginx_manager.py's app-auth conf generation.
+            for col_def in [
+                "require_auth INTEGER NOT NULL DEFAULT 0",
+                "auth_check_type TEXT NOT NULL DEFAULT 'header'",
+                "auth_header_name TEXT NOT NULL DEFAULT 'Authorization'",
             ]:
                 col_name = col_def.split()[0]
                 try:
@@ -862,25 +901,43 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                     new_hit_count = row_dict["hit_count"] + data["hit_count"]
                     new_external_hit_count = row_dict.get("external_hit_count", 0) + data.get("external_hit_count", 0)
                     new_internal_hit_count = row_dict.get("internal_hit_count", 0) + data.get("internal_hit_count", 0)
-                    
+
                     total_time_existing = row_dict["avg_response_time_ms"] * row_dict["hit_count"]
                     new_avg = (total_time_existing + data["response_time_ms_sum"]) / new_hit_count
-                    
+
                     new_error_count = row_dict["error_count"] + data["error_count"]
                     new_malicious_count = row_dict["malicious_count"] + data["malicious_count"]
                     new_suspicious_count = row_dict["suspicious_count"] + data["suspicious_count"]
 
+                    # Merge has_https/content_encoding across batches the same way
+                    # api_discovery.py merges within a batch: never let the "not
+                    # measured" sentinel overwrite a previously known value, and a
+                    # confirmed-insecure hit (0) always wins over confirmed-secure
+                    # (1) since it's a real finding, not noise to average away.
+                    # Sentinels mirrored from api_discovery.py's HTTPS_UNKNOWN (2)
+                    # and ENCODING_UNKNOWN ("unknown") — kept local here to avoid
+                    # a circular import (api_discovery already imports db_service).
+                    existing_https = row_dict.get("has_https", 2)
+                    new_https = min(existing_https, data["has_https"])
+
+                    new_encoding = (
+                        data["content_encoding"]
+                        if data["content_encoding"] != "unknown"
+                        else row_dict["content_encoding"]
+                    )
+
                     cursor.execute(
                         """
-                        UPDATE discovered_endpoints 
-                        SET last_seen = ?, 
-                            avg_response_time_ms = ?, 
-                            hit_count = ?, 
+                        UPDATE discovered_endpoints
+                        SET last_seen = ?,
+                            avg_response_time_ms = ?,
+                            hit_count = ?,
                             external_hit_count = ?,
                             internal_hit_count = ?,
-                            error_count = ?, 
-                            malicious_count = ?, 
+                            error_count = ?,
+                            malicious_count = ?,
                             suspicious_count = ?,
+                            has_https = ?,
                             content_encoding = ?
                         WHERE uri = ? AND method = ?
                     """,
@@ -893,7 +950,8 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                             new_error_count,
                             new_malicious_count,
                             new_suspicious_count,
-                            data["content_encoding"] or row_dict["content_encoding"],
+                            new_https,
+                            new_encoding,
                             uri,
                             method,
                         ),
@@ -966,6 +1024,9 @@ def create_protected_app(
     ssl_option: str = "self-signed",
     ssl_cert_path: str = None,
     ssl_key_path: str = None,
+    require_auth: int = 0,
+    auth_check_type: str = "header",
+    auth_header_name: str = "Authorization",
 ):
     try:
         with get_connection() as conn:
@@ -973,13 +1034,15 @@ def create_protected_app(
             cursor.execute("""
                 INSERT INTO protected_apps
                     (name, domain, upstream_host, upstream_port, protocol, is_active,
-                     rate_limit_rps, burst_tolerance, ssl_option, ssl_cert_path, ssl_key_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     rate_limit_rps, burst_tolerance, ssl_option, ssl_cert_path, ssl_key_path,
+                     require_auth, auth_check_type, auth_header_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 name, domain.strip().lower(), upstream_host.strip(),
                 upstream_port, protocol.strip().lower(), is_active,
                 rate_limit_rps, burst_tolerance,
                 ssl_option, ssl_cert_path, ssl_key_path,
+                require_auth, auth_check_type, auth_header_name,
             ))
             conn.commit()
             new_id = cursor.lastrowid
@@ -1002,6 +1065,9 @@ def update_protected_app(
     ssl_option: str = "self-signed",
     ssl_cert_path: str = None,
     ssl_key_path: str = None,
+    require_auth: int = 0,
+    auth_check_type: str = "header",
+    auth_header_name: str = "Authorization",
 ):
     try:
         with get_connection() as conn:
@@ -1012,13 +1078,15 @@ def update_protected_app(
                     protocol = ?, is_active = ?, rate_limit_rps = ?, burst_tolerance = ?,
                     ssl_option = ?,
                     ssl_cert_path = COALESCE(?, ssl_cert_path),
-                    ssl_key_path  = COALESCE(?, ssl_key_path)
+                    ssl_key_path  = COALESCE(?, ssl_key_path),
+                    require_auth = ?, auth_check_type = ?, auth_header_name = ?
                 WHERE id = ?
             """, (
                 name, domain.strip().lower(), upstream_host.strip(),
                 upstream_port, protocol.strip().lower(), is_active,
                 rate_limit_rps, burst_tolerance,
                 ssl_option, ssl_cert_path, ssl_key_path,
+                require_auth, auth_check_type, auth_header_name,
                 app_id,
             ))
             conn.commit()

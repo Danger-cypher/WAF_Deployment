@@ -1,13 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Activity, Lock, Database, Code, Server } from 'lucide-react';
+import { Activity, Lock, Database, Code, Server, AlertTriangle, RotateCw } from 'lucide-react';
 import {
   getAlertChannels, createAlertChannel, updateAlertChannel, deleteAlertChannel,
   testAlertChannel, getAlertRules, createAlertRule, deleteAlertRule, getHealth,
 } from '../services/api';
+import { useToast } from '../hooks/useToast';
+import Toast from '../components/Toast';
+import { useConfirm } from '../hooks/useConfirm';
 
 export default function AlertsIntegrations({ userRole }) {
   const [loading, setLoading] = useState(true);
+  const [alertDataError, setAlertDataError] = useState('');
+  const { toast, showToast } = useToast();
+  const confirm = useConfirm();
   const [healthData, setHealthData] = useState(null);
   const [activeSubTab, setActiveSubTab] = useState('connectors'); // 'connectors', 'channels', 'rules'
 
@@ -19,7 +25,11 @@ export default function AlertsIntegrations({ userRole }) {
   const [channelForm, setChannelForm] = useState({ name: '', channel_type: 'slack', config: {} });
   const [ruleForm, setRuleForm] = useState({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
 
+  const isFetchingHealthRef = useRef(false);
+
   const fetchHealth = async () => {
+    if (isFetchingHealthRef.current) return;
+    isFetchingHealthRef.current = true;
     try {
       const data = await getHealth();
       setHealthData(data);
@@ -27,6 +37,7 @@ export default function AlertsIntegrations({ userRole }) {
       console.error("Health check failed", err);
     } finally {
       setLoading(false);
+      isFetchingHealthRef.current = false;
     }
   };
 
@@ -36,8 +47,13 @@ export default function AlertsIntegrations({ userRole }) {
       setChannels(chans || []);
       const rls = await getAlertRules();
       setRules(rls || []);
+      setAlertDataError('');
     } catch (err) {
+      // Previously silent — a failed load left channels/rules at [], which
+      // renders identically to "you haven't configured any alerting yet."
+      // An admin has no way to tell those two states apart without this.
       console.error("Error loading alert configurations:", err);
+      setAlertDataError(err.message || 'Could not reach the backend API.');
     }
   };
 
@@ -60,18 +76,22 @@ export default function AlertsIntegrations({ userRole }) {
       setChannelForm({ name: '', channel_type: 'slack', config: {} });
       loadAlertData();
     } catch (err) {
-      alert("Failed to save channel: " + err.message);
+      showToast("Failed to save channel: " + err.message, "error");
     }
   };
 
   const handleDeleteChannel = async (id) => {
-    if (window.confirm("Are you sure you want to delete this notification channel?")) {
-      try {
-        await deleteAlertChannel(id);
-        loadAlertData();
-      } catch (err) {
-        alert("Failed to delete channel: " + err.message);
-      }
+    if (!(await confirm({
+      title: 'Delete notification channel',
+      message: 'Are you sure you want to delete this notification channel?',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
+    try {
+      await deleteAlertChannel(id);
+      loadAlertData();
+    } catch (err) {
+      showToast("Failed to delete channel: " + err.message, "error");
     }
   };
 
@@ -79,12 +99,12 @@ export default function AlertsIntegrations({ userRole }) {
     try {
       const res = await testAlertChannel(id, { test_message: "Test warning alert configured successfully." });
       if (res.success) {
-        alert("Test notification dispatched successfully!");
+        showToast("Test notification dispatched successfully.");
       } else {
-        alert("Dispatch failed: " + res.message);
+        showToast("Dispatch failed: " + res.message, "error");
       }
     } catch (err) {
-      alert("Error: " + err.message);
+      showToast("Error: " + err.message, "error");
     }
   };
 
@@ -96,18 +116,22 @@ export default function AlertsIntegrations({ userRole }) {
       setRuleForm({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
       loadAlertData();
     } catch (err) {
-      alert("Failed to create rule: " + err.message);
+      showToast("Failed to create rule: " + err.message, "error");
     }
   };
 
   const handleDeleteRule = async (id) => {
-    if (window.confirm("Are you sure you want to delete this alerting rule?")) {
-      try {
-        await deleteAlertRule(id);
-        loadAlertData();
-      } catch (err) {
-        alert("Failed to delete rule: " + err.message);
-      }
+    if (!(await confirm({
+      title: 'Delete alerting rule',
+      message: 'Are you sure you want to delete this alerting rule?',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
+    try {
+      await deleteAlertRule(id);
+      loadAlertData();
+    } catch (err) {
+      showToast("Failed to delete rule: " + err.message, "error");
     }
   };
 
@@ -119,8 +143,8 @@ export default function AlertsIntegrations({ userRole }) {
 
   if (loading && !healthData) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '300px', color: '#a1a1aa', gap: '12px' }}>
-        <Activity className="animate-spin" size={24} color="#3b82f6" />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '300px', color: 'var(--text-secondary)', gap: '12px' }}>
+        <Activity className="animate-spin" size={24} color="var(--accent-color)" />
         <span>Loading alerting & integrations status...</span>
       </div>
     );
@@ -135,29 +159,50 @@ export default function AlertsIntegrations({ userRole }) {
       style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}
     >
       {/* Tab Selection */}
-      <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '12px' }}>
+      <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
         <button
           className={`tab-btn ${activeSubTab === 'connectors' ? 'active' : ''}`}
-          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'connectors' ? 'rgba(59,130,246,0.1)' : 'transparent', border: activeSubTab === 'connectors' ? '1px solid rgba(59,130,246,0.2)' : '1px solid transparent', color: activeSubTab === 'connectors' ? '#60a5fa' : '#a1a1aa', cursor: 'pointer', transition: 'all 0.2s' }}
+          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'connectors' ? 'var(--sev-low-bg)' : 'transparent', border: activeSubTab === 'connectors' ? '1px solid var(--sev-low-border)' : '1px solid transparent', color: activeSubTab === 'connectors' ? 'var(--sev-low)' : 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.2s' }}
           onClick={() => setActiveSubTab('connectors')}
         >
           Connectors & Health
         </button>
         <button
           className={`tab-btn ${activeSubTab === 'channels' ? 'active' : ''}`}
-          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'channels' ? 'rgba(59,130,246,0.1)' : 'transparent', border: activeSubTab === 'channels' ? '1px solid rgba(59,130,246,0.2)' : '1px solid transparent', color: activeSubTab === 'channels' ? '#60a5fa' : '#a1a1aa', cursor: 'pointer', transition: 'all 0.2s' }}
+          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'channels' ? 'var(--sev-low-bg)' : 'transparent', border: activeSubTab === 'channels' ? '1px solid var(--sev-low-border)' : '1px solid transparent', color: activeSubTab === 'channels' ? 'var(--sev-low)' : 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.2s' }}
           onClick={() => setActiveSubTab('channels')}
         >
           Notification Channels ({channels.length})
         </button>
         <button
           className={`tab-btn ${activeSubTab === 'rules' ? 'active' : ''}`}
-          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'rules' ? 'rgba(59,130,246,0.1)' : 'transparent', border: activeSubTab === 'rules' ? '1px solid rgba(59,130,246,0.2)' : '1px solid transparent', color: activeSubTab === 'rules' ? '#60a5fa' : '#a1a1aa', cursor: 'pointer', transition: 'all 0.2s' }}
+          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'rules' ? 'var(--sev-low-bg)' : 'transparent', border: activeSubTab === 'rules' ? '1px solid var(--sev-low-border)' : '1px solid transparent', color: activeSubTab === 'rules' ? 'var(--sev-low)' : 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.2s' }}
           onClick={() => setActiveSubTab('rules')}
         >
           Evaluation Rules ({rules.length})
         </button>
       </div>
+
+      {alertDataError && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+          padding: '12px 16px', borderRadius: '8px',
+          background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', color: 'var(--danger-color)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px' }}>
+            <AlertTriangle size={18} />
+            <span>Couldn't load notification channels/rules from the backend ({alertDataError}). The counts and lists below may be incomplete, not empty.</span>
+          </div>
+          <button
+            type="button"
+            onClick={loadAlertData}
+            className="action-btn-inspect"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 'none', background: 'var(--danger-border)', color: 'var(--danger-color)', borderColor: 'var(--danger-border)', padding: '6px 12px' }}
+          >
+            <RotateCw size={14} /> Retry
+          </button>
+        </div>
+      )}
 
       {/* Connectors Tab */}
       {activeSubTab === 'connectors' && (
@@ -165,82 +210,82 @@ export default function AlertsIntegrations({ userRole }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
             <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600, color: '#e4e4e7' }}>CyberSentinel Engine</span>
+                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>CyberSentinel Engine</span>
                 <span className="status-badge green"><span className="status-dot"></span> Active</span>
               </div>
-              <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div><strong style={{ color: '#d4d4d8' }}>Engine:</strong> CyberSentinel Engine v2.0</div>
-                <div><strong style={{ color: '#d4d4d8' }}>Type:</strong> Web Application Firewall</div>
-                <div><strong style={{ color: '#d4d4d8' }}>Scope:</strong> Connection Filtering</div>
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Engine:</strong> CyberSentinel Engine v2.0</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Type:</strong> Web Application Firewall</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Scope:</strong> Connection Filtering</div>
               </div>
             </div>
 
             <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600, color: '#e4e4e7' }}>OWASP CRS</span>
+                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>OWASP CRS</span>
                 <span className="status-badge green"><span className="status-dot"></span> Active</span>
               </div>
-              <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div><strong style={{ color: '#d4d4d8' }}>Ruleset:</strong> v4.0.0 (Core Ruleset)</div>
-                <div><strong style={{ color: '#d4d4d8' }}>Active Rules:</strong> 250+ guards</div>
-                <div><strong style={{ color: '#d4d4d8' }}>Paranoia Level:</strong> PL1</div>
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Ruleset:</strong> v4.0.0 (Core Ruleset)</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Active Rules:</strong> 250+ guards</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Paranoia Level:</strong> PL1</div>
               </div>
             </div>
 
             <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600, color: '#e4e4e7' }}>NGINX</span>
+                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>NGINX</span>
                 <span className="status-badge green"><span className="status-dot"></span> Running</span>
               </div>
-              <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div><strong style={{ color: '#d4d4d8' }}>Version:</strong> nginx/1.24.0</div>
-                <div><strong style={{ color: '#d4d4d8' }}>Engine Connector:</strong> Enabled</div>
-                <div><strong style={{ color: '#d4d4d8' }}>Reverse Proxy:</strong> Active</div>
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Version:</strong> nginx/1.24.0</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Engine Connector:</strong> Enabled</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Reverse Proxy:</strong> Active</div>
               </div>
             </div>
 
             <div className="glass-panel" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600, color: '#e4e4e7' }}>FastAPI Backend</span>
+                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>FastAPI Backend</span>
                 <span className={`status-badge ${healthData?.status === 'ok' ? 'green' : 'red'}`}>
                   <span className="status-dot"></span> {healthData?.status === 'ok' ? 'Connected' : 'Offline'}
                 </span>
               </div>
-              <div style={{ fontSize: '13px', color: '#a1a1aa', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div><strong style={{ color: '#d4d4d8' }}>Port:</strong> 8000 (Uvicorn)</div>
-                <div><strong style={{ color: '#d4d4d8' }}>Parsed Logs:</strong> {healthData?.total_parsed_files || 0} files</div>
-                <div><strong style={{ color: '#d4d4d8' }}>Log Status:</strong> {healthData?.log_directory_exists ? 'Readable' : 'Unreachable'}</div>
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Port:</strong> 8000 (Uvicorn)</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Parsed Logs:</strong> {healthData?.total_parsed_files || 0} files</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Log Status:</strong> {healthData?.log_directory_exists ? 'Readable' : 'Unreachable'}</div>
               </div>
             </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
             <div className="glass-panel" style={{ padding: '24px' }}>
-              <div style={{ fontSize: '15px', fontWeight: 600, color: '#f4f4f5', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Activity size={16} color="#3b82f6" />
+              <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Activity size={16} color="var(--accent-color)" />
                 <span>Internal API Gateway Probe Status</span>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--surface-subtle)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>GET /logs</span>
-                    <span style={{ fontSize: '11px', color: '#a1a1aa' }}>Query transaction log streams</span>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>GET /logs</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Query transaction log streams</span>
                   </div>
-                  <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>200 OK</span>
+                  <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: 'var(--success-color)', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>200 OK</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.04)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--surface-subtle)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#e4e4e7' }}>GET /stats</span>
-                    <span style={{ fontSize: '11px', color: '#a1a1aa' }}>Calculates incident counters</span>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>GET /stats</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Calculates incident counters</span>
                   </div>
-                  <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>200 OK</span>
+                  <span style={{ fontSize: '11px', background: 'rgba(16,185,129,0.1)', color: 'var(--success-color)', border: '1px solid rgba(16,185,129,0.2)', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>200 OK</span>
                 </div>
               </div>
             </div>
           </div>
 
-          <div style={{ fontSize: '16px', fontWeight: 600, color: '#a1a1aa', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
-            <Lock size={18} color="#a1a1aa" />
+          <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
+            <Lock size={18} color="var(--text-secondary)" />
             <span>Enterprise Connectors (Future Roadmap)</span>
           </div>
 
@@ -249,15 +294,15 @@ export default function AlertsIntegrations({ userRole }) {
               const Icon = item.icon;
               return (
                 <div key={index} className="glass-panel" style={{ padding: '20px', display: 'flex', gap: '16px', opacity: 0.45, position: 'relative', overflow: 'hidden' }}>
-                  <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)', padding: '10px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '42px', width: '42px', flexShrink: 0 }}>
-                    <Icon size={20} color="#a1a1aa" />
+                  <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--surface-hover)', padding: '10px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '42px', width: '42px', flexShrink: 0 }}>
+                    <Icon size={20} color="var(--text-secondary)" />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div style={{ fontWeight: 600, color: '#e4e4e7', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span>{item.name}</span>
-                      <span style={{ fontSize: '9px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#a1a1aa', padding: '1px 5px', borderRadius: '3px', textTransform: 'uppercase' }}>Inactive</span>
+                      <span style={{ fontSize: '9px', background: 'var(--surface-hover)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', padding: '1px 5px', borderRadius: '3px', textTransform: 'uppercase' }}>Inactive</span>
                     </div>
-                    <p style={{ fontSize: '12px', color: '#a1a1aa', margin: 0, lineHeight: '1.4' }}>{item.desc}</p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.4' }}>{item.desc}</p>
                   </div>
                 </div>
               );
@@ -270,7 +315,7 @@ export default function AlertsIntegrations({ userRole }) {
       {activeSubTab === 'channels' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '14px', color: '#a1a1aa' }}>Configure Slack, Email and Custom Webhook integrations:</span>
+            <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Configure Slack, Email and Custom Webhook integrations:</span>
             {userRole === 'admin' && (
               <button className="action-btn-inspect" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={() => setIsChannelCreateOpen(true)}>
                 + Add Integration Channel
@@ -279,16 +324,16 @@ export default function AlertsIntegrations({ userRole }) {
           </div>
 
           {isChannelCreateOpen && (
-            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', padding: '20px', borderRadius: '8px', marginBottom: '16px' }}>
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', padding: '20px', borderRadius: '8px', marginBottom: '16px' }}>
               <form onSubmit={handleCreateChannel} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <h4 style={{ margin: 0, fontSize: '14px', color: '#60a5fa' }}>{channelForm.id ? 'Edit Notification Integration' : 'Add New Notification Integration'}</h4>
+                <h4 style={{ margin: 0, fontSize: '14px', color: 'var(--sev-low)' }}>{channelForm.id ? 'Edit Notification Integration' : 'Add New Notification Integration'}</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Connection Name</label>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Connection Name</label>
                     <input className="settings-input" type="text" placeholder="e.g. SOC Team Slack" required value={channelForm.name} onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })} />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Connector Type</label>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Connector Type</label>
                     <select className="settings-input" style={{ width: '100%' }} value={channelForm.channel_type} onChange={(e) => {
                       const newType = e.target.value;
                       let defaultCfg;
@@ -304,7 +349,7 @@ export default function AlertsIntegrations({ userRole }) {
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Configuration Payload (JSON)</label>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Configuration Payload (JSON)</label>
                   <textarea 
                     key={channelForm.channel_type}
                     className="settings-input" 
@@ -335,20 +380,22 @@ export default function AlertsIntegrations({ userRole }) {
                 <div key={chan.id} className="glass-panel" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, minWidth: 0, paddingRight: '16px' }}>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                      <span style={{ fontWeight: 700, fontSize: '14px', color: '#e4e4e7', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{chan.name}</span>
-                      <span style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', fontSize: '9px', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>{chan.channel_type}</span>
+                      <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{chan.name}</span>
+                      <span style={{ background: 'var(--sev-low-border)', color: 'var(--sev-low)', fontSize: '9px', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>{chan.channel_type}</span>
                     </div>
-                    <code style={{ fontSize: '11px', color: '#a1a1aa', fontFamily: 'monospace', wordBreak: 'break-all' }}>{JSON.stringify(chan.config)}</code>
+                    <code style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace', wordBreak: 'break-all' }}>{JSON.stringify(chan.config)}</code>
                   </div>
                   <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
-                    <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '11px', margin: 0 }} onClick={() => handleTestChannel(chan.id)}>Test</button>
-                    {userRole === 'admin' && chan.channel_type === 'email' && (
+                    {userRole === 'admin' && (
+                      <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '11px', margin: 0 }} onClick={() => handleTestChannel(chan.id)}>Test</button>
+                    )}
+                    {userRole === 'admin' && (
                       <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '11px', margin: 0 }} onClick={() => { setChannelForm(chan); setIsChannelCreateOpen(true); }}>
                         Edit
                       </button>
                     )}
                     {userRole === 'admin' && (
-                      <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '11px', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(239,68,68,0.06)', margin: 0 }} onClick={() => handleDeleteChannel(chan.id)}>
+                      <button className="action-btn-inspect" style={{ padding: '6px 12px', fontSize: '11px', color: 'var(--danger-color)', border: '1px solid var(--danger-border)', background: 'var(--danger-bg)', margin: 0 }} onClick={() => handleDeleteChannel(chan.id)}>
                         Delete
                       </button>
                     )}
@@ -356,7 +403,7 @@ export default function AlertsIntegrations({ userRole }) {
                 </div>
               ))
             ) : (
-              <div className="glass-panel" style={{ gridColumn: 'span 12', padding: '30px', textAlign: 'center', color: '#a1a1aa' }}>
+              <div className="glass-panel" style={{ gridColumn: 'span 12', padding: '30px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                 No active notification integrations configured.
               </div>
             )}
@@ -368,7 +415,7 @@ export default function AlertsIntegrations({ userRole }) {
       {activeSubTab === 'rules' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '14px', color: '#a1a1aa' }}>Define warning and critical event alerting thresholds:</span>
+            <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Define warning and critical event alerting thresholds:</span>
             {userRole === 'admin' && (
               <button className="action-btn-inspect" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={() => setIsRuleCreateOpen(true)}>
                 + Create Alert Rule
@@ -377,16 +424,16 @@ export default function AlertsIntegrations({ userRole }) {
           </div>
 
           {isRuleCreateOpen && (
-            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', padding: '20px', borderRadius: '8px', marginBottom: '16px' }}>
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', padding: '20px', borderRadius: '8px', marginBottom: '16px' }}>
               <form onSubmit={handleCreateRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <h4 style={{ margin: 0, fontSize: '14px', color: '#60a5fa' }}>Create Incident Alerting Rule</h4>
+                <h4 style={{ margin: 0, fontSize: '14px', color: 'var(--sev-low)' }}>Create Incident Alerting Rule</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Rule Name</label>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
                     <input className="settings-input" type="text" placeholder="e.g. Critical Threat Event" required value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Event Type</label>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Event Type</label>
                     <select className="settings-input" style={{ width: '100%' }} value={ruleForm.event_type} onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}>
                       <option value="attack_detected">Attack Detected (WAF)</option>
                       <option value="high_threat_score">High Anomaly Threat Score</option>
@@ -394,7 +441,7 @@ export default function AlertsIntegrations({ userRole }) {
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Severity Level</label>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Severity Level</label>
                     <select className="settings-input" style={{ width: '100%' }} value={ruleForm.severity} onChange={(e) => setRuleForm({ ...ruleForm, severity: e.target.value })}>
                       <option value="critical">Critical</option>
                       <option value="high">High</option>
@@ -404,7 +451,7 @@ export default function AlertsIntegrations({ userRole }) {
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Conditions JSON (Optional)</label>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON (Optional)</label>
                     <input className="settings-input" type="text" placeholder='e.g. {"threat_score_gt": 80}' onChange={(e) => {
                       try {
                         const conds = JSON.parse(e.target.value);
@@ -415,12 +462,12 @@ export default function AlertsIntegrations({ userRole }) {
                     }} />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Throttle Cooldown (Minutes)</label>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Throttle Cooldown (Minutes)</label>
                     <input className="settings-input" type="number" min="1" value={ruleForm.throttle_minutes} onChange={(e) => setRuleForm({ ...ruleForm, throttle_minutes: parseInt(e.target.value) || 5 })} />
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Routing Targets (Channel IDs, comma-separated e.g. 1, 2)</label>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Routing Targets (Channel IDs, comma-separated e.g. 1, 2)</label>
                   <input className="settings-input" type="text" placeholder="Enter channel numeric IDs..." onChange={(e) => {
                     const ids = e.target.value.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x));
                     setRuleForm({ ...ruleForm, channels: ids });
@@ -439,7 +486,7 @@ export default function AlertsIntegrations({ userRole }) {
               rules.map(rule => (
                 <div key={rule.id} className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 700, fontSize: '14px', color: '#e4e4e7' }}>{rule.name}</span>
+                    <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{rule.name}</span>
                     <span style={{
                       padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
                       background: rule.severity === 'critical' ? 'var(--danger-bg)' : 'var(--warning-bg)',
@@ -447,27 +494,28 @@ export default function AlertsIntegrations({ userRole }) {
                       border: rule.severity === 'critical' ? '1px solid rgba(255, 59, 92, 0.2)' : '1px solid rgba(255, 149, 0, 0.2)'
                     }}>{rule.severity}</span>
                   </div>
-                  <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px', color: '#a1a1aa' }}>
-                    <div><strong>Event type:</strong> <span className="badge-purple" style={{ padding: '2px 6px', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>{rule.event_type}</span></div>
-                    <div><strong>Conditions:</strong> <code style={{ fontSize: '11px', color: '#34d399', fontFamily: 'monospace' }}>{JSON.stringify(rule.conditions)}</code></div>
+                  <div style={{ fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--border-color)', paddingTop: '10px', color: 'var(--text-secondary)' }}>
+                    <div><strong>Event type:</strong> <span className="badge-purple" style={{ padding: '2px 6px', background: 'rgba(139, 92, 246, 0.15)', color: 'var(--ml-color)', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>{rule.event_type}</span></div>
+                    <div><strong>Conditions:</strong> <code style={{ fontSize: '11px', color: 'var(--success-color)', fontFamily: 'monospace' }}>{JSON.stringify(rule.conditions)}</code></div>
                     <div><strong>Cooldown throttle:</strong> {rule.throttle_minutes} min</div>
                     <div><strong>Channels assigned:</strong> Channel IDs: {JSON.stringify(rule.channels)}</div>
                   </div>
                   {userRole === 'admin' && (
-                    <button className="action-btn-inspect" style={{ alignSelf: 'flex-end', padding: '4px 10px', fontSize: '11px', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(239,68,68,0.06)', margin: 0, marginTop: '8px' }} onClick={() => handleDeleteRule(rule.id)}>
+                    <button className="action-btn-inspect" style={{ alignSelf: 'flex-end', padding: '4px 10px', fontSize: '11px', color: 'var(--danger-color)', border: '1px solid var(--danger-border)', background: 'var(--danger-bg)', margin: 0, marginTop: '8px' }} onClick={() => handleDeleteRule(rule.id)}>
                       Delete Rule
                     </button>
                   )}
                 </div>
               ))
             ) : (
-              <div className="glass-panel" style={{ gridColumn: 'span 12', padding: '30px', textAlign: 'center', color: '#a1a1aa' }}>
+              <div className="glass-panel" style={{ gridColumn: 'span 12', padding: '30px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                 No active alerting rules defined.
               </div>
             )}
           </div>
         </div>
       )}
+      <Toast toast={toast} />
     </motion.div>
   );
 }

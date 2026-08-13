@@ -2,6 +2,7 @@ import os
 import time
 import pathlib
 import sqlite3
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends
 from app.config.settings import settings
 from app.models.response_models import HealthResponse
@@ -59,24 +60,27 @@ async def health_check():
     )
 
     # Cache the expensive ClickHouse count (SELECT count() FROM waf_events)
+    # — on a cache miss this is a ~1.4s synchronous call; run off the event
+    # loop so it doesn't stall every other concurrent dashboard request
+    # (this endpoint is polled by multiple pages plus the Docker healthcheck).
     if "parsed_files" not in _health_cache or (now - _health_cache.get("parsed_files_ts", 0)) > _HEALTH_CACHE_TTL:
-        _health_cache["parsed_files"] = get_parsed_files_count()
+        _health_cache["parsed_files"] = await asyncio.to_thread(get_parsed_files_count)
         _health_cache["parsed_files_ts"] = now
     parsed_files = _health_cache["parsed_files"]
 
     # Check database initialization (uses in-memory flag after first success)
-    db_ok = check_db_initialized()
+    db_ok = await asyncio.to_thread(check_db_initialized)
     if not db_ok and not _db_initialized:
         try:
             from app.services.db_service import init_db
-            init_db()
-            db_ok = check_db_initialized()
+            await asyncio.to_thread(init_db)
+            db_ok = await asyncio.to_thread(check_db_initialized)
         except Exception as e:
             _db_init_error = str(e)
 
     # Cache Redis connectivity check
     if "redis_ok" not in _health_cache or (now - _health_cache.get("redis_ts", 0)) > _REDIS_CHECK_TTL:
-        _health_cache["redis_ok"] = validate_redis_connection()
+        _health_cache["redis_ok"] = await asyncio.to_thread(validate_redis_connection)
         _health_cache["redis_ts"] = now
     redis_ok = _health_cache["redis_ok"]
 

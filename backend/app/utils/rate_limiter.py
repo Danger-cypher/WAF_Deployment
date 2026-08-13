@@ -47,7 +47,14 @@ class RateLimiter:
         self.multiplier = multiplier
         # Use global cached Redis client for persistent connection
         self._client = get_global_redis_client()
-        
+        # In-process fallback state, used only when Redis is unavailable or
+        # errors — see check_rate_limit(). Format: {ip: {"window": [ts, ...],
+        # "failures": int, "blocked_until": epoch_seconds}}. This backend
+        # runs as a single instance (docker-compose.yml has no `replicas:`
+        # for it), so an in-memory limiter actually holds here — it just
+        # doesn't survive a process restart, unlike the Redis-backed state.
+        self._local_fallback = {}
+
     @property
     def client(self) -> Optional[redis.Redis]:
         """Cached Redis client - single persistent connection."""
@@ -121,10 +128,12 @@ class RateLimiter:
         
         client = self.client
         if not client:
-            # Rate limiting disabled (Redis unavailable)
-            metadata["is_allowed"] = True
-            metadata["block_reason"] = "Redis unavailable - rate limiting disabled"
-            return True, metadata
+            # Redis unavailable — previously this returned (True, ...)
+            # unconditionally, i.e. login throttling silently disabled
+            # itself during any Redis outage. Fall back to an in-process
+            # limiter instead of failing wide open.
+            logger.warning(f"Redis unavailable for rate limiting on {ip} — using in-process fallback limiter.")
+            return self._check_rate_limit_local(ip, metadata)
         
         # Check if IP is currently blocked
         block_key = self.get_block_key(ip)
@@ -179,12 +188,51 @@ class RateLimiter:
             
         except redis.RedisError as e:
             logger.error(f"Redis error during rate limit check for {ip}: {e}")
-            # Fail open if Redis fails
-            metadata["block_reason"] = f"Redis error: {e}"
-            return True, metadata
-    
+            # Same fail-open-to-fallback fix as the "client is None" branch
+            # above — a mid-request Redis error must not grant unlimited
+            # attempts either.
+            return self._check_rate_limit_local(ip, metadata)
+
+    def _check_rate_limit_local(self, ip: str, metadata: dict) -> Tuple[bool, dict]:
+        """
+        In-process sliding-window + exponential-backoff limiter mirroring
+        check_rate_limit()'s Redis-backed logic, used only while Redis is
+        unreachable. Does not persist across a process restart and is
+        per-process (fine for this single-instance backend) — it exists to
+        avoid the choice between "unlimited login attempts during a Redis
+        blip" and "lock every admin out during a Redis blip," not to fully
+        replace Redis.
+        """
+        now = time.time()
+        state = self._local_fallback.setdefault(ip, {"window": [], "failures": 0, "blocked_until": 0.0})
+
+        if now < state["blocked_until"]:
+            retry_after = int(state["blocked_until"] - now)
+            metadata["is_allowed"] = False
+            metadata["remaining_requests"] = 0
+            metadata["retry_after"] = retry_after
+            metadata["block_reason"] = f"Too many failed attempts (fallback limiter). Retry in {retry_after}s."
+            return False, metadata
+
+        state["window"] = [t for t in state["window"] if t > now - self.window_seconds]
+        metadata["remaining_requests"] = max(0, self.max_requests - len(state["window"]))
+
+        if len(state["window"]) >= self.max_requests:
+            state["failures"] += 1
+            block_duration = self._get_block_duration(state["failures"])
+            state["blocked_until"] = now + block_duration * 60
+            metadata["is_allowed"] = False
+            metadata["retry_after"] = block_duration * 60
+            metadata["block_reason"] = f"Rate limit exceeded (fallback limiter). Blocked for {block_duration} minutes."
+            return False, metadata
+
+        state["window"].append(now)
+        return True, metadata
+
     def record_success(self, ip: str) -> bool:
         """Record successful authentication (resets failure count)."""
+        if ip in self._local_fallback:
+            self._local_fallback[ip] = {"window": [], "failures": 0, "blocked_until": 0.0}
         return self._reset_failures(ip)
 
 

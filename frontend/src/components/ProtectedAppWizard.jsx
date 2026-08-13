@@ -1,6 +1,13 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, Server, Lock, Globe, CheckCircle, AlertTriangle, ChevronRight, Copy, Check, ExternalLink, RefreshCw } from 'lucide-react';
+import { Shield, Server, Lock, Globe, CheckCircle, AlertTriangle, ChevronRight, Copy, Check, ExternalLink, RefreshCw, Activity } from 'lucide-react';
+import {
+  createProtectedApp, updateProtectedApp, provisionLetsEncrypt, uploadCustomCert,
+  getWafServerIp, verifyDns,
+} from '../services/api';
+import { useToast } from '../hooks/useToast';
+import Toast from './Toast';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null }) => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -9,48 +16,72 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
   const [deployStage, setDeployStage] = useState(''); // 'saving' | 'provisioning' | 'done'
   const [dnsStatus, setDnsStatus] = useState('pending'); // pending, checking, success, failed
   const [copied, setCopied] = useState(false);
-  
-  const [formData, setFormData] = useState({
+  const { toast, showToast } = useToast();
+  useEscapeToClose(onClose, isOpen);
+
+  const emptyFormData = {
     appName: '',
     publicDomain: '',
     backendHost: '',
     backendPort: '80',
     backendProtocol: 'http',
     sslOption: 'letsencrypt',
-    protectionLevel: 1,
     customCert: null,
     customKey: null,
     rateLimitRps: '50',
-    burstTolerance: '100'
-  });
+    burstTolerance: '100',
+    requireAuth: false,
+    authCheckType: 'header',
+    authHeaderName: 'Authorization',
+  };
+
+  const [formData, setFormData] = useState(emptyFormData);
+  const [sslWarning, setSslWarning] = useState('');
+  const [pendingResult, setPendingResult] = useState(null);
 
   const [wafServerIP, setWafServerIP] = useState('Loading...');
 
   useEffect(() => {
-    if (isOpen && existingApp) {
+    if (!isOpen) return;
+
+    // The wizard component stays mounted across open/close cycles (the
+    // parent just toggles `isOpen`), so step/DNS/warning state from a
+    // previous session must be reset explicitly on every open — otherwise
+    // reopening to add/edit a different app can land mid-wizard (e.g. on
+    // "Verify & Deploy") with stale DNS-check results from the last app.
+    setCurrentStep(1);
+    setDnsStatus('pending');
+    setSslWarning('');
+    setPendingResult(null);
+
+    if (existingApp) {
+      // Field names here must match ProtectedAppResponse (backend/app/routes/apps.py) —
+      // upstream_host/upstream_port/protocol, NOT backend_host/backend_port/backend_protocol.
+      // Getting this wrong silently blanks the backend target on every edit.
       setFormData({
         appName: existingApp.name || '',
         publicDomain: existingApp.domain || '',
-        backendHost: existingApp.backend_host || '',
-        backendPort: existingApp.backend_port || '80',
-        backendProtocol: existingApp.backend_protocol || 'http',
+        backendHost: existingApp.upstream_host || '',
+        backendPort: String(existingApp.upstream_port || '80'),
+        backendProtocol: existingApp.protocol || 'http',
         sslOption: existingApp.ssl_option || 'letsencrypt',
-        protectionLevel: existingApp.protection_level || 1,
         customCert: null,
         customKey: null,
-        rateLimitRps: existingApp.rate_limit_rps || '50',
-        burstTolerance: existingApp.burst_tolerance || '100'
+        rateLimitRps: String(existingApp.rate_limit_rps || '50'),
+        burstTolerance: String(existingApp.burst_tolerance || '100'),
+        requireAuth: Boolean(existingApp.require_auth),
+        authCheckType: existingApp.auth_check_type || 'header',
+        authHeaderName: existingApp.auth_header_name || 'Authorization',
       });
+    } else {
+      setFormData(emptyFormData);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, existingApp]);
 
   useEffect(() => {
     if (isOpen) {
-      // Fetch WAF server public IP
-      fetch(`${window.location.protocol}//${window.location.host}/api/system/waf-ip`, {
-        credentials: 'include'
-      })
-        .then(res => res.json())
+      getWafServerIp()
         .then(data => setWafServerIP(data.public_ip || data.server_ip || 'N/A'))
         .catch(() => setWafServerIP(window.location.hostname));
     }
@@ -81,83 +112,84 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
   const handleSubmit = async () => {
     setIsDeploying(true);
     setDeployStage('saving');
+    setSslWarning('');
     try {
-      const url = existingApp 
-        ? `${window.location.protocol}//${window.location.host}/api/apps/${existingApp.id}`
-        : `${window.location.protocol}//${window.location.host}/api/apps`;
-        
       const payload = {
         name: formData.appName,
         domain: formData.publicDomain,
         upstream_host: formData.backendHost,
         upstream_port: parseInt(formData.backendPort, 10),
         protocol: formData.backendProtocol,
-        is_active: 1,
+        // Preserve the app's current enabled/disabled state on edit — this
+        // wizard has no control for it, so it must not silently flip a
+        // disabled app back on. New apps default to enabled.
+        is_active: existingApp ? existingApp.is_active : 1,
         rate_limit_rps: parseInt(formData.rateLimitRps, 10),
         burst_tolerance: parseInt(formData.burstTolerance, 10),
-        // Wire SSL option to backend
-        ssl_option: formData.sslOption === 'none' ? 'self-signed' : formData.sslOption,
+        ssl_option: formData.sslOption,
+        require_auth: formData.requireAuth ? 1 : 0,
+        auth_check_type: formData.authCheckType,
+        auth_header_name: formData.authHeaderName.trim() || 'Authorization',
       };
 
-      const response = await fetch(url, {
-        method: existingApp ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ detail: 'Unknown error' }));
-        throw new Error(err.detail || 'Failed to configure protected app');
-      }
-
-      const result = await response.json();
+      const result = existingApp
+        ? await updateProtectedApp(existingApp.id, payload)
+        : await createProtectedApp(payload);
       const appId = result.id;
 
       // --- Post-save: SSL provisioning ---
+      let warning = '';
       if (formData.sslOption === 'letsencrypt' && formData.publicDomain && formData.publicDomain !== '_') {
         setDeployStage('provisioning');
         try {
-          const sslResp = await fetch(
-            `${window.location.protocol}//${window.location.host}/api/apps/${appId}/provision-ssl`,
-            { method: 'POST', credentials: 'include' }
-          );
-          if (!sslResp.ok) {
-            const sslErr = await sslResp.json().catch(() => ({ detail: 'SSL provisioning failed' }));
-            // Non-fatal: app is deployed, just cert provisioning failed
-            console.warn('Let\'s Encrypt provisioning failed:', sslErr.detail);
+          const sslResult = await provisionLetsEncrypt(appId);
+          if (sslResult.status !== 'success') {
+            warning = sslResult.message || "Let's Encrypt provisioning did not complete successfully.";
           }
         } catch (sslError) {
-          console.warn('Let\'s Encrypt provisioning error:', sslError);
+          warning = `Let's Encrypt provisioning failed: ${sslError.message}`;
         }
       } else if (formData.sslOption === 'custom' && formData.customCert && formData.customKey) {
         setDeployStage('provisioning');
         try {
-          const fd = new FormData();
-          fd.append('cert_file', formData.customCert);
-          fd.append('key_file', formData.customKey);
-          const uploadResp = await fetch(
-            `${window.location.protocol}//${window.location.host}/api/apps/${appId}/upload-cert`,
-            { method: 'POST', credentials: 'include', body: fd }
-          );
-          if (!uploadResp.ok) {
-            const upErr = await uploadResp.json().catch(() => ({ detail: 'Cert upload failed' }));
-            console.warn('Custom cert upload failed:', upErr.detail);
+          const uploadResult = await uploadCustomCert(appId, formData.customCert, formData.customKey);
+          if (uploadResult.status !== 'success') {
+            warning = uploadResult.message || 'Custom certificate upload did not complete successfully.';
           }
         } catch (uploadError) {
-          console.warn('Custom cert upload error:', uploadError);
+          warning = `Custom certificate upload failed: ${uploadError.message}`;
         }
       }
 
       setDeployStage('done');
+
+      if (warning) {
+        // The app itself deployed fine — only cert provisioning had a
+        // problem. Surface it and let the admin explicitly acknowledge
+        // before closing, instead of silently swallowing it as a console
+        // warning while the wizard reports plain success.
+        setSslWarning(warning);
+        setPendingResult(result);
+        setIsDeploying(false);
+        return;
+      }
+
       onComplete(result);
       onClose();
     } catch (error) {
       console.error('Error configuring app:', error);
-      alert('Failed to configure protected application: ' + error.message);
+      showToast('Failed to configure protected application: ' + error.message, 'error');
     } finally {
       setIsDeploying(false);
       setDeployStage('');
+    }
+  };
+
+  const handleAcknowledgeSslWarning = () => {
+    setSslWarning('');
+    if (pendingResult) {
+      onComplete(pendingResult);
+      onClose();
     }
   };
 
@@ -166,15 +198,8 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
     setDnsStatus('checking');
     
     try {
-      const response = await fetch(`${window.location.protocol}//${window.location.host}/api/system/verify-dns`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ domain: formData.publicDomain })
-      });
+      const result = await verifyDns(formData.publicDomain);
 
-      const result = await response.json();
-      
       if (result.points_to_waf) {
         setDnsStatus('success');
       } else {
@@ -221,7 +246,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
         {/* Header */}
         <div className="wizard-header">
           <div className="wizard-title">
-            <Shield size={24} color="#14b8a6" />
+            <Shield size={24} color="var(--teal-color)" />
             <span>{existingApp ? 'Edit' : 'Add'} Protected Application</span>
           </div>
           
@@ -259,7 +284,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 className="wizard-step-content"
               >
                 <div className="step-icon">
-                  <Globe size={48} color="#14b8a6" />
+                  <Globe size={48} color="var(--teal-color)" />
                 </div>
                 <h2>What application do you want to protect?</h2>
                 <p className="step-description">
@@ -326,7 +351,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 className="wizard-step-content"
               >
                 <div className="step-icon">
-                  <Server size={48} color="#14b8a6" />
+                  <Server size={48} color="var(--teal-color)" />
                 </div>
                 <h2>Where is your application currently hosted?</h2>
                 <p className="step-description">
@@ -376,6 +401,47 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                     Traffic flow: User → WAF ({wafServerIP}) → Backend ({formData.backendProtocol}://{formData.backendHost}:{formData.backendPort})
                   </span>
                 </div>
+
+                <div className="form-group" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-strong)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={formData.requireAuth}
+                      onChange={(e) => setFormData({ ...formData, requireAuth: e.target.checked })}
+                    />
+                    Require authentication
+                  </label>
+                  <span className="input-hint">
+                    Deny any request missing a specific header or cookie — a presence check, not full
+                    token validation. Off by default.
+                  </span>
+                </div>
+
+                {formData.requireAuth && (
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Check For</label>
+                      <select
+                        className="wizard-input"
+                        value={formData.authCheckType}
+                        onChange={(e) => setFormData({ ...formData, authCheckType: e.target.value })}
+                      >
+                        <option value="header">HTTP Header</option>
+                        <option value="cookie">Cookie</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>{formData.authCheckType === 'cookie' ? 'Cookie Name' : 'Header Name'}</label>
+                      <input
+                        type="text"
+                        className="wizard-input"
+                        placeholder={formData.authCheckType === 'cookie' ? 'session_id' : 'Authorization'}
+                        value={formData.authHeaderName}
+                        onChange={(e) => setFormData({ ...formData, authHeaderName: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -389,7 +455,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 className="wizard-step-content"
               >
                 <div className="step-icon">
-                  <Lock size={48} color="#14b8a6" />
+                  <Lock size={48} color="var(--teal-color)" />
                 </div>
                 <h2>How should we secure the connection?</h2>
                 <p className="step-description">
@@ -404,7 +470,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                     <div className="option-header">
                       <Lock size={20} />
                       <span className="option-title">Let's Encrypt (Recommended)</span>
-                      {formData.sslOption === 'letsencrypt' && <CheckCircle size={18} color="#10b981" />}
+                      {formData.sslOption === 'letsencrypt' && <CheckCircle size={18} color="var(--success-color)" />}
                     </div>
                     <p className="option-desc">Automatic certificate generation and renewal. Free and secure.</p>
                     <ul className="option-features">
@@ -421,36 +487,44 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                     <div className="option-header">
                       <Lock size={20} />
                       <span className="option-title">Custom Certificate</span>
-                      {formData.sslOption === 'custom' && <CheckCircle size={18} color="#10b981" />}
+                      {formData.sslOption === 'custom' && <CheckCircle size={18} color="var(--success-color)" />}
                     </div>
                     <p className="option-desc">Upload your own SSL certificate and private key.</p>
                     {formData.sslOption === 'custom' && (
                       <div className="upload-section">
+                        {existingApp && existingApp.ssl_option === 'custom' && !formData.customCert && !formData.customKey && (
+                          <div className="input-hint" style={{ marginBottom: '8px' }}>
+                            A certificate is already on file for this app. Leave both fields blank to keep it, or upload new files to replace it.
+                          </div>
+                        )}
                         <label className="upload-label">
                           <input type="file" accept=".crt,.pem" onChange={(e) => setFormData({ ...formData, customCert: e.target.files[0] })} />
-                          Certificate File (.crt, .pem)
+                          {formData.customCert ? formData.customCert.name : 'Certificate File (.crt, .pem)'}
                         </label>
                         <label className="upload-label">
                           <input type="file" accept=".key,.pem" onChange={(e) => setFormData({ ...formData, customKey: e.target.files[0] })} />
-                          Private Key (.key, .pem)
+                          {formData.customKey ? formData.customKey.name : 'Private Key (.key, .pem)'}
                         </label>
                       </div>
                     )}
                   </div>
 
                   <div
-                    className={`ssl-option ${formData.sslOption === 'none' ? 'selected' : ''}`}
-                    onClick={() => setFormData({ ...formData, sslOption: 'none' })}
+                    className={`ssl-option ${formData.sslOption === 'self-signed' ? 'selected' : ''}`}
+                    onClick={() => setFormData({ ...formData, sslOption: 'self-signed' })}
                   >
                     <div className="option-header">
-                      <AlertTriangle size={20} color="#f59e0b" />
-                      <span className="option-title">HTTP Only (Not Secure)</span>
-                      {formData.sslOption === 'none' && <CheckCircle size={18} color="#10b981" />}
+                      <AlertTriangle size={20} color="var(--warning-color)" />
+                      <span className="option-title">Self-Signed Certificate</span>
+                      {formData.sslOption === 'self-signed' && <CheckCircle size={18} color="var(--success-color)" />}
                     </div>
-                    <p className="option-desc">No encryption. Only use for internal testing.</p>
+                    <p className="option-desc">
+                      The WAF still terminates HTTPS, but with a certificate browsers won't trust automatically.
+                      Fine for internal tools or testing; not for public-facing apps.
+                    </p>
                     <div className="warning-box">
                       <AlertTriangle size={14} />
-                      <span>Not recommended for production environments</span>
+                      <span>Visitors will see a browser security warning</span>
                     </div>
                   </div>
                 </div>
@@ -467,7 +541,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 className="wizard-step-content"
               >
                 <div className="step-icon">
-                  <Globe size={48} color="#f59e0b" />
+                  <Globe size={48} color="var(--warning-color)" />
                 </div>
                 <h2>⚠️ REQUIRED: Update Your DNS Records</h2>
                 <p className="step-description">
@@ -576,7 +650,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 className="wizard-step-content"
               >
                 <div className="step-icon">
-                  <CheckCircle size={48} color="#10b981" />
+                  <CheckCircle size={48} color="var(--success-color)" />
                 </div>
                 <h2>Verify Configuration & Deploy</h2>
                 <p className="step-description">
@@ -606,14 +680,18 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                     <div className="summary-item">
                       <span className="summary-label">SSL/TLS:</span>
                       <span className="summary-value">
-                        {formData.sslOption === 'letsencrypt' ? 'Let\'s Encrypt (Auto)' : 
-                         formData.sslOption === 'custom' ? 'Custom Certificate' : 
-                         'HTTP Only'}
+                        {formData.sslOption === 'letsencrypt' ? 'Let\'s Encrypt (Auto)' :
+                         formData.sslOption === 'custom' ? 'Custom Certificate' :
+                         'Self-Signed Certificate'}
                       </span>
                     </div>
                     <div className="summary-item">
-                      <span className="summary-label">Protection Level:</span>
-                      <span className="summary-value">Level {formData.protectionLevel}</span>
+                      <span className="summary-label">Authentication:</span>
+                      <span className="summary-value">
+                        {formData.requireAuth
+                          ? `Required (${formData.authCheckType === 'cookie' ? 'cookie' : 'header'}: ${formData.authHeaderName})`
+                          : 'Not required'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -666,6 +744,15 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                     </div>
                   )}
                 </div>
+
+                {sslWarning && (
+                  <div className="warning-box" style={{ marginTop: '12px' }}>
+                    <AlertTriangle size={14} />
+                    <span>
+                      <strong>Application deployed, but certificate provisioning had a problem:</strong> {sslWarning}
+                    </span>
+                  </div>
+                )}
               </motion.div>
             )}
 
@@ -674,27 +761,36 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
 
         {/* Footer */}
         <div className="wizard-footer">
-          <button className="wizard-btn secondary" onClick={currentStep === 1 ? onClose : handleBack} disabled={isDeploying}>
-            {currentStep === 1 ? 'Cancel' : 'Back'}
-          </button>
-          <button
-            className="wizard-btn primary"
-            onClick={handleNext}
-            disabled={!canProceed() || isDeploying}
-          >
-            {currentStep === 5 ? (
-              isDeploying ? (
-                <>
-                  <RefreshCw size={16} className="animate-spin" />
-                  {deployStage === 'provisioning' ? 'Provisioning SSL...' : 'Deploying...'}
-                </>
-              ) : 'Deploy Protection'
-            ) : 'Continue'}
-            {currentStep < 5 && !isDeploying && <ChevronRight size={16} />}
-          </button>
+          {sslWarning ? (
+            <button className="wizard-btn primary" onClick={handleAcknowledgeSslWarning} style={{ marginLeft: 'auto' }}>
+              Close
+            </button>
+          ) : (
+            <>
+              <button className="wizard-btn secondary" onClick={currentStep === 1 ? onClose : handleBack} disabled={isDeploying}>
+                {currentStep === 1 ? 'Cancel' : 'Back'}
+              </button>
+              <button
+                className="wizard-btn primary"
+                onClick={handleNext}
+                disabled={!canProceed() || isDeploying}
+              >
+                {currentStep === 5 ? (
+                  isDeploying ? (
+                    <>
+                      <Activity size={16} className="animate-spin" />
+                      {deployStage === 'provisioning' ? 'Provisioning SSL...' : 'Deploying...'}
+                    </>
+                  ) : 'Deploy Protection'
+                ) : 'Continue'}
+                {currentStep < 5 && !isDeploying && <ChevronRight size={16} />}
+              </button>
+            </>
+          )}
         </div>
 
       </div>
+      <Toast toast={toast} />
     </div>
   );
 };

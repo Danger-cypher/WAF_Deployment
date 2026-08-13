@@ -1,15 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Users, Plus, Trash2, KeyRound, Check, X, ShieldCheck, ShieldAlert, Power, Smartphone } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
+import { Users, Plus, Trash2, KeyRound, X, ShieldCheck, ShieldAlert, Power, Smartphone } from 'lucide-react';
 import { listUsers, createUser, updateUser, resetUserPassword, deleteUser, adminDisableUserMfa } from '../services/api';
+import { useToast } from '../hooks/useToast';
+import Toast from './Toast';
+import Button from './Button';
+import { useConfirm } from '../hooks/useConfirm';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { usePagination } from '../hooks/usePagination';
+import Pagination from './Pagination';
 
 const inputStyle = {
   width: '100%',
   padding: '10px 12px',
   background: 'rgba(0,0,0,0.25)',
-  border: '1px solid rgba(255,255,255,0.12)',
+  border: '1px solid var(--border-strong)',
   borderRadius: '8px',
-  color: '#fff',
+  color: 'var(--text-primary)',
   fontSize: '14px',
   boxSizing: 'border-box',
 };
@@ -18,40 +25,28 @@ const labelStyle = {
   display: 'block',
   fontSize: '12px',
   fontWeight: 600,
-  color: 'rgba(255,255,255,0.6)',
+  color: 'var(--text-secondary)',
   marginBottom: '6px',
   textTransform: 'uppercase',
   letterSpacing: '0.03em',
 };
 
 function ModalShell({ title, onClose, children }) {
+  useEscapeToClose(onClose, true);
   return (
-    <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99998,
-      }}
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ opacity: 0, y: 20, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.97 }}
-        style={{
-          width: '420px', maxWidth: '92vw', background: '#12141c',
-          border: '1px solid rgba(255,255,255,0.1)', borderRadius: '14px', padding: '24px',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#fff' }}>{title}</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer' }}>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" style={{ maxWidth: '420px' }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-title">{title}</div>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
         </div>
-        {children}
-      </motion.div>
-    </motion.div>
+        <div className="modal-body">
+          {children}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -64,8 +59,8 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async () => {
-    if (!username.trim() || password.length < 8) {
-      showToast('Username is required and password must be at least 8 characters.', 'error');
+    if (!username.trim() || password.length < 12) {
+      showToast('Username is required and password must be at least 12 characters.', 'error');
       return;
     }
     setSaving(true);
@@ -95,7 +90,7 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
           <input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} placeholder="jdoe" autoFocus />
         </div>
         <div>
-          <label style={labelStyle}>Temporary Password (min 8 chars)</label>
+          <label style={labelStyle}>Temporary Password (min 12 chars, 3+ char types)</label>
           <input style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
         </div>
         <div>
@@ -113,17 +108,9 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
           <label style={labelStyle}>Email (optional)</label>
           <input style={inputStyle} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane@example.com" />
         </div>
-        <button
-          onClick={handleSubmit}
-          disabled={saving}
-          style={{
-            marginTop: '4px', padding: '11px', background: 'var(--accent-color)', border: 'none',
-            borderRadius: '8px', color: '#000', fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer',
-            opacity: saving ? 0.7 : 1,
-          }}
-        >
+        <Button variant="primary" loading={saving} onClick={handleSubmit} style={{ marginTop: '4px' }}>
           {saving ? 'Creating…' : 'Create User'}
-        </button>
+        </Button>
       </div>
     </ModalShell>
   );
@@ -134,8 +121,8 @@ function ResetPasswordModal({ user, onClose, showToast }) {
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async () => {
-    if (password.length < 8) {
-      showToast('New password must be at least 8 characters.', 'error');
+    if (password.length < 12) {
+      showToast('New password must be at least 12 characters.', 'error');
       return;
     }
     setSaving(true);
@@ -154,20 +141,12 @@ function ResetPasswordModal({ user, onClose, showToast }) {
     <ModalShell title={`Reset Password — ${user.username}`} onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div>
-          <label style={labelStyle}>New Password (min 8 chars)</label>
+          <label style={labelStyle}>New Password (min 12 chars, 3+ char types)</label>
           <input style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoFocus />
         </div>
-        <button
-          onClick={handleSubmit}
-          disabled={saving}
-          style={{
-            padding: '11px', background: 'var(--accent-color)', border: 'none',
-            borderRadius: '8px', color: '#000', fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer',
-            opacity: saving ? 0.7 : 1,
-          }}
-        >
+        <Button variant="primary" loading={saving} onClick={handleSubmit}>
           {saving ? 'Saving…' : 'Reset Password'}
-        </button>
+        </Button>
       </div>
     </ModalShell>
   );
@@ -176,15 +155,12 @@ function ResetPasswordModal({ user, onClose, showToast }) {
 export default function UserManagement({ currentUsername }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState(null);
+  const { toast, showToast } = useToast();
+  const confirm = useConfirm();
+  const { page, totalPages, total, pageItems, goToPrev, goToNext } = usePagination(users, 15);
   const [showCreate, setShowCreate] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
   const [busyId, setBusyId] = useState(null);
-
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -227,7 +203,12 @@ export default function UserManagement({ currentUsername }) {
   };
 
   const handleDelete = async (user) => {
-    if (!window.confirm(`Delete user "${user.username}"? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: 'Delete user',
+      message: `Delete user "${user.username}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     setBusyId(user.id);
     try {
       await deleteUser(user.id);
@@ -241,7 +222,12 @@ export default function UserManagement({ currentUsername }) {
   };
 
   const handleForceDisableMfa = async (user) => {
-    if (!window.confirm(`Disable two-factor authentication for "${user.username}"? Use this if they lost their authenticator device.`)) return;
+    if (!(await confirm({
+      title: 'Disable 2FA',
+      message: `Disable two-factor authentication for "${user.username}"? Use this if they lost their authenticator device.`,
+      confirmLabel: 'Disable 2FA',
+      danger: true,
+    }))) return;
     setBusyId(user.id);
     try {
       await adminDisableUserMfa(user.id);
@@ -261,45 +247,37 @@ export default function UserManagement({ currentUsername }) {
           <Users size={24} style={{ color: 'var(--accent-color)' }} />
           <span>User Management</span>
         </h2>
-        <button
-          onClick={() => setShowCreate(true)}
-          style={{
-            padding: '10px 20px', background: 'var(--accent-color)', border: 'none', borderRadius: '8px',
-            color: '#000', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px',
-            boxShadow: '0 4px 14px rgba(0, 212, 255, 0.3)',
-          }}
-        >
-          <Plus size={18} />
+        <Button variant="primary" icon={Plus} onClick={() => setShowCreate(true)}>
           Add User
-        </button>
+        </Button>
       </div>
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '60px', color: 'rgba(255,255,255,0.5)' }}>Loading users…</div>
+        <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-secondary)' }}>Loading users…</div>
       ) : (
         <div style={{
-          background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)',
+          background: 'var(--inset-bg)', border: '1px solid var(--surface-strong)',
           borderRadius: '12px', overflow: 'hidden',
         }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
             <thead>
-              <tr style={{ background: 'rgba(255,255,255,0.03)', textAlign: 'left' }}>
+              <tr style={{ background: 'var(--surface-subtle)', textAlign: 'left' }}>
                 {['User', 'Role', 'Status', '2FA', 'Last Login', ''].map((h) => (
-                  <th key={h} style={{ padding: '12px 16px', color: 'rgba(255,255,255,0.5)', fontWeight: 600, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  <th key={h} style={{ padding: '12px 16px', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                     {h}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => {
+              {pageItems.map((u) => {
                 const isSelf = u.username === currentUsername;
                 return (
-                  <tr key={u.id} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <tr key={u.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                     <td style={{ padding: '14px 16px' }}>
-                      <div style={{ fontWeight: 600, color: '#fff' }}>{u.username}{isSelf && <span style={{ color: 'var(--accent-color)', fontSize: '11px', marginLeft: '8px' }}>(you)</span>}</div>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{u.username}{isSelf && <span style={{ color: 'var(--accent-color)', fontSize: '11px', marginLeft: '8px' }}>(you)</span>}</div>
                       {(u.display_name || u.email) && (
-                        <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.45)' }}>
+                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                           {[u.display_name, u.email].filter(Boolean).join(' · ')}
                         </div>
                       )}
@@ -312,7 +290,7 @@ export default function UserManagement({ currentUsername }) {
                         onChange={(e) => handleRoleChange(u, e.target.value)}
                         style={{
                           ...inputStyle, width: 'auto', padding: '6px 10px', fontSize: '12px',
-                          color: u.role === 'admin' ? '#fca5a5' : '#a5b4fc',
+                          color: u.role === 'admin' ? 'var(--danger-color)' : 'var(--accent-color)',
                         }}
                       >
                         <option value="analyst">Analyst</option>
@@ -323,8 +301,8 @@ export default function UserManagement({ currentUsername }) {
                       <span style={{
                         display: 'inline-flex', alignItems: 'center', gap: '6px',
                         padding: '4px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: 600,
-                        background: u.enabled ? 'rgba(52,211,153,0.12)' : 'rgba(255,255,255,0.08)',
-                        color: u.enabled ? '#34d399' : 'rgba(255,255,255,0.5)',
+                        background: u.enabled ? 'var(--success-bg)' : 'var(--surface-strong)',
+                        color: u.enabled ? 'var(--success-color)' : 'var(--text-secondary)',
                       }}>
                         {u.enabled ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
                         {u.enabled ? 'Active' : 'Disabled'}
@@ -333,48 +311,41 @@ export default function UserManagement({ currentUsername }) {
                     <td style={{ padding: '14px 16px' }}>
                       <span
                         title={u.mfa_enabled ? 'Two-factor authentication enabled' : 'Two-factor authentication not enabled'}
-                        style={{ display: 'inline-flex', alignItems: 'center', color: u.mfa_enabled ? '#34d399' : 'rgba(255,255,255,0.25)' }}
+                        style={{ display: 'inline-flex', alignItems: 'center', color: u.mfa_enabled ? 'var(--success-color)' : 'var(--border-strong)' }}
                       >
                         <Smartphone size={16} />
                       </span>
                     </td>
-                    <td style={{ padding: '14px 16px', color: 'rgba(255,255,255,0.5)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                    <td style={{ padding: '14px 16px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
                       {u.last_login_at ? u.last_login_at.replace('T', ' ').split('.')[0] : 'Never'}
                     </td>
                     <td style={{ padding: '14px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <button
+                      <Button
+                        variant="ghost" size="sm" icon={KeyRound}
                         title="Reset password"
                         onClick={() => setResetTarget(u)}
-                        style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', padding: '6px' }}
-                      >
-                        <KeyRound size={16} />
-                      </button>
+                      />
                       {u.mfa_enabled && (
-                        <button
+                        <Button
+                          variant="ghost" size="sm" icon={Smartphone}
                           title="Force-disable 2FA (account recovery)"
                           disabled={busyId === u.id}
                           onClick={() => handleForceDisableMfa(u)}
-                          style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: busyId === u.id ? 'not-allowed' : 'pointer', padding: '6px' }}
-                        >
-                          <Smartphone size={16} />
-                        </button>
+                        />
                       )}
-                      <button
+                      <Button
+                        variant="ghost" size="sm" icon={Power}
                         title={u.enabled ? 'Disable user' : 'Enable user'}
                         disabled={isSelf || busyId === u.id}
                         onClick={() => handleToggleEnabled(u)}
-                        style={{ background: 'none', border: 'none', color: isSelf ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.5)', cursor: isSelf ? 'not-allowed' : 'pointer', padding: '6px' }}
-                      >
-                        <Power size={16} />
-                      </button>
-                      <button
+                      />
+                      <Button
+                        variant="ghost" size="sm" icon={Trash2}
                         title="Delete user"
                         disabled={isSelf || busyId === u.id}
                         onClick={() => handleDelete(u)}
-                        style={{ background: 'none', border: 'none', color: isSelf ? 'rgba(255,255,255,0.2)' : '#f87171', cursor: isSelf ? 'not-allowed' : 'pointer', padding: '6px' }}
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                        style={{ color: isSelf ? undefined : 'var(--danger-color)' }}
+                      />
                     </td>
                   </tr>
                 );
@@ -383,6 +354,7 @@ export default function UserManagement({ currentUsername }) {
           </table>
         </div>
       )}
+      <Pagination page={page} totalPages={totalPages} total={total} itemLabel="users" onPrev={goToPrev} onNext={goToNext} />
 
       <AnimatePresence>
         {showCreate && (
@@ -393,23 +365,7 @@ export default function UserManagement({ currentUsername }) {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.95 }}
-            style={{
-              position: 'fixed', bottom: '24px', right: '24px', padding: '12px 24px',
-              background: toast.type === 'error' ? 'rgba(255, 59, 92, 0.95)' : 'rgba(0, 212, 255, 0.95)',
-              border: toast.type === 'error' ? '1px solid #ff3b5c' : '1px solid #00d4ff',
-              borderRadius: '8px', color: toast.type === 'error' ? '#fff' : '#000', fontWeight: 600,
-              display: 'flex', alignItems: 'center', gap: '10px', zIndex: 99999, boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
-            }}
-          >
-            {toast.type === 'error' ? <X size={16} /> : <Check size={16} />}
-            <span>{toast.message}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Toast toast={toast} />
     </div>
   );
 }

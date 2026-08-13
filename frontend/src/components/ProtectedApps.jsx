@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Trash2, Edit2, Server, Globe, Power, Check, X, Shield, Activity, ArrowRight, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2 } from 'lucide-react';
-import { getProtectedApps, createProtectedApp, updateProtectedApp, deleteProtectedApp, toggleProtectedApp } from '../services/api';
+import { Plus, Trash2, Edit2, Server, Globe, Power, Shield, Activity, ArrowRight, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2 } from 'lucide-react';
+import { getProtectedApps, deleteProtectedApp, toggleProtectedApp } from '../services/api';
+import { useToast } from '../hooks/useToast';
+import Toast from './Toast';
+import { useConfirm } from '../hooks/useConfirm';
 
 const PREREQUISITES = [
   {
     icon: Zap,
-    color: '#f59e0b',
+    color: 'var(--warning-color)',
     bg: 'rgba(245, 158, 11, 0.1)',
     border: 'rgba(245, 158, 11, 0.2)',
     step: '01',
@@ -16,7 +19,7 @@ const PREREQUISITES = [
   },
   {
     icon: Network,
-    color: '#00d4ff',
+    color: 'var(--cyan-color)',
     bg: 'rgba(0, 212, 255, 0.1)',
     border: 'rgba(0, 212, 255, 0.2)',
     step: '02',
@@ -26,9 +29,9 @@ const PREREQUISITES = [
   },
   {
     icon: Globe,
-    color: '#a78bfa',
-    bg: 'rgba(167, 139, 250, 0.1)',
-    border: 'rgba(167, 139, 250, 0.2)',
+    color: 'var(--ml-color)',
+    bg: 'var(--ml-bg)',
+    border: 'var(--ml-bg)',
     step: '03',
     title: 'Point Your DNS to This WAF Server',
     desc: 'In your domain registrar (e.g. GoDaddy, Cloudflare DNS, Route53), create an A Record pointing your domain to this WAF server\'s public IP address — NOT directly to your backend. This forces all traffic through the WAF.',
@@ -36,9 +39,9 @@ const PREREQUISITES = [
   },
   {
     icon: Lock,
-    color: '#34d399',
-    bg: 'rgba(52, 211, 153, 0.1)',
-    border: 'rgba(52, 211, 153, 0.2)',
+    color: 'var(--success-color)',
+    bg: 'var(--success-bg)',
+    border: 'var(--success-glow)',
     step: '04',
     title: 'Decide on SSL/TLS',
     desc: 'Choose how HTTPS will be handled. Use "Self-Signed" for internal/test environments, or upload your own certificate for production. The WAF terminates SSL at its edge and proxies plain HTTP to your backend internally.',
@@ -46,9 +49,9 @@ const PREREQUISITES = [
   },
   {
     icon: Key,
-    color: '#f87171',
-    bg: 'rgba(248, 113, 113, 0.1)',
-    border: 'rgba(248, 113, 113, 0.2)',
+    color: 'var(--danger-color)',
+    bg: 'var(--danger-bg)',
+    border: 'var(--danger-border)',
     step: '05',
     title: 'Unique Domain Per Application',
     desc: 'Each application you register must use a unique domain name. The WAF uses the domain (Host header) to route traffic to the correct backend. Two apps cannot share the same domain.',
@@ -79,7 +82,7 @@ function PrerequisitesPanel() {
           background: 'transparent',
           border: 'none',
           cursor: 'pointer',
-          color: '#fff',
+          color: 'var(--text-primary)',
           gap: '12px',
         }}
       >
@@ -89,13 +92,13 @@ function PrerequisitesPanel() {
             background: 'rgba(0, 212, 255, 0.12)', border: '1px solid rgba(0, 212, 255, 0.25)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
           }}>
-            <CheckCircle2 size={18} style={{ color: '#00d4ff' }} />
+            <CheckCircle2 size={18} style={{ color: 'var(--cyan-color)' }} />
           </div>
           <div style={{ textAlign: 'left' }}>
-            <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>
+            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>
               Before You Start — Prerequisites Checklist
             </div>
-            <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', marginTop: '2px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
               5 things to prepare before configuring WAF protection for any application
             </div>
           </div>
@@ -124,8 +127,8 @@ function PrerequisitesPanel() {
               padding: '0 24px 24px',
               borderTop: '1px solid rgba(0, 212, 255, 0.1)',
             }}>
-              <p style={{ margin: '16px 0 20px', fontSize: '13px', color: 'rgba(255,255,255,0.5)', lineHeight: 1.6 }}>
-                Complete this checklist before clicking <strong style={{ color: '#fff' }}>Add Application</strong>. 
+              <p style={{ margin: '16px 0 20px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                Complete this checklist before clicking <strong style={{ color: 'var(--text-primary)' }}>Add Application</strong>. 
                 The WAF will handle everything automatically once these requirements are in place.
               </p>
               <div style={{
@@ -155,7 +158,7 @@ function PrerequisitesPanel() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <div style={{
                           width: '36px', height: '36px', borderRadius: '9px',
-                          background: 'rgba(0,0,0,0.2)', border: `1px solid ${item.border}`,
+                          background: 'var(--inset-bg)', border: `1px solid ${item.border}`,
                           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                         }}>
                           <Icon size={18} style={{ color: item.color }} />
@@ -164,21 +167,21 @@ function PrerequisitesPanel() {
                           <div style={{ fontSize: '10px', fontWeight: 700, color: item.color, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                             Step {item.step}
                           </div>
-                          <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>
+                          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
                             {item.title}
                           </div>
                         </div>
                       </div>
 
                       {/* Description */}
-                      <p style={{ margin: 0, fontSize: '13px', color: 'rgba(255,255,255,0.65)', lineHeight: 1.6 }}>
+                      <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                         {item.desc}
                       </p>
 
                       {/* Tip pill */}
                       <div style={{
                         display: 'flex', alignItems: 'center', gap: '6px',
-                        background: 'rgba(0,0,0,0.25)', borderRadius: '6px', padding: '7px 10px',
+                        background: 'var(--inset-bg)', borderRadius: '6px', padding: '7px 10px',
                         fontSize: '12px', color: item.color, fontFamily: 'monospace',
                         borderLeft: `3px solid ${item.color}`,
                       }}>
@@ -193,17 +196,17 @@ function PrerequisitesPanel() {
               {/* Flow summary */}
               <div style={{
                 marginTop: '20px', padding: '14px 18px',
-                background: 'rgba(0,0,0,0.2)', borderRadius: '10px',
-                border: '1px solid rgba(255,255,255,0.06)',
+                background: 'var(--inset-bg)', borderRadius: '10px',
+                border: '1px solid var(--border-color)',
                 display: 'flex', alignItems: 'center', gap: '8px',
-                fontSize: '13px', color: 'rgba(255,255,255,0.6)', flexWrap: 'wrap',
+                fontSize: '13px', color: 'var(--text-secondary)', flexWrap: 'wrap',
               }}>
-                <Shield size={14} style={{ color: '#00d4ff', flexShrink: 0 }} />
-                <span style={{ fontWeight: 600, color: '#fff' }}>Traffic Flow:</span>
+                <Shield size={14} style={{ color: 'var(--cyan-color)', flexShrink: 0 }} />
+                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Traffic Flow:</span>
                 {['Internet', 'WAF (Port 80/443)', 'CyberSentinel Engine + ML Check', 'Your Backend App'].map((step, i, arr) => (
                   <span key={step} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ color: i === 0 ? 'rgba(255,255,255,0.6)' : i === arr.length - 1 ? '#34d399' : '#00d4ff', fontWeight: i === arr.length - 1 ? 600 : 400 }}>{step}</span>
-                    {i < arr.length - 1 && <ArrowRight size={12} style={{ color: 'rgba(255,255,255,0.3)' }} />}
+                    <span style={{ color: i === 0 ? 'var(--text-secondary)' : i === arr.length - 1 ? 'var(--success-color)' : 'var(--cyan-color)', fontWeight: i === arr.length - 1 ? 600 : 400 }}>{step}</span>
+                    {i < arr.length - 1 && <ArrowRight size={12} style={{ color: 'var(--text-muted)' }} />}
                   </span>
                 ))}
               </div>
@@ -222,27 +225,8 @@ export default function ProtectedApps({ onOpenWizard }) {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [togglingId, setTogglingId] = useState(null);
-  const [toast, setToast] = useState(null);
-
-  // Form modals state
-  const [showModal, setShowModal] = useState(false);
-  const [modalMode, setModalMode] = useState("create"); // "create" or "edit"
-  const [selectedApp, setSelectedApp] = useState(null);
-
-  // Form fields
-  const [name, setName] = useState("");
-  const [domain, setDomain] = useState("");
-  const [upstreamHost, setUpstreamHost] = useState("");
-  const [upstreamPort, setUpstreamPort] = useState(80);
-  const [protocol, setProtocol] = useState("http");
-  const [isActive, setIsActive] = useState(1);
-  const [rateLimitRps, setRateLimitRps] = useState(50);
-  const [burstTolerance, setBurstTolerance] = useState(100);
-
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
+  const { toast, showToast } = useToast();
+  const confirm = useConfirm();
 
   const fetchApps = async () => {
     setLoading(true);
@@ -261,72 +245,13 @@ export default function ProtectedApps({ onOpenWizard }) {
     fetchApps();
   }, []);
 
-  const handleOpenCreateModal = () => {
-    setModalMode("create");
-    setSelectedApp(null);
-    setName("");
-    setDomain("");
-    setUpstreamHost("");
-    setUpstreamPort(80);
-    setProtocol("http");
-    setIsActive(1);
-    setRateLimitRps(50);
-    setBurstTolerance(100);
-    setShowModal(true);
-  };
-
-  const handleOpenEditModal = (app) => {
-    setModalMode("edit");
-    setSelectedApp(app);
-    setName(app.name);
-    setDomain(app.domain);
-    setUpstreamHost(app.upstream_host);
-    setUpstreamPort(app.upstream_port);
-    setProtocol(app.protocol);
-    setIsActive(app.is_active);
-    setRateLimitRps(app.rate_limit_rps || 50);
-    setBurstTolerance(app.burst_tolerance || 100);
-    setShowModal(true);
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!name || !domain || !upstreamHost || !upstreamPort) {
-      showToast("All fields are required.", "error");
-      return;
-    }
-
-    setActionLoading(true);
-    const appData = {
-      name: name.trim(),
-      domain: domain.trim().toLowerCase(),
-      upstream_host: upstreamHost.trim(),
-      upstream_port: parseInt(upstreamPort),
-      protocol: protocol.toLowerCase(),
-      is_active: parseInt(isActive),
-      rate_limit_rps: parseInt(rateLimitRps),
-      burst_tolerance: parseInt(burstTolerance)
-    };
-
-    try {
-      if (modalMode === "create") {
-        await createProtectedApp(appData);
-        showToast("Protected application added successfully!");
-      } else {
-        await updateProtectedApp(selectedApp.id, appData);
-        showToast("Protected application updated successfully!");
-      }
-      setShowModal(false);
-      fetchApps();
-    } catch (err) {
-      showToast("Error saving application: " + (err.message || "Configuration invalid"), "error");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
   const handleDeleteApp = async (appId) => {
-    if (!window.confirm("Are you sure you want to remove this protected application? Nginx configuration will be updated and reloaded.")) {
+    if (!(await confirm({
+      title: 'Remove protected application',
+      message: 'Are you sure you want to remove this protected application? Nginx configuration will be updated and reloaded.',
+      confirmLabel: 'Remove',
+      danger: true,
+    }))) {
       return;
     }
     setActionLoading(true);
@@ -364,7 +289,7 @@ export default function ProtectedApps({ onOpenWizard }) {
           <span>Protected Applications</span>
         </h2>
         <button
-          onClick={() => onOpenWizard ? onOpenWizard() : handleOpenCreateModal()}
+          onClick={() => onOpenWizard()}
           disabled={actionLoading}
           style={{
             padding: '10px 20px',
@@ -390,7 +315,7 @@ export default function ProtectedApps({ onOpenWizard }) {
       <PrerequisitesPanel />
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '60px', color: 'rgba(255,255,255,0.5)' }}>
+        <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-secondary)' }}>
           <Activity className="animate-spin" size={32} style={{ margin: '0 auto 16px', color: 'var(--accent-color)' }} />
           <span>Fetching configuration status...</span>
         </div>
@@ -398,15 +323,15 @@ export default function ProtectedApps({ onOpenWizard }) {
         <div style={{
           textAlign: 'center',
           padding: '80px 40px',
-          background: 'rgba(0,0,0,0.15)',
+          background: 'var(--inset-bg)',
           borderRadius: '16px',
-          border: '1px dashed rgba(255,255,255,0.1)'
+          border: '1px dashed var(--border-strong)'
         }}>
-          <Server size={48} style={{ color: 'rgba(255,255,255,0.2)', marginBottom: '16px' }} />
-          <h3 style={{ margin: '0 0 8px', fontSize: '18px', color: '#fff' }}>No Applications Configured</h3>
-          <p style={{ margin: '0 0 24px', color: 'rgba(255,255,255,0.5)', fontSize: '14px' }}>Get started by adding your first protected service.</p>
+          <Server size={48} style={{ color: 'var(--border-strong)', marginBottom: '16px' }} />
+          <h3 style={{ margin: '0 0 8px', fontSize: '18px', color: 'var(--text-primary)' }}>No Applications Configured</h3>
+          <p style={{ margin: '0 0 24px', color: 'var(--text-secondary)', fontSize: '14px' }}>Get started by adding your first protected service.</p>
           <button
-            onClick={() => onOpenWizard ? onOpenWizard() : handleOpenCreateModal()}
+            onClick={() => onOpenWizard()}
             style={{
               padding: '10px 20px',
               background: 'rgba(0, 212, 255, 0.15)',
@@ -428,8 +353,8 @@ export default function ProtectedApps({ onOpenWizard }) {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               style={{
-                background: app.is_active ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.01)',
-                border: app.is_active ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(255,255,255,0.03)',
+                background: app.is_active ? 'var(--inset-bg)' : 'var(--surface-subtle)',
+                border: app.is_active ? '1px solid var(--surface-strong)' : '1px solid var(--surface-subtle)',
                 borderRadius: '12px',
                 padding: '20px',
                 display: 'flex',
@@ -441,7 +366,7 @@ export default function ProtectedApps({ onOpenWizard }) {
             >
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: app.is_active ? '#fff' : 'rgba(255,255,255,0.4)' }}>
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: app.is_active ? '#fff' : 'var(--text-secondary)' }}>
                     {app.name}
                   </h3>
                   <span style={{
@@ -450,9 +375,9 @@ export default function ProtectedApps({ onOpenWizard }) {
                     fontSize: '11px',
                     fontWeight: 600,
                     textTransform: 'uppercase',
-                    background: app.is_active ? 'rgba(0, 212, 255, 0.1)' : 'rgba(255,255,255,0.05)',
-                    color: app.is_active ? 'var(--accent-color)' : 'rgba(255,255,255,0.4)',
-                    border: app.is_active ? '1px solid rgba(0, 212, 255, 0.2)' : '1px solid rgba(255,255,255,0.05)'
+                    background: app.is_active ? 'rgba(0, 212, 255, 0.1)' : 'var(--surface-hover)',
+                    color: app.is_active ? 'var(--accent-color)' : 'var(--text-secondary)',
+                    border: app.is_active ? '1px solid rgba(0, 212, 255, 0.2)' : '1px solid var(--surface-hover)'
                   }}>
                     {app.is_active ? 'Active' : 'Disabled'}
                   </span>
@@ -460,23 +385,23 @@ export default function ProtectedApps({ onOpenWizard }) {
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px', fontSize: '13px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Globe size={14} style={{ color: 'rgba(255,255,255,0.4)' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.6)' }}>Domain:</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: app.is_active ? 'var(--accent-color)' : 'rgba(255,255,255,0.4)' }}>
+                    <Globe size={14} style={{ color: 'var(--text-muted)' }} />
+                    <span style={{ color: 'var(--text-secondary)' }}>Domain:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: app.is_active ? 'var(--accent-color)' : 'var(--text-secondary)' }}>
                       {app.domain}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Server size={14} style={{ color: 'rgba(255,255,255,0.4)' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.6)' }}>Upstream:</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: app.is_active ? '#fff' : 'rgba(255,255,255,0.4)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Server size={14} style={{ color: 'var(--text-muted)' }} />
+                    <span style={{ color: 'var(--text-secondary)' }}>Upstream:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: app.is_active ? '#fff' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       {app.protocol}://{app.upstream_host}:{app.upstream_port}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Shield size={14} style={{ color: 'rgba(255,255,255,0.4)' }} />
-                    <span style={{ color: 'rgba(255,255,255,0.6)' }}>Rate Limit:</span>
-                    <span style={{ color: app.is_active ? '#fff' : 'rgba(255,255,255,0.4)' }}>
+                    <Shield size={14} style={{ color: 'var(--text-muted)' }} />
+                    <span style={{ color: 'var(--text-secondary)' }}>Rate Limit:</span>
+                    <span style={{ color: app.is_active ? '#fff' : 'var(--text-secondary)' }}>
                       {app.rate_limit_rps} RPS (Burst: {app.burst_tolerance})
                     </span>
                   </div>
@@ -486,7 +411,7 @@ export default function ProtectedApps({ onOpenWizard }) {
               <div style={{
                 display: 'flex',
                 gap: '10px',
-                borderTop: '1px solid rgba(255,255,255,0.05)',
+                borderTop: '1px solid var(--surface-hover)',
                 paddingTop: '16px',
                 justifyContent: 'flex-end'
               }}>
@@ -497,7 +422,7 @@ export default function ProtectedApps({ onOpenWizard }) {
                   style={{
                     padding: '8px',
                     borderRadius: '6px',
-                    border: '1px solid rgba(255,255,255,0.05)',
+                    border: '1px solid var(--surface-hover)',
                     background: app.is_active ? 'rgba(255, 59, 92, 0.1)' : 'rgba(0, 212, 255, 0.1)',
                     color: app.is_active ? 'var(--danger-color)' : 'var(--accent-color)',
                     cursor: 'pointer',
@@ -515,14 +440,14 @@ export default function ProtectedApps({ onOpenWizard }) {
                   )}
                 </button>
                 <button
-                  onClick={() => onOpenWizard ? onOpenWizard(app) : handleOpenEditModal(app)}
+                  onClick={() => onOpenWizard(app)}
                   disabled={actionLoading}
                   style={{
                     padding: '8px 12px',
                     borderRadius: '6px',
-                    border: '1px solid rgba(255,255,255,0.05)',
-                    background: 'rgba(255,255,255,0.03)',
-                    color: '#fff',
+                    border: '1px solid var(--surface-hover)',
+                    background: 'var(--surface-subtle)',
+                    color: 'var(--text-primary)',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
@@ -558,306 +483,8 @@ export default function ProtectedApps({ onOpenWizard }) {
         </div>
       )}
 
-      {/* Slide-over or Modal Overlay */}
-      <AnimatePresence>
-        {showModal && (
-          <div style={{
-            position: 'fixed',
-            top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(0,0,0,0.6)',
-            backdropFilter: 'blur(4px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999
-          }}>
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              style={{
-                background: 'rgba(20, 20, 20, 0.95)',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-                borderRadius: '16px',
-                padding: '30px',
-                width: '100%',
-                maxWidth: '480px',
-                boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#fff' }}>
-                  {modalMode === "create" ? "Add Protected Application" : "Edit Application Configuration"}
-                </h3>
-                <button
-                  onClick={() => setShowModal(false)}
-                  style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer' }}
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <form onSubmit={handleSubmit}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                      Application Name
-                    </label>
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. Production API Portal"
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        background: 'rgba(0,0,0,0.3)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: '8px',
-                        color: '#fff',
-                        fontSize: '14px'
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                      Domain Name (server_name)
-                    </label>
-                    <input
-                      type="text"
-                      value={domain}
-                      onChange={(e) => setDomain(e.target.value)}
-                      placeholder="e.g. api.company.com or '_'"
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        background: 'rgba(0,0,0,0.3)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: '8px',
-                        color: '#fff',
-                        fontSize: '14px',
-                        fontFamily: 'var(--font-mono)'
-                      }}
-                    />
-                    <small style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px', marginTop: '4px', display: 'block' }}>
-                      Use <strong>_</strong> as domain to serve as the default server matching any hostname.
-                    </small>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                        Protocol
-                      </label>
-                      <select
-                        value={protocol}
-                        onChange={(e) => setProtocol(e.target.value)}
-                        style={{
-                          width: '100%',
-                          padding: '10px 14px',
-                          background: 'rgba(0,0,0,0.3)',
-                          border: '1px solid rgba(255,255,255,0.1)',
-                          borderRadius: '8px',
-                          color: '#fff',
-                          fontSize: '14px'
-                        }}
-                      >
-                        <option value="http">http</option>
-                        <option value="https">https</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                        Upstream Port
-                      </label>
-                      <input
-                        type="number"
-                        value={upstreamPort}
-                        onChange={(e) => setUpstreamPort(e.target.value)}
-                        placeholder="7000"
-                        min="1"
-                        max="65535"
-                        required
-                        style={{
-                          width: '100%',
-                          padding: '10px 14px',
-                          background: 'rgba(0,0,0,0.3)',
-                          border: '1px solid rgba(255,255,255,0.1)',
-                          borderRadius: '8px',
-                          color: '#fff',
-                          fontSize: '14px'
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                      Upstream Host IP / Container Name
-                    </label>
-                    <input
-                      type="text"
-                      value={upstreamHost}
-                      onChange={(e) => setUpstreamHost(e.target.value)}
-                      placeholder="e.g. host.docker.internal or 192.168.1.50"
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        background: 'rgba(0,0,0,0.3)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: '8px',
-                        color: '#fff',
-                        fontSize: '14px',
-                        fontFamily: 'var(--font-mono)'
-                      }}
-                    />
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                        Rate Limit (RPS)
-                      </label>
-                      <input
-                        type="number"
-                        value={rateLimitRps}
-                        onChange={(e) => setRateLimitRps(e.target.value)}
-                        placeholder="50"
-                        min="1"
-                        max="10000"
-                        required
-                        style={{
-                          width: '100%',
-                          padding: '10px 14px',
-                          background: 'rgba(0,0,0,0.3)',
-                          border: '1px solid rgba(255,255,255,0.1)',
-                          borderRadius: '8px',
-                          color: '#fff',
-                          fontSize: '14px'
-                        }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                        Burst Tolerance
-                      </label>
-                      <input
-                        type="number"
-                        value={burstTolerance}
-                        onChange={(e) => setBurstTolerance(e.target.value)}
-                        placeholder="100"
-                        min="1"
-                        max="20000"
-                        required
-                        style={{
-                          width: '100%',
-                          padding: '10px 14px',
-                          background: 'rgba(0,0,0,0.3)',
-                          border: '1px solid rgba(255,255,255,0.1)',
-                          borderRadius: '8px',
-                          color: '#fff',
-                          fontSize: '14px'
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                      Activation Mode
-                    </label>
-                    <select
-                      value={isActive}
-                      onChange={(e) => setIsActive(parseInt(e.target.value))}
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        background: 'rgba(0,0,0,0.3)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: '8px',
-                        color: '#fff',
-                        fontSize: '14px'
-                      }}
-                    >
-                      <option value={1}>Enabled (Active Routing)</option>
-                      <option value={0}>Disabled (No routing)</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowModal(false)}
-                    style={{
-                      padding: '10px 20px',
-                      background: 'transparent',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: '8px',
-                      color: 'rgba(255,255,255,0.7)',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={actionLoading}
-                    style={{
-                      padding: '10px 20px',
-                      background: 'var(--accent-color)',
-                      border: 'none',
-                      borderRadius: '8px',
-                      color: '#000',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      boxShadow: '0 4px 14px rgba(0, 212, 255, 0.2)'
-                    }}
-                  >
-                    {actionLoading ? "Syncing..." : modalMode === "create" ? "Add App" : "Apply Changes"}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       {/* Floating success/error Toast notification */}
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.95 }}
-            style={{
-              position: 'fixed',
-              bottom: '24px',
-              right: '24px',
-              padding: '12px 24px',
-              background: toast.type === 'error' ? 'rgba(255, 59, 92, 0.95)' : 'rgba(0, 212, 255, 0.95)',
-              border: toast.type === 'error' ? '1px solid #ff3b5c' : '1px solid #00d4ff',
-              borderRadius: '8px',
-              color: toast.type === 'error' ? '#fff' : '#000',
-              fontWeight: 600,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              zIndex: 99999,
-              boxShadow: '0 10px 30px rgba(0,0,0,0.3)'
-            }}
-          >
-            {toast.type === 'error' ? <X size={16} /> : <Check size={16} />}
-            <span>{toast.message}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Toast toast={toast} />
     </div>
   );
 }

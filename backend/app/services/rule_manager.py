@@ -4,6 +4,7 @@ import glob
 import json
 import logging
 import subprocess
+import tempfile
 from datetime import datetime
 from collections import Counter, defaultdict
 from typing import List, Dict, Any, Optional, Tuple
@@ -17,6 +18,15 @@ RULES_DIR = "/etc/nginx/modsec/coreruleset/rules"
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "rule_states.json"
 )
+
+# CyberSentinel policy: REST method enforcement (911100) is permanently
+# removed so DELETE/PUT/PATCH requests to REST APIs aren't blocked by
+# default. This is baked into every generated override file regardless of
+# the DB's disabled_rule_ids, so get_all_rules/get_rule_by_id/toggle_rule
+# must report it consistently — otherwise the dashboard can show "Enabled"
+# (and even report a successful "enable" toggle) for a rule that is never
+# actually enforced.
+PERMANENTLY_DISABLED_RULE_IDS = {"911100"}
 
 # Category mapping based on filename
 CATEGORY_MAP = {
@@ -407,8 +417,10 @@ def _update_modsecurity_override_file(
     outbound_anomaly_threshold: int = 4,
 ) -> Tuple[bool, str]:
     """
-    Safely writes override directives into /etc/nginx/modsec/rules-override.conf.
-    If system file write is not allowed, logs the warning and returns success for simulation.
+    Writes override directives into /etc/nginx/modsec/rules-override.conf.
+    Returns (False, reason) whenever the write genuinely fails — callers rely on
+    this to decide whether to roll back and whether to tell the admin their
+    change was NOT applied, so this must never report success on a failed write.
     """
     override_path = "/etc/nginx/modsec/rules-override.conf"
 
@@ -464,30 +476,46 @@ def _update_modsecurity_override_file(
 
     content = "\n".join(lines) + "\n"
 
-    # Try to write to /etc/nginx/modsec/rules-override.conf (if we have permissions, e.g. root)
+    # Write atomically (temp file + rename on the same filesystem) so a crash
+    # mid-write can never leave a truncated/corrupt override file on disk.
     try:
-        # Ensure rules-override.conf is included in main.conf.
-        # Usually requires manual append once, but we check if we can write to rules-override.conf directly first.
-        if os.path.exists(override_path) or os.access("/etc/nginx/modsec", os.W_OK):
-            with open(override_path, "w", encoding="utf-8") as f:
+        override_dir = os.path.dirname(override_path)
+        os.makedirs(override_dir, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=override_dir, prefix=".rules-override-", suffix=".tmp")
+        try:
+            # mkstemp() defaults to mode 0600; restore the normal world-readable
+            # mode before the rename so OpenResty/other tooling can still read
+            # this file same as any other config in the directory.
+            os.chmod(tmp_path, 0o644)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)
+            os.replace(tmp_path, override_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
-            # Ensure rules-override.conf is included in main.conf
-            main_conf_path = "/etc/nginx/modsec/main.conf"
-            if os.path.exists(main_conf_path):
-                with open(main_conf_path, "r", encoding="utf-8") as f:
-                    main_conf_data = f.read()
-                if "rules-override.conf" not in main_conf_data:
-                    with open(main_conf_path, "a", encoding="utf-8") as f:
-                        f.write("\nInclude /etc/nginx/modsec/rules-override.conf\n")
+        # Ensure rules-override.conf is included in main.conf
+        main_conf_path = "/etc/nginx/modsec/main.conf"
+        if os.path.exists(main_conf_path):
+            with open(main_conf_path, "r", encoding="utf-8") as f:
+                main_conf_data = f.read()
+            if "rules-override.conf" not in main_conf_data:
+                with open(main_conf_path, "a", encoding="utf-8") as f:
+                    f.write("\nInclude /etc/nginx/modsec/rules-override.conf\n")
 
-            return True, "Override configuration written successfully."
+        return True, "Override configuration written successfully."
     except Exception as e:
-        logger.debug(
-            f"Cannot write to system /etc/nginx/modsec/ (restricted privileges: {e}). Updating virtual state DB only."
+        # This must NOT report success — callers (toggle_rule, set_paranoia_level,
+        # reset_rules, sync_rules_and_exclusions) trust this return value as proof
+        # the WAF was actually updated, and revert their in-memory/DB state when
+        # it's False. Silently returning True here (as this used to do) meant a
+        # permission error or read-only mount could make the dashboard report a
+        # rule as toggled while ModSecurity kept enforcing the old state.
+        logger.error(
+            f"Failed to write ModSecurity override file at {override_path}: {e}"
         )
-
-    return True, "Override configuration simulated successfully."
+        return False, f"Could not write WAF override configuration to disk: {e}"
 
 
 # --- Public API Methods ---
@@ -525,7 +553,7 @@ def get_all_rules(
     rule_entries = []
     for r in all_raw_rules:
         rid = r["id"]
-        is_enabled = rid not in disabled_ids
+        is_enabled = rid not in disabled_ids and rid not in PERMANENTLY_DISABLED_RULE_IDS
 
         # Filter rules by active paranoia level:
         # Rules with paranoia_level > active_paranoia are technically loaded by ModSecurity but "skipped" at runtime.
@@ -597,7 +625,7 @@ def get_rule_by_id(rule_id: str) -> Optional[RuleEntry]:
         description=raw_rule["description"],
         severity=raw_rule["severity"],
         category=raw_rule["category"],
-        enabled=rule_id not in disabled_ids,
+        enabled=rule_id not in disabled_ids and rule_id not in PERMANENTLY_DISABLED_RULE_IDS,
         paranoia_level=raw_rule["paranoia_level"],
         hit_count=hit_count,
         last_triggered=last_triggered,
@@ -623,6 +651,14 @@ def toggle_rule(
         return (
             False,
             f"Rule ID {rule_id} does not exist in the active OWASP CRS dataset.",
+        )
+
+    if enabled and rule_id in PERMANENTLY_DISABLED_RULE_IDS:
+        return (
+            False,
+            f"Rule {rule_id} is permanently disabled by CyberSentinel policy "
+            "(REST method enforcement is removed so DELETE/PUT/PATCH requests "
+            "to REST APIs aren't blocked) and cannot be re-enabled here.",
         )
 
     # Perform edit

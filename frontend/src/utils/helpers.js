@@ -1,3 +1,8 @@
+export function initialsFor(username) {
+  if (!username) return '?';
+  return username.trim().slice(0, 2).toUpperCase();
+}
+
 export function parseJwt(token) {
   try {
     const base64Url = token.split('.')[1];

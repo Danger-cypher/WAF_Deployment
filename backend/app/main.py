@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI):
     from app.services import clickhouse_service
     if clickhouse_service.is_available():
         logger.info("ClickHouse is available — using as primary log store")
+        clickhouse_service.reset_fabricated_api_discovery_fields()
     else:
         logger.warning(
             "ClickHouse is NOT available at startup. "
@@ -61,7 +62,9 @@ async def lifespan(app: FastAPI):
     # Sync protected apps to Nginx configuration on startup
     try:
         from app.services.nginx_manager import sync_protected_apps_to_nginx
-        sync_protected_apps_to_nginx()
+        synced, sync_err = sync_protected_apps_to_nginx()
+        if not synced:
+            logger.error(f"Failed to sync protected apps to NGINX on startup: {sync_err}")
     except Exception as e:
         logger.error(f"Failed to sync protected apps to NGINX on startup: {e}")
 
@@ -160,19 +163,6 @@ app.add_middleware(
 )
 
 
-# CSP Nonce middleware
-@app.middleware("http")
-async def add_csp_nonce(request: Request, call_next):
-    nonce = request.headers.get("X-Nonce")
-    
-    response = await call_next(request)
-    
-    # Store nonce in response headers for frontend access
-    response.headers["X-Nonce"] = nonce or "none"
-    
-    return response
-
-
 # Cache hardening config at module level — refreshed every 30 s.
 # This avoids a settings file read + deep merge on EVERY HTTP request.
 import time as _time_module
@@ -201,7 +191,6 @@ async def add_security_headers(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     
-    # Basic CSP - will be enhanced by CSP nonce middleware
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; frame-ancestors 'none';"
     )

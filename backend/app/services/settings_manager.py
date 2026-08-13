@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import tempfile
+import threading
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,7 @@ DEFAULT_SETTINGS = {
         "html_content": '<!DOCTYPE html>\n<html>\n<head>\n<title>403 Forbidden</title>\n<style>\nbody { font-family: sans-serif; text-align: center; padding: 50px; background-color: #f4f4f5; }\nh1 { color: #ef4444; }\n.incident-id { font-family: monospace; background: #e4e4e7; padding: 5px; border-radius: 4px; }\n</style>\n</head>\n<body>\n<h1>Access Denied</h1>\n<p>Your request was blocked by the Web Application Firewall due to security policies.</p>\n<p>If you believe this is an error, please contact support and provide the following transaction ID:</p>\n<p>Transaction ID: <span class="incident-id">{{transaction_id}}</span></p>\n</body>\n</html>'
     },
     "positive_security": {
+        "enabled": False,
         "allowed_methods": ["GET", "POST", "HEAD"],
         "allowed_content_types": [
             "application/json",
@@ -71,6 +74,11 @@ class SettingsManager:
         # Cache password hashes to avoid file I/O on login
         self._cached_admin_hash: Optional[str] = None
         self._cached_analyst_hash: Optional[str] = None
+        # Two admins saving different settings sections at once both read-modify-
+        # write the same self._settings dict and the same settings.json file;
+        # without a lock the second writer's file write can race the first's
+        # and one section's changes get clobbered by the other's stale copy.
+        self._lock = threading.Lock()
 
     @property
     def settings(self) -> Dict[str, Any]:
@@ -101,12 +109,29 @@ class SettingsManager:
         return default_data
 
     def save_settings(self, data: Dict[str, Any]) -> None:
-        try:
-            os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving settings file: {e}")
+        """
+        Writes settings.json atomically (temp file + rename) and raises on
+        failure. Previously this swallowed every exception and logged it —
+        every update_* method below returns the in-memory `data` right after
+        calling this, so callers (and the API response) claimed success even
+        when the write never reached disk, silently losing the change on the
+        next restart.
+        """
+        settings_dir = os.path.dirname(SETTINGS_FILE)
+        os.makedirs(settings_dir, exist_ok=True)
+        with self._lock:
+            fd, tmp_path = tempfile.mkstemp(
+                dir=settings_dir, prefix=".settings-", suffix=".json.tmp"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp_path, SETTINGS_FILE)
+            except Exception as e:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                logger.error(f"Error saving settings file: {e}")
+                raise
 
     def _deep_merge(self, default: dict, user: dict) -> dict:
         result = default.copy()

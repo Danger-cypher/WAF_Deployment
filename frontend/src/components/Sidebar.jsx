@@ -107,7 +107,7 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
                     <span style={{
                       fontSize: '9px', fontWeight: 700, padding: '1px 5px',
                       borderRadius: '4px', background: 'rgba(245,158,11,0.15)',
-                      color: '#f59e0b', border: '1px solid rgba(245,158,11,0.25)',
+                      color: 'var(--warning-color)', border: '1px solid rgba(245,158,11,0.25)',
                       fontFamily: 'var(--font-mono)', letterSpacing: '0.5px',
                       marginLeft: 'auto', flexShrink: 0
                     }}>ADM</span>
@@ -124,8 +124,8 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
       <div className="sidebar-footer">
         {!collapsed && (
           <div style={{ padding: '6px 20px 2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Clock size={11} color="#334155" />
-            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#334155' }}>
+            <Clock size={11} color="var(--chart-axis)" />
+            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
               {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </span>
           </div>

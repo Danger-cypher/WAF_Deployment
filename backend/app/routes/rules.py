@@ -147,8 +147,20 @@ async def save_custom_rules(
         if backup_exists and os.path.exists(backup_path):
             os.remove(backup_path)
 
-        # 4. Reload Nginx to apply changes
-        reload_nginx()
+        # 4. Reload Nginx to apply changes. The config already passed `-t` above,
+        # but the reload signal itself can still fail (permission denied, the
+        # nginx process/container not reachable, etc.) — that must not be
+        # reported as "applied successfully" when it wasn't.
+        reload_ok = reload_nginx()
+        if not reload_ok:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Custom rules were validated and saved to disk, but the NGINX "
+                    "reload signal failed — the running WAF has NOT picked up these "
+                    "changes yet. Try reloading NGINX manually from Settings."
+                ),
+            )
         return {"message": "Custom rules saved and applied successfully."}
 
     except HTTPException:

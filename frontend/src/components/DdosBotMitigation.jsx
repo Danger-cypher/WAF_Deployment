@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { AlertTriangle, Activity, Database, Server } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
@@ -46,12 +46,18 @@ export default function DdosBotMitigation() {
     }
   };
 
+  const isFetchingAnalyticsRef = useRef(false);
+
   const fetchAnalytics = async () => {
+    if (isFetchingAnalyticsRef.current) return;
+    isFetchingAnalyticsRef.current = true;
     try {
       const data = await getDdosAnalytics();
       if (data) setAnalytics(data);
     } catch (err) {
       console.error("Failed to fetch DDoS analytics", err);
+    } finally {
+      isFetchingAnalyticsRef.current = false;
     }
   };
 
@@ -156,18 +162,18 @@ export default function DdosBotMitigation() {
 
       {/* Settings Form */}
       <div className="glass-panel" style={{ gridColumn: 'span 4', padding: '24px' }}>
-        <div style={{ fontSize: '15px', fontWeight: 600, color: '#f4f4f5', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <AlertTriangle size={16} color="#ef4444" />
+        <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <AlertTriangle size={16} color="var(--danger-color)" />
           <span>Mitigation Configuration</span>
         </div>
         <form onSubmit={handleSaveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={{ fontSize: '13px', color: '#e4e4e7', fontWeight: 500 }}>L7 Rate Limit (RPS)</label>
-              <span style={{ fontSize: '12px', color: '#f4f4f5', fontWeight: 600 }}>{rateLimitRps} req/s</span>
+              <label style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>L7 Rate Limit (RPS)</label>
+              <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{rateLimitRps} req/s</span>
             </div>
-            <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
               Maximum requests per second allowed per client IP before dropping.
             </div>
             <input
@@ -179,10 +185,10 @@ export default function DdosBotMitigation() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={{ fontSize: '13px', color: '#e4e4e7', fontWeight: 500 }}>Burst Tolerance</label>
-              <span style={{ fontSize: '12px', color: '#f4f4f5', fontWeight: 600 }}>{burstTolerance} requests</span>
+              <label style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Burst Tolerance</label>
+              <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{burstTolerance} requests</span>
             </div>
-            <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
               Number of excessive requests allowed in a burst before rate limit applies.
             </div>
             <input
@@ -193,8 +199,8 @@ export default function DdosBotMitigation() {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '13px', color: '#e4e4e7', fontWeight: 500 }}>Trusted IP Allowlist</label>
-            <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '4px' }}>
+            <label style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Trusted IP Allowlist</label>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
               Comma-separated IPs or subnets that bypass all WAF rules (e.g., 10.0.0.1, 192.168.1.0/24).
             </div>
             <textarea
@@ -207,8 +213,8 @@ export default function DdosBotMitigation() {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '13px', color: '#e4e4e7', fontWeight: 500 }}>Mitigation Action</label>
-            <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '4px' }}>
+            <label style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Mitigation Action</label>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
               Action to take when suspicious automation is detected.
             </div>
             <select
@@ -242,7 +248,7 @@ export default function DdosBotMitigation() {
               <span>Total Blocked (DDoS)</span>
               <div className="metric-icon-wrapper red"><AlertTriangle size={18} /></div>
             </div>
-            <div className="metric-value" style={{ color: '#ef4444' }}>{analytics.total_blocks.toLocaleString()}</div>
+            <div className="metric-value" style={{ color: 'var(--danger-color)' }}>{analytics.total_blocks.toLocaleString()}</div>
             <div className="metric-trend trend-up">
               <div className="pulse-dot" style={{ marginRight: '6px' }}></div>
               <span>Live enforcement active</span>
@@ -255,7 +261,7 @@ export default function DdosBotMitigation() {
               <div className="metric-icon-wrapper orange"><Server size={18} /></div>
             </div>
             {/* FIX 11: Show true total from backend, not top_ips.length (capped at 10) */}
-            <div className="metric-value" style={{ color: '#fb923c' }}>{analytics.total_unique_ips.toLocaleString()}</div>
+            <div className="metric-value" style={{ color: 'var(--sev-high)' }}>{analytics.total_unique_ips.toLocaleString()}</div>
             <div className="metric-trend trend-down">
               <span>Distinct offenders tracked</span>
             </div>
@@ -266,7 +272,7 @@ export default function DdosBotMitigation() {
         <div className="chart-card glass-panel" style={{ flex: 1, minHeight: '300px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
             <div className="card-title" style={{ marginBottom: 0 }}>
-              <Activity size={18} color="#3b82f6" />
+              <Activity size={18} color="var(--sev-low)" />
               Traffic Graph (Blocked Requests)
             </div>
             <div className="pulse-container">
@@ -279,18 +285,18 @@ export default function DdosBotMitigation() {
               <AreaChart data={analytics.timeline}>
                 <defs>
                   <linearGradient id="colorDdos" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.5} />
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0.0} />
+                    <stop offset="5%" stopColor="var(--danger-color)" stopOpacity={0.5} />
+                    <stop offset="95%" stopColor="var(--danger-color)" stopOpacity={0.0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis dataKey="time" stroke="#a1a1aa" fontSize={11} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={50} />
-                <YAxis stroke="#a1a1aa" fontSize={11} tickLine={false} axisLine={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-hover)" vertical={false} />
+                <XAxis dataKey="time" stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={50} />
+                <YAxis stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} />
                 <RechartsTooltip
-                  contentStyle={{ backgroundColor: 'rgba(15, 16, 22, 0.95)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}
-                  itemStyle={{ color: '#fff' }}
+                  contentStyle={{ backgroundColor: 'rgba(15, 16, 22, 0.95)', border: '1px solid var(--surface-strong)', borderRadius: '12px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}
+                  itemStyle={{ color: 'var(--text-primary)' }}
                 />
-                <Area type="monotone" dataKey="blocked" name="Dropped Connections" stroke="#ef4444" strokeWidth={2} fillOpacity={1} fill="url(#colorDdos)" />
+                <Area type="monotone" dataKey="blocked" name="Dropped Connections" stroke="var(--danger-color)" strokeWidth={2} fillOpacity={1} fill="url(#colorDdos)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -301,8 +307,8 @@ export default function DdosBotMitigation() {
       {/* Advanced Rate Limiting Rules Card */}
       <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', padding: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div style={{ fontSize: '15px', fontWeight: 600, color: '#f4f4f5', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Server size={18} color="#3b82f6" />
+          <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Server size={18} color="var(--sev-low)" />
             <span>Advanced Rate Limiting Rules</span>
           </div>
           <button
@@ -321,8 +327,8 @@ export default function DdosBotMitigation() {
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
             style={{
-              background: 'rgba(255, 255, 255, 0.02)',
-              border: '1px solid rgba(255, 255, 255, 0.05)',
+              background: 'var(--surface-subtle)',
+              border: '1px solid var(--surface-hover)',
               borderRadius: '8px',
               padding: '20px',
               marginBottom: '24px'
@@ -331,7 +337,7 @@ export default function DdosBotMitigation() {
             <form onSubmit={handleAddRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Rule Name</label>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
                   <input
                     type="text"
                     className="search-input"
@@ -341,7 +347,7 @@ export default function DdosBotMitigation() {
                   />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Match Parameter Type</label>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Match Parameter Type</label>
                   <select
                     className="search-input"
                     value={newRuleType}
@@ -361,7 +367,7 @@ export default function DdosBotMitigation() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Match Pattern / Value</label>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Match Pattern / Value</label>
                 <input
                   type="text"
                   className="search-input"
@@ -379,14 +385,14 @@ export default function DdosBotMitigation() {
                                     'e.g., 192.168.1.100'
                   }
                 />
-                <span style={{ fontSize: '11px', color: '#71717a' }}>Matches use case-insensitive regex pattern mapping. Leave Header/Session value pattern empty to rate limit by unique value.</span>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Matches use case-insensitive regex pattern mapping. Leave Header/Session value pattern empty to rate limit by unique value.</span>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Rate Limit (RPS)</label>
-                    <span style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>{newRuleRps} req/s</span>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rate Limit (RPS)</label>
+                    <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{newRuleRps} req/s</span>
                   </div>
                   <input
                     type="range" min="1" max="200"
@@ -396,8 +402,8 @@ export default function DdosBotMitigation() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '12px', color: '#a1a1aa' }}>Burst Tolerance</label>
-                    <span style={{ fontSize: '12px', color: '#fff', fontWeight: 600 }}>{newRuleBurst} requests</span>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
+                    <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{newRuleBurst} requests</span>
                   </div>
                   <input
                     type="range" min="1" max="500"
@@ -434,7 +440,7 @@ export default function DdosBotMitigation() {
             <tbody>
               {advancedRules.length === 0 ? (
                 <tr>
-                  <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#a1a1aa' }}>
+                  <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
                     No advanced rate limiting rules configured.
                   </td>
                 </tr>
@@ -450,20 +456,20 @@ export default function DdosBotMitigation() {
                         <div className="toggle-knob"></div>
                       </div>
                     </td>
-                    <td style={{ fontWeight: 500, color: '#f4f4f5' }}>{rule.name}</td>
-                    <td style={{ color: '#3b82f6', fontWeight: 600 }}>{rule.parameter_type}</td>
-                    <td style={{ fontFamily: 'monospace', color: '#a1a1aa', fontSize: '12px' }}>{rule.parameter_value}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 500, color: '#10b981' }}>{rule.rate_limit_rps} req/s</td>
-                    <td style={{ textAlign: 'right', fontWeight: 500, color: '#fb923c' }}>{rule.burst_tolerance} reqs</td>
+                    <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{rule.name}</td>
+                    <td style={{ color: 'var(--sev-low)', fontWeight: 600 }}>{rule.parameter_type}</td>
+                    <td style={{ fontFamily: 'monospace', color: 'var(--text-secondary)', fontSize: '12px' }}>{rule.parameter_value}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 500, color: 'var(--success-color)' }}>{rule.rate_limit_rps} req/s</td>
+                    <td style={{ textAlign: 'right', fontWeight: 500, color: 'var(--sev-high)' }}>{rule.burst_tolerance} reqs</td>
                     <td style={{ textAlign: 'center' }}>
                       <button
                         type="button"
                         onClick={() => handleDeleteRule(rule.id)}
                         className="action-btn-inspect"
                         style={{
-                          background: 'rgba(239, 68, 68, 0.1)',
-                          color: '#ef4444',
-                          borderColor: 'rgba(239, 68, 68, 0.2)',
+                          background: 'var(--danger-bg)',
+                          color: 'var(--danger-color)',
+                          borderColor: 'var(--danger-border)',
                           padding: '4px 10px',
                           fontSize: '11px',
                           margin: 0
@@ -483,7 +489,7 @@ export default function DdosBotMitigation() {
       {/* Bottom: Top IPs */}
       <div className="chart-card glass-panel" style={{ gridColumn: 'span 12' }}>
         <div className="card-title">
-          <Database size={18} color="#f97316" />
+          <Database size={18} color="var(--sev-high)" />
           Top Offending IPs (Rate Limit Hits)
         </div>
         <div className="logs-table-wrapper" style={{ marginTop: '16px' }}>
@@ -498,16 +504,16 @@ export default function DdosBotMitigation() {
             <tbody>
               {analytics.top_ips.length === 0 ? (
                 <tr>
-                  <td colSpan="3" style={{ textAlign: 'center', padding: '30px', color: '#a1a1aa' }}>
+                  <td colSpan="3" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
                     No IPs currently rate-limited.
                   </td>
                 </tr>
               ) : (
                 analytics.top_ips.map((ipObj, index) => (
                   <tr key={ipObj.ip}>
-                    <td style={{ color: '#a1a1aa' }}>#{index + 1}</td>
-                    <td style={{ fontFamily: 'monospace', color: '#3b82f6', fontWeight: 500 }}>{ipObj.ip}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>{ipObj.count.toLocaleString()}</td>
+                    <td style={{ color: 'var(--text-secondary)' }}>#{index + 1}</td>
+                    <td style={{ fontFamily: 'monospace', color: 'var(--sev-low)', fontWeight: 500 }}>{ipObj.ip}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--danger-color)' }}>{ipObj.count.toLocaleString()}</td>
                   </tr>
                 ))
               )}

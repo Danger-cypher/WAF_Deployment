@@ -1,11 +1,19 @@
 import { useState, useEffect } from 'react';
+import { X } from 'lucide-react';
 import { getAlertHistory, acknowledgeAlert, getAlertStats } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
+import { useToast } from '../hooks/useToast';
+import Toast from './Toast';
+import Button from './Button';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 export default function AlertHistoryModal({ isOpen, onClose }) {
   const [history, setHistory] = useState([]);
   const [stats, setStats] = useState(null);
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const { toast, showToast } = useToast();
+
+  useEscapeToClose(() => (selectedAlert ? setSelectedAlert(null) : onClose()), isOpen);
 
   const fetchHistory = async () => {
     try {
@@ -14,7 +22,7 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
       const st = await getAlertStats(7);
       setStats(st);
     } catch (err) {
-      console.error("Error loading alert history:", err);
+      showToast('Failed to load alert history: ' + (err.message || 'Unknown error'), 'error');
     }
   };
 
@@ -29,18 +37,18 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
       await acknowledgeAlert(id);
       fetchHistory();
     } catch (err) {
-      alert("Failed to acknowledge: " + err.message);
+      showToast("Failed to acknowledge: " + err.message, "error");
     }
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
-      <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '900px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+    <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9999, padding: '24px' }}>
+      <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '900px', maxWidth: '94vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Triggered Alert History Logs</h3>
-          <button style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '18px', cursor: 'pointer' }} onClick={onClose}>X</button>
+          <Button variant="ghost" size="sm" icon={X} onClick={onClose} aria-label="Close alert history" />
         </div>
 
         {/* Stats */}
@@ -90,7 +98,7 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
                         padding: '2px 6px', borderRadius: '4px', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
                         background: alert.severity === 'critical' ? 'var(--danger-bg)' : 'var(--warning-bg)',
                         color: alert.severity === 'critical' ? 'var(--danger-color)' : 'var(--warning-color)',
-                        border: alert.severity === 'critical' ? '1px solid rgba(255, 59, 92, 0.2)' : '1px solid rgba(255, 149, 0, 0.2)'
+                        border: alert.severity === 'critical' ? '1px solid var(--danger-border)' : '1px solid var(--warning-glow)'
                       }}>{alert.severity}</span>
                     </td>
                     <td style={{ padding: '12px', maxWidth: '240px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{alert.message}</td>
@@ -99,7 +107,7 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
                         padding: '2px 6px', borderRadius: '10px', fontSize: '10px',
                         background: alert.status === 'sent' ? 'var(--success-bg)' : alert.status === 'throttled' ? 'var(--warning-bg)' : 'var(--danger-bg)',
                         color: alert.status === 'sent' ? 'var(--success-color)' : alert.status === 'throttled' ? 'var(--warning-color)' : 'var(--danger-color)',
-                        border: alert.status === 'sent' ? '1px solid rgba(0, 255, 157, 0.2)' : alert.status === 'throttled' ? '1px solid rgba(255, 149, 0, 0.2)' : '1px solid rgba(255, 59, 92, 0.2)'
+                        border: alert.status === 'sent' ? '1px solid var(--success-glow)' : alert.status === 'throttled' ? '1px solid var(--warning-glow)' : '1px solid var(--danger-border)'
                       }}>{alert.status}</span>
                     </td>
                     <td style={{ padding: '12px' }}>
@@ -124,11 +132,11 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
 
       {/* Details View */}
       {selectedAlert && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000 }}>
-          <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '500px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000, padding: '24px' }}>
+          <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '500px', maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--accent-color)' }}>Alert Details: {selectedAlert.rule_name}</h3>
-              <button style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '16px', cursor: 'pointer' }} onClick={() => setSelectedAlert(null)}>X</button>
+              <Button variant="ghost" size="sm" icon={X} onClick={() => setSelectedAlert(null)} aria-label="Close alert details" />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px', color: 'var(--text-primary)' }}>
               <p><strong>Message:</strong> {selectedAlert.message}</p>
@@ -138,6 +146,7 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
           </div>
         </div>
       )}
+      <Toast toast={toast} />
     </div>
   );
 }

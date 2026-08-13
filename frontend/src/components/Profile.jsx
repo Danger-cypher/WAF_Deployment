@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { User, X, Check, ShieldCheck, KeyRound, Save, BellOff, Smartphone } from 'lucide-react';
+import { User, X, ShieldCheck, KeyRound, Save, BellOff, Smartphone } from 'lucide-react';
+import { useToast } from '../hooks/useToast';
+import Toast from './Toast';
+import Button from './Button';
+import { initialsFor } from '../utils/helpers';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import {
   getMyProfile, updateMyProfile, changeMyPassword,
   getMyNotificationPreferences, updateMyNotificationPreferences,
@@ -22,26 +26,27 @@ const EVENT_TYPES = [
 
 const inputStyle = {
   width: '100%',
-  padding: '10px 12px',
+  padding: '9px 11px',
   background: 'rgba(0,0,0,0.25)',
-  border: '1px solid rgba(255,255,255,0.12)',
-  borderRadius: '8px',
-  color: '#fff',
-  fontSize: '14px',
+  border: '1px solid var(--border-strong)',
+  borderRadius: 'var(--radius-sm)',
+  color: 'var(--text-primary)',
+  fontSize: '13.5px',
   boxSizing: 'border-box',
 };
 
 const labelStyle = {
   display: 'block',
-  fontSize: '12px',
+  fontSize: '11.5px',
   fontWeight: 600,
-  color: 'rgba(255,255,255,0.6)',
-  marginBottom: '6px',
-  textTransform: 'uppercase',
-  letterSpacing: '0.03em',
+  color: 'var(--text-secondary)',
+  marginBottom: '5px',
 };
 
+const fieldGroupStyle = { display: 'flex', flexDirection: 'column', gap: '12px' };
+
 export default function Profile({ onClose }) {
+  useEscapeToClose(onClose, true);
   const [profile, setProfile] = useState(null);
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -60,12 +65,7 @@ export default function Profile({ onClose }) {
   const [mfaDisablePassword, setMfaDisablePassword] = useState('');
   const [mfaDisableCode, setMfaDisableCode] = useState('');
   const [mfaSavingDisable, setMfaSavingDisable] = useState(false);
-  const [toast, setToast] = useState(null);
-
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  };
+  const { toast, showToast } = useToast();
 
   useEffect(() => {
     getMyProfile()
@@ -99,8 +99,8 @@ export default function Profile({ onClose }) {
   };
 
   const handleChangePassword = async () => {
-    if (newPassword.length < 8) {
-      showToast('New password must be at least 8 characters.', 'error');
+    if (newPassword.length < 12) {
+      showToast('New password must be at least 12 characters.', 'error');
       return;
     }
     setSavingPassword(true);
@@ -183,227 +183,240 @@ export default function Profile({ onClose }) {
     }
   };
 
+  const isAdmin = profile?.role === 'admin';
+
   return (
-    <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99998 }}
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ opacity: 0, y: 20, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.97 }}
-        style={{
-          width: '440px', maxWidth: '92vw', maxHeight: '85vh', overflowY: 'auto',
-          background: '#12141c', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '14px', padding: '24px',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-        }}
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal-content"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="profile-modal-title"
+        style={{ width: '620px', maxWidth: '94vw', maxHeight: '85vh' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <User size={18} style={{ color: 'var(--accent-color)' }} />
+        <div className="modal-header">
+          <div className="modal-title" id="profile-modal-title">
+            <User size={17} style={{ color: 'var(--accent-color)' }} />
             My Profile
-          </h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer' }}>
+          </div>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close profile">
             <X size={18} />
           </button>
         </div>
 
         {profile && (
-          <>
+          <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {/* Identity */}
             <div style={{
-              display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px',
-              padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px',
+              display: 'flex', alignItems: 'center', gap: '12px',
+              padding: '12px 14px', background: 'var(--surface-subtle)', borderRadius: 'var(--radius-lg)',
             }}>
-              <ShieldCheck size={14} style={{ color: profile.role === 'admin' ? '#fca5a5' : '#a5b4fc' }} />
-              <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.7)' }}>
-                Signed in as <strong style={{ color: '#fff' }}>{profile.username}</strong> · {profile.role}
+              <div
+                aria-hidden="true"
+                style={{
+                  width: '38px', height: '38px', borderRadius: '50%', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '13px', fontWeight: 700,
+                  background: isAdmin ? 'var(--danger-bg)' : 'var(--accent-bg)',
+                  color: isAdmin ? 'var(--danger-color)' : 'var(--accent-color)',
+                  border: isAdmin ? '1px solid rgba(244,63,94,0.35)' : '1px solid var(--accent-border)',
+                }}
+              >
+                {initialsFor(profile.username)}
+              </div>
+              <ShieldCheck size={14} style={{ color: isAdmin ? 'var(--danger-color)' : 'var(--accent-color)', flexShrink: 0 }} />
+              <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
+                Signed in as <strong style={{ color: 'var(--text-primary)' }}>{profile.username}</strong> · {profile.role}
+                {profile.enabled === false ? ' · Disabled' : ''}
               </span>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '10px' }}>
-              <div>
-                <label style={labelStyle}>Display Name</label>
-                <input style={inputStyle} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Your name" />
+            {/* Account info + Password, side by side on wide viewports */}
+            <div className="panel-grid-2">
+              <div className="panel-card">
+                <div className="panel-card-header">
+                  <span className="panel-card-title"><User size={12} /> Account Information</span>
+                </div>
+                <div style={fieldGroupStyle}>
+                  <div>
+                    <label htmlFor="profile-display-name" style={labelStyle}>Display Name</label>
+                    <input
+                      id="profile-display-name" style={inputStyle} value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)} placeholder="Your name"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="profile-email" style={labelStyle}>Email</label>
+                    <input
+                      id="profile-email" style={inputStyle} type="email" value={email}
+                      onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com"
+                    />
+                  </div>
+                  <Button variant="primary" size="sm" icon={Save} loading={savingProfile} onClick={handleSaveProfile}>
+                    {savingProfile ? 'Saving…' : 'Save Profile'}
+                  </Button>
+                </div>
               </div>
-              <div>
-                <label style={labelStyle}>Email</label>
-                <input style={inputStyle} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+
+              <div className="panel-card">
+                <div className="panel-card-header">
+                  <span className="panel-card-title"><KeyRound size={12} /> Password</span>
+                </div>
+                <div style={fieldGroupStyle}>
+                  <div>
+                    <label htmlFor="profile-current-password" style={labelStyle}>Current Password</label>
+                    <input
+                      id="profile-current-password" style={inputStyle} type="password" value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Current password"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="profile-new-password" style={labelStyle}>New Password</label>
+                    <input
+                      id="profile-new-password" style={inputStyle} type="password" value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)} placeholder="New password (min 12 chars, 3+ char types)"
+                      onKeyDown={(e) => { if (e.key === 'Enter' && currentPassword && newPassword) handleChangePassword(); }}
+                    />
+                  </div>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    loading={savingPassword}
+                    disabled={!currentPassword || !newPassword}
+                    onClick={handleChangePassword}
+                  >
+                    {savingPassword ? 'Updating…' : 'Update Password'}
+                  </Button>
+                </div>
               </div>
-              <button
-                onClick={handleSaveProfile}
-                disabled={savingProfile}
-                style={{
-                  padding: '10px', background: 'rgba(0, 212, 255, 0.12)', border: '1px solid var(--accent-color)',
-                  borderRadius: '8px', color: 'var(--accent-color)', fontWeight: 600, cursor: savingProfile ? 'not-allowed' : 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', opacity: savingProfile ? 0.7 : 1,
-                }}
-              >
-                <Save size={14} />
-                {savingProfile ? 'Saving…' : 'Save Profile'}
-              </button>
             </div>
 
-            <div style={{ height: '1px', background: 'rgba(255,255,255,0.08)', margin: '18px 0' }} />
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <label style={{ ...labelStyle, marginBottom: '-4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <KeyRound size={12} /> Change Password
-              </label>
-              <input
-                style={inputStyle} type="password" value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Current password"
-              />
-              <input
-                style={inputStyle} type="password" value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)} placeholder="New password (min 8 chars)"
-              />
-              <button
-                onClick={handleChangePassword}
-                disabled={savingPassword || !currentPassword || !newPassword}
-                style={{
-                  padding: '10px', background: 'var(--accent-color)', border: 'none', borderRadius: '8px',
-                  color: '#000', fontWeight: 700,
-                  cursor: (savingPassword || !currentPassword || !newPassword) ? 'not-allowed' : 'pointer',
-                  opacity: (savingPassword || !currentPassword || !newPassword) ? 0.6 : 1,
-                }}
-              >
-                {savingPassword ? 'Updating…' : 'Update Password'}
-              </button>
-            </div>
-
+            {/* Two-Factor Authentication */}
             {mfaStatus && (
-              <>
-                <div style={{ height: '1px', background: 'rgba(255,255,255,0.08)', margin: '18px 0' }} />
+              <div className="panel-card">
+                <div className="panel-card-header">
+                  <span className="panel-card-title"><Smartphone size={12} /> Two-Factor Authentication</span>
+                  <span style={{
+                    fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: 'var(--radius-pill)', textTransform: 'uppercase',
+                    background: mfaStatus.enabled ? 'var(--success-bg)' : 'var(--surface-hover)',
+                    color: mfaStatus.enabled ? 'var(--success-color)' : 'var(--text-secondary)',
+                    border: mfaStatus.enabled ? '1px solid rgba(16,185,129,0.3)' : '1px solid var(--border-color)',
+                  }}>
+                    {mfaStatus.enabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Smartphone size={12} /> Two-Factor Authentication
-                  </label>
+                {!mfaSetupData && !showMfaDisableForm && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                    <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      {mfaStatus.enabled
+                        ? 'Your account requires a one-time code at sign-in.'
+                        : 'Add an authenticator app as a second sign-in factor.'}
+                    </p>
+                    {mfaStatus.enabled ? (
+                      <Button variant="danger" size="sm" onClick={() => setShowMfaDisableForm(true)}>
+                        Disable
+                      </Button>
+                    ) : (
+                      <Button variant="secondary" size="sm" loading={mfaSavingSetup} onClick={handleStartMfaSetup}>
+                        {mfaSavingSetup ? 'Starting…' : 'Enable 2FA'}
+                      </Button>
+                    )}
+                  </div>
+                )}
 
-                  {!mfaSetupData && (
-                    <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
-                      padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px',
-                    }}>
-                      <span style={{
-                        fontSize: '12px', fontWeight: 600,
-                        color: mfaStatus.enabled ? '#34d399' : 'rgba(255,255,255,0.5)',
-                      }}>
-                        {mfaStatus.enabled ? 'Enabled' : 'Disabled'}
-                      </span>
-                      {mfaStatus.enabled ? (
-                        <button
-                          onClick={() => setShowMfaDisableForm((v) => !v)}
-                          style={{
-                            padding: '6px 12px', background: 'rgba(255,59,92,0.1)', border: '1px solid rgba(255,59,92,0.4)',
-                            borderRadius: '6px', color: '#ff3b5c', fontWeight: 600, fontSize: '12px', cursor: 'pointer',
-                          }}
-                        >
-                          Disable
-                        </button>
-                      ) : (
-                        <button
-                          onClick={handleStartMfaSetup}
-                          disabled={mfaSavingSetup}
-                          style={{
-                            padding: '6px 12px', background: 'rgba(0,212,255,0.12)', border: '1px solid var(--accent-color)',
-                            borderRadius: '6px', color: 'var(--accent-color)', fontWeight: 600, fontSize: '12px',
-                            cursor: mfaSavingSetup ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          {mfaSavingSetup ? 'Starting…' : 'Enable 2FA'}
-                        </button>
-                      )}
+                {mfaSetupData && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      Scan with Google Authenticator, Authy, or any TOTP app:
                     </div>
-                  )}
-
-                  {mfaSetupData && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '14px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
-                      <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)' }}>
-                        Scan with Google Authenticator, Authy, or any TOTP app:
-                      </div>
-                      <img
-                        src={`data:image/png;base64,${mfaSetupData.qr_code_png_base64}`}
-                        alt="MFA QR code"
-                        style={{ width: '160px', height: '160px', alignSelf: 'center', background: '#fff', padding: '8px', borderRadius: '8px' }}
-                      />
-                      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>
-                        Or enter manually: <code style={{ color: 'var(--accent-color)', wordBreak: 'break-all' }}>{mfaSetupData.secret}</code>
-                      </div>
+                    <img
+                      src={`data:image/png;base64,${mfaSetupData.qr_code_png_base64}`}
+                      alt="MFA QR code"
+                      style={{ width: '140px', height: '140px', alignSelf: 'center', background: '#fff', padding: '8px', borderRadius: 'var(--radius-sm)' }}
+                    />
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Or enter manually: <code style={{ color: 'var(--accent-color)', wordBreak: 'break-all' }}>{mfaSetupData.secret}</code>
+                    </div>
+                    <div>
+                      <label htmlFor="mfa-confirm-code" style={labelStyle}>Verification Code</label>
                       <input
-                        style={inputStyle} value={mfaConfirmCode} maxLength={6}
+                        id="mfa-confirm-code" style={inputStyle} value={mfaConfirmCode} maxLength={6}
                         onChange={(e) => setMfaConfirmCode(e.target.value)} placeholder="Enter 6-digit code to confirm"
+                        onKeyDown={(e) => { if (e.key === 'Enter' && mfaConfirmCode.length === 6) handleConfirmMfaSetup(); }}
                       />
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button
-                          onClick={handleConfirmMfaSetup}
-                          disabled={mfaSavingConfirm || mfaConfirmCode.length !== 6}
-                          style={{
-                            flex: 1, padding: '10px', background: 'var(--accent-color)', border: 'none', borderRadius: '8px',
-                            color: '#000', fontWeight: 700,
-                            cursor: (mfaSavingConfirm || mfaConfirmCode.length !== 6) ? 'not-allowed' : 'pointer',
-                            opacity: (mfaSavingConfirm || mfaConfirmCode.length !== 6) ? 0.6 : 1,
-                          }}
-                        >
-                          {mfaSavingConfirm ? 'Confirming…' : 'Confirm & Enable'}
-                        </button>
-                        <button
-                          onClick={handleCancelMfaSetup}
-                          style={{
-                            padding: '10px 14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: '8px', color: 'rgba(255,255,255,0.6)', fontWeight: 600, cursor: 'pointer',
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
                     </div>
-                  )}
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        loading={mfaSavingConfirm}
+                        disabled={mfaConfirmCode.length !== 6}
+                        onClick={handleConfirmMfaSetup}
+                        style={{ flex: 1 }}
+                      >
+                        {mfaSavingConfirm ? 'Confirming…' : 'Confirm & Enable'}
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={handleCancelMfaSetup}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
-                  {showMfaDisableForm && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '14px', background: 'rgba(255,59,92,0.05)', border: '1px solid rgba(255,59,92,0.2)', borderRadius: '8px' }}>
-                      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.6)' }}>
-                        Confirm your password and a current code to disable 2FA.
-                      </div>
+                {showMfaDisableForm && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Confirm your password and a current code to disable 2FA.
+                    </div>
+                    <div>
+                      <label htmlFor="mfa-disable-password" style={labelStyle}>Current Password</label>
                       <input
-                        style={inputStyle} type="password" value={mfaDisablePassword}
+                        id="mfa-disable-password" style={inputStyle} type="password" value={mfaDisablePassword}
                         onChange={(e) => setMfaDisablePassword(e.target.value)} placeholder="Current password to confirm"
                       />
+                    </div>
+                    <div>
+                      <label htmlFor="mfa-disable-code" style={labelStyle}>Verification Code</label>
                       <input
-                        style={inputStyle} value={mfaDisableCode} maxLength={6}
+                        id="mfa-disable-code" style={inputStyle} value={mfaDisableCode} maxLength={6}
                         onChange={(e) => setMfaDisableCode(e.target.value)} placeholder="6-digit code"
+                        onKeyDown={(e) => { if (e.key === 'Enter' && mfaDisablePassword && mfaDisableCode.length === 6) handleDisableMfa(); }}
                       />
-                      <button
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        loading={mfaSavingDisable}
+                        disabled={!mfaDisablePassword || mfaDisableCode.length !== 6}
                         onClick={handleDisableMfa}
-                        disabled={mfaSavingDisable || !mfaDisablePassword || mfaDisableCode.length !== 6}
-                        style={{
-                          padding: '10px', background: '#ff3b5c', border: 'none', borderRadius: '8px',
-                          color: '#fff', fontWeight: 700,
-                          cursor: (mfaSavingDisable || !mfaDisablePassword || mfaDisableCode.length !== 6) ? 'not-allowed' : 'pointer',
-                          opacity: (mfaSavingDisable || !mfaDisablePassword || mfaDisableCode.length !== 6) ? 0.6 : 1,
-                        }}
+                        style={{ flex: 1 }}
                       >
                         {mfaSavingDisable ? 'Disabling…' : 'Confirm Disable'}
-                      </button>
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={() => setShowMfaDisableForm(false)}>
+                        Cancel
+                      </Button>
                     </div>
-                  )}
-                </div>
-              </>
+                  </div>
+                )}
+              </div>
             )}
 
+            {/* Notification preferences */}
             {prefs && (
-              <>
-                <div style={{ height: '1px', background: 'rgba(255,255,255,0.08)', margin: '18px 0' }} />
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <BellOff size={12} /> Mute Bell Notifications
-                  </label>
-                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '-6px' }}>
+              <div className="panel-card">
+                <div className="panel-card-header">
+                  <span className="panel-card-title"><BellOff size={12} /> Mute Bell Notifications</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     Muted items won't count toward your bell badge, but stay visible in the full alert history.
                   </div>
 
-                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', marginTop: '4px' }}>By severity</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>By severity</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     {SEVERITIES.map((sev) => {
                       const muted = prefs.muted_severities.includes(sev);
@@ -413,11 +426,11 @@ export default function Profile({ onClose }) {
                           onClick={() => togglePref('muted_severities', sev)}
                           disabled={savingPrefs}
                           style={{
-                            padding: '5px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 600,
+                            padding: '5px 10px', borderRadius: 'var(--radius-pill)', fontSize: '11px', fontWeight: 600,
                             textTransform: 'capitalize', cursor: savingPrefs ? 'not-allowed' : 'pointer',
-                            background: muted ? 'rgba(255,255,255,0.05)' : 'rgba(0,212,255,0.1)',
-                            color: muted ? 'rgba(255,255,255,0.35)' : 'var(--accent-color)',
-                            border: muted ? '1px solid rgba(255,255,255,0.1)' : '1px solid var(--accent-color)',
+                            background: muted ? 'var(--surface-hover)' : 'var(--accent-bg)',
+                            color: muted ? 'var(--text-secondary)' : 'var(--accent-color)',
+                            border: muted ? '1px solid var(--border-strong)' : '1px solid var(--accent-border)',
                             textDecoration: muted ? 'line-through' : 'none',
                           }}
                         >
@@ -427,7 +440,7 @@ export default function Profile({ onClose }) {
                     })}
                   </div>
 
-                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', marginTop: '8px' }}>By event type</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '6px' }}>By event type</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     {EVENT_TYPES.map(({ id, label }) => {
                       const muted = prefs.muted_event_types.includes(id);
@@ -437,11 +450,11 @@ export default function Profile({ onClose }) {
                           onClick={() => togglePref('muted_event_types', id)}
                           disabled={savingPrefs}
                           style={{
-                            padding: '5px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 600,
+                            padding: '5px 10px', borderRadius: 'var(--radius-pill)', fontSize: '11px', fontWeight: 600,
                             cursor: savingPrefs ? 'not-allowed' : 'pointer',
-                            background: muted ? 'rgba(255,255,255,0.05)' : 'rgba(0,212,255,0.1)',
-                            color: muted ? 'rgba(255,255,255,0.35)' : 'var(--accent-color)',
-                            border: muted ? '1px solid rgba(255,255,255,0.1)' : '1px solid var(--accent-color)',
+                            background: muted ? 'var(--surface-hover)' : 'var(--accent-bg)',
+                            color: muted ? 'var(--text-secondary)' : 'var(--accent-color)',
+                            border: muted ? '1px solid var(--border-strong)' : '1px solid var(--accent-border)',
                             textDecoration: muted ? 'line-through' : 'none',
                           }}
                         >
@@ -451,29 +464,13 @@ export default function Profile({ onClose }) {
                     })}
                   </div>
                 </div>
-              </>
+              </div>
             )}
-          </>
+          </div>
         )}
 
-        <AnimatePresence>
-          {toast && (
-            <motion.div
-              initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              style={{
-                marginTop: '16px', padding: '10px 14px',
-                background: toast.type === 'error' ? 'rgba(255, 59, 92, 0.15)' : 'rgba(52, 211, 153, 0.15)',
-                border: toast.type === 'error' ? '1px solid #ff3b5c' : '1px solid #34d399',
-                borderRadius: '8px', color: toast.type === 'error' ? '#ff3b5c' : '#34d399', fontWeight: 600,
-                fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px',
-              }}
-            >
-              {toast.type === 'error' ? <X size={14} /> : <Check size={14} />}
-              <span>{toast.message}</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </motion.div>
-    </motion.div>
+        <Toast toast={toast} />
+      </div>
+    </div>
   );
 }

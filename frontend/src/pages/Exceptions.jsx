@@ -8,6 +8,13 @@ import {
 } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import { NoExceptionsEmptyState } from '../components/EmptyStates';
+import { useToast } from '../hooks/useToast';
+import Toast from '../components/Toast';
+import { useConfirm } from '../hooks/useConfirm';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { usePagination } from '../hooks/usePagination';
+import Pagination from '../components/Pagination';
+import Button from '../components/Button';
 
 export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
   const [exclusionType, setExclusionType] = useState('uri');
@@ -19,6 +26,8 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
   const [previewRule, setPreviewRule] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  useEscapeToClose(onClose, isOpen);
 
   useEffect(() => {
     if (isOpen && log) {
@@ -100,34 +109,34 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
       <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px' }}>
         <div className="modal-header">
           <div className="modal-title">
-            <AlertTriangle size={20} color="#f97316" />
+            <AlertTriangle size={20} color="var(--sev-high)" />
             <span>Create WAF Exception Exclusions</span>
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {errorMsg && (
-              <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#fca5a5', padding: '10px 14px', borderRadius: '6px', fontSize: '13px' }}>
+              <div style={{ background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', color: 'var(--danger-color)', padding: '10px 14px', borderRadius: '6px', fontSize: '13px' }}>
                 {errorMsg}
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)', fontSize: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: 'var(--surface-subtle)', padding: '12px', borderRadius: '6px', border: '1px solid var(--border-subtle)', fontSize: '12px' }}>
               <div>
-                <span style={{ color: '#a1a1aa' }}>Origin Log Rule ID:</span>
-                <div style={{ fontFamily: 'monospace', fontWeight: 600, color: '#fff', marginTop: '2px' }}>{log.rule_id}</div>
+                <span style={{ color: 'var(--text-secondary)' }}>Origin Log Rule ID:</span>
+                <div style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{log.rule_id}</div>
               </div>
               <div>
-                <span style={{ color: '#a1a1aa' }}>Attack Category:</span>
-                <div style={{ fontWeight: 600, color: '#eab308', marginTop: '2px' }}>{log.attack_type}</div>
+                <span style={{ color: 'var(--text-secondary)' }}>Attack Category:</span>
+                <div style={{ fontWeight: 600, color: 'var(--sev-medium)', marginTop: '2px' }}>{log.attack_type}</div>
               </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa' }}>Exception Strategy</label>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Exception Strategy</label>
               <select
                 className="filter-select"
                 style={{ width: '100%', height: '36px' }}
@@ -144,7 +153,7 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {exclusionType !== 'parameter' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa' }}>Target Endpoint URI</label>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Endpoint URI</label>
                 <input
                   type="text"
                   className="search-input"
@@ -158,7 +167,7 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {(exclusionType === 'parameter' || exclusionType === 'uri_parameter') && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa' }}>Target Parameter Name</label>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Parameter Name</label>
                 <input
                   type="text"
                   className="search-input"
@@ -173,7 +182,7 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {exclusionType === 'endpoint_method' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa' }}>HTTP Method</label>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>HTTP Method</label>
                 <select
                   className="filter-select"
                   style={{ width: '100%', height: '36px' }}
@@ -191,7 +200,7 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {exclusionType === 'ip_suppression' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa' }}>Target Client IP Address</label>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Client IP Address</label>
                 <input
                   type="text"
                   className="search-input"
@@ -204,10 +213,10 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: '#a1a1aa' }}>Justification Reason</label>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Justification Reason</label>
               <textarea
                 className="settings-input"
-                style={{ height: '80px', resize: 'none', background: 'rgba(0,0,0,0.2)', padding: '10px' }}
+                style={{ height: '80px', resize: 'none', background: 'var(--inset-bg)', padding: '10px' }}
                 placeholder="E.g., verified search query parameters as legitimate business traffic..."
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
@@ -217,8 +226,8 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {previewRule && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <span style={{ fontSize: '11px', fontWeight: 600, color: '#a1a1aa', textTransform: 'uppercase' }}>Auto-Generated CyberSentinel Engine Rule Preview</span>
-                <pre style={{ margin: 0, padding: '12px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '6px', color: '#10b981', fontFamily: 'monospace', fontSize: '11px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Auto-Generated CyberSentinel Engine Rule Preview</span>
+                <pre style={{ margin: 0, padding: '12px', background: 'var(--inset-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--success-color)', fontFamily: 'monospace', fontSize: '11px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                   {previewRule}
                 </pre>
               </div>
@@ -226,7 +235,7 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
           </div>
           <div className="modal-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
             <button type="button" className="modal-btn secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="modal-btn primary" disabled={submitting} style={{ background: '#f97316', borderColor: '#f97316', color: '#000', fontWeight: 600 }}>
+            <button type="submit" className="modal-btn primary" disabled={submitting} style={{ background: 'var(--sev-high)', borderColor: 'var(--sev-high)', color: '#000', fontWeight: 600 }}>
               {submitting ? "Applying exception..." : "Apply WAF Exception"}
             </button>
           </div>
@@ -239,6 +248,8 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
 function ExclusionDetailsModal({ isOpen, exclusion, onClose }) {
   const [copied, setCopied] = useState(false);
+
+  useEscapeToClose(onClose, isOpen);
 
   useEffect(() => {
     if (copied) {
@@ -268,79 +279,80 @@ function ExclusionDetailsModal({ isOpen, exclusion, onClose }) {
       <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '580px' }}>
         <div className="modal-header">
           <div className="modal-title">
-            <ShieldCheck size={20} color="#10b981" />
+            <ShieldCheck size={20} color="var(--success-color)" />
             <span>Active Exclusion Rule Config</span>
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
         </div>
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)', fontSize: '13px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: 'var(--surface-subtle)', padding: '12px', borderRadius: '6px', border: '1px solid var(--border-subtle)', fontSize: '13px' }}>
             <div>
-              <span style={{ color: '#a1a1aa', fontSize: '12px' }}>Exclusion Policy ID:</span>
-              <div style={{ fontWeight: 600, color: '#fff', marginTop: '2px', fontFamily: 'monospace' }}>EX-Ref #{exclusion.id}</div>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>Exclusion Policy ID:</span>
+              <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px', fontFamily: 'monospace' }}>EX-Ref #{exclusion.id}</div>
             </div>
             <div>
-              <span style={{ color: '#a1a1aa', fontSize: '12px' }}>Target WAF Rule ID:</span>
-              <div style={{ fontWeight: 600, color: '#fdba74', marginTop: '2px', fontFamily: 'monospace' }}>Rule #{exclusion.rule_id}</div>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>Target WAF Rule ID:</span>
+              <div style={{ fontWeight: 600, color: 'var(--sev-high)', marginTop: '2px', fontFamily: 'monospace' }}>Rule #{exclusion.rule_id}</div>
             </div>
             <div style={{ marginTop: '8px' }}>
-              <span style={{ color: '#a1a1aa', fontSize: '12px' }}>Strategy Type:</span>
-              <div style={{ fontWeight: 600, color: '#3b82f6', marginTop: '2px' }}>{typeLabels[exclusion.exclusion_type] || exclusion.exclusion_type}</div>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>Strategy Type:</span>
+              <div style={{ fontWeight: 600, color: 'var(--sev-low)', marginTop: '2px' }}>{typeLabels[exclusion.exclusion_type] || exclusion.exclusion_type}</div>
             </div>
             <div style={{ marginTop: '8px' }}>
-              <span style={{ color: '#a1a1aa', fontSize: '12px' }}>Created By / When:</span>
-              <div style={{ fontWeight: 600, color: '#fff', marginTop: '2px', fontSize: '12px' }}>@{exclusion.created_by} on <span style={{ color: '#a1a1aa' }}>{exclusion.created_at}</span></div>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>Created By / When:</span>
+              <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px', fontSize: '12px' }}>@{exclusion.created_by} on <span style={{ color: 'var(--text-secondary)' }}>{exclusion.created_at}</span></div>
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#a1a1aa', textTransform: 'uppercase' }}>Scope Targets</span>
-            <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.04)', display: 'flex', flexDirection: 'column', gap: '6px', fontFamily: 'monospace', fontSize: '12px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Scope Targets</span>
+            <div style={{ background: 'var(--inset-bg)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '6px', fontFamily: 'monospace', fontSize: '12px' }}>
               {exclusion.uri && (
                 <div>
-                  <span style={{ color: '#a1a1aa' }}>URI Endpoint:</span> <span style={{ color: '#38bdf8' }}>{exclusion.uri}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>URI Endpoint:</span> <span style={{ color: 'var(--sev-low)' }}>{exclusion.uri}</span>
                 </div>
               )}
               {exclusion.parameter_name && (
                 <div>
-                  <span style={{ color: '#a1a1aa' }}>Parameter:</span> <span style={{ color: '#fb923c' }}>{exclusion.parameter_name}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>Parameter:</span> <span style={{ color: 'var(--sev-high)' }}>{exclusion.parameter_name}</span>
                 </div>
               )}
               {exclusion.http_method && (
                 <div>
-                  <span style={{ color: '#a1a1aa' }}>HTTP Method:</span> <span style={{ color: '#f43f5e' }}>{exclusion.http_method}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>HTTP Method:</span> <span style={{ color: 'var(--danger-color)' }}>{exclusion.http_method}</span>
                 </div>
               )}
               {exclusion.client_ip && (
                 <div>
-                  <span style={{ color: '#a1a1aa' }}>Client IP:</span> <span style={{ color: '#10b981' }}>{exclusion.client_ip}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>Client IP:</span> <span style={{ color: 'var(--success-color)' }}>{exclusion.client_ip}</span>
                 </div>
               )}
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#a1a1aa', textTransform: 'uppercase' }}>Justification Notes</span>
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '6px', padding: '12px', fontSize: '13px', color: '#cbd5e1', fontStyle: exclusion.notes ? 'normal' : 'italic', whiteSpace: 'pre-wrap' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Justification Notes</span>
+            <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '12px', fontSize: '13px', color: 'var(--text-primary)', fontStyle: exclusion.notes ? 'normal' : 'italic', whiteSpace: 'pre-wrap' }}>
               {exclusion.notes || "No justification reason recorded."}
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '11px', fontWeight: 600, color: '#a1a1aa', textTransform: 'uppercase' }}>Compiled CyberSentinel Engine Rule Directive</span>
-              <button
+              <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Compiled CyberSentinel Engine Rule Directive</span>
+              <Button
+                variant="ghost" size="sm"
+                icon={copied ? Check : Copy}
                 onClick={handleCopy}
-                style={{ background: 'transparent', border: 'none', color: copied ? '#10b981' : '#3b82f6', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
+                style={{ color: copied ? 'var(--success-color)' : 'var(--sev-low)', padding: '2px 6px' }}
               >
-                {copied ? <Check size={12} /> : <Copy size={12} />}
-                <span>{copied ? 'Copied' : 'Copy Directive'}</span>
-              </button>
+                {copied ? 'Copied' : 'Copy Directive'}
+              </Button>
             </div>
-            <pre style={{ margin: 0, padding: '12px', background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '6px', color: '#10b981', fontFamily: 'monospace', fontSize: '11px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            <pre style={{ margin: 0, padding: '12px', background: 'var(--inset-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--success-color)', fontFamily: 'monospace', fontSize: '11px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
               {exclusion.modsec_rule}
             </pre>
           </div>
@@ -367,11 +379,16 @@ export default function Exceptions() {
   const [editingExclusion, setEditingExclusion] = useState(null);
   const [editNotes, setEditNotes] = useState('');
   const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
-  const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const { toast, showToast } = useToast();
+  const confirm = useConfirm();
+  const exclusionsPage = usePagination(exclusions, 15);
+  const historyPage = usePagination(history, 15);
 
   const [selectedExclusion, setSelectedExclusion] = useState(null);
   const [isExclusionModalOpen, setIsExclusionModalOpen] = useState(false);
+
+  useEscapeToClose(() => setIsNoteModalOpen(false), isNoteModalOpen);
 
   const fetchExclusions = async () => {
     setLoading(true);
@@ -390,7 +407,7 @@ export default function Exceptions() {
       setAnalytics(anaData);
       setHistory(histData);
     } catch (err) {
-      console.error("Failed to load exclusions", err);
+      showToast('Failed to load exclusions: ' + (err.message || 'Unknown error'), 'error');
     } finally {
       setLoading(false);
     }
@@ -399,6 +416,7 @@ export default function Exceptions() {
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchExclusions();
+      exclusionsPage.resetPage();
     }, 0);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -408,12 +426,10 @@ export default function Exceptions() {
     const nextStatus = currentStatus === 'Active' ? 'Disabled' : 'Active';
     try {
       await updateExclusionStatus(id, nextStatus);
-      setSuccessMsg(`Exception rule successfully ${nextStatus === 'Active' ? 'activated' : 'disabled'}!`);
-      setTimeout(() => setSuccessMsg(''), 3000);
+      showToast(`Exception rule successfully ${nextStatus === 'Active' ? 'activated' : 'disabled'}.`);
       fetchExclusions();
     } catch (err) {
-      console.error("Failed to toggle status", err);
-      alert(err.message || "Failed to update exception status.");
+      showToast(err.message || "Failed to update exception status.", "error");
     }
   };
 
@@ -421,26 +437,27 @@ export default function Exceptions() {
     e.preventDefault();
     try {
       await updateExclusionNote(editingExclusion.id, editNotes);
-      setSuccessMsg("Exclusion notes updated successfully!");
+      showToast("Exclusion notes updated successfully.");
       setIsNoteModalOpen(false);
-      setTimeout(() => setSuccessMsg(''), 3000);
       fetchExclusions();
     } catch (err) {
-      console.error("Failed to save exclusion notes", err);
       setErrorMsg(err.message || "Failed to update notes.");
     }
   };
 
   const handleDeleteExclusion = async (id) => {
-    if (!window.confirm("Are you sure you want to permanently delete this exception policy? The target rule will instantly resume blocking traffic.")) return;
+    if (!(await confirm({
+      title: 'Delete exception policy',
+      message: 'Are you sure you want to permanently delete this exception policy? The target rule will instantly resume blocking traffic.',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     try {
       await deleteExclusion(id);
-      setSuccessMsg("Exclusion policy deleted and WAF synchronized.");
-      setTimeout(() => setSuccessMsg(''), 3000);
+      showToast("Exclusion policy deleted and WAF synchronized.");
       fetchExclusions();
     } catch (err) {
-      console.error("Failed to delete exclusion", err);
-      alert(err.message || "Failed to remove exclusion.");
+      showToast(err.message || "Failed to remove exclusion.", "error");
     }
   };
 
@@ -457,32 +474,16 @@ export default function Exceptions() {
       transition={{ duration: 0.25 }}
       style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}
     >
-      <AnimatePresence>
-        {successMsg && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            style={{
-              position: 'fixed', top: '24px', right: '24px', background: 'var(--success-color)', color: '#000',
-              padding: '12px 24px', borderRadius: '8px', zIndex: 10000, fontWeight: 600, display: 'flex', gap: '8px', alignItems: 'center',
-              boxShadow: '0 10px 15px -3px var(--success-glow)'
-            }}
-          >
-            <ShieldCheck size={18} />
-            <span>{successMsg}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Toast toast={toast} />
 
       {analytics && (
         <div className="dashboard-grid animate-fade-in" style={{ gap: '16px', marginBottom: '8px' }}>
           <div className="metric-card glass-panel" style={{ gridColumn: 'span 4' }}>
             <div className="metric-header">
               <span>Active WAF Exclusions</span>
-              <div className="metric-icon-wrapper orange" style={{ background: 'rgba(249, 115, 22, 0.1)', color: '#f97316' }}><AlertTriangle size={18} /></div>
+              <div className="metric-icon-wrapper orange" style={{ background: 'var(--sev-high-bg)', color: 'var(--sev-high)' }}><AlertTriangle size={18} /></div>
             </div>
-            <div className="metric-value" style={{ color: '#f97316' }}>{analytics.active_exclusions}</div>
+            <div className="metric-value" style={{ color: 'var(--sev-high)' }}>{analytics.active_exclusions}</div>
             <div className="metric-trend trend-up">
               <span>Active bypass rules overriding CRS</span>
             </div>
@@ -533,7 +534,7 @@ export default function Exceptions() {
         <>
           <div className="glass-panel" style={{ padding: '16px 20px', display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center' }}>
             <div style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
-              <Search size={16} color="#a1a1aa" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
+              <Search size={16} color="var(--text-secondary)" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
               <input
                 type="text"
                 className="search-input"
@@ -559,7 +560,7 @@ export default function Exceptions() {
 
           <div className="table-container glass-panel" style={{ padding: 0 }}>
             {loading ? (
-              <div style={{ padding: '40px', textAlign: 'center', color: '#a1a1aa' }}>Syncing exceptions database...</div>
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>Syncing exceptions database...</div>
             ) : exclusions.length === 0 ? (
               <NoExceptionsEmptyState />
             ) : (
@@ -576,7 +577,7 @@ export default function Exceptions() {
                   </tr>
                 </thead>
                 <tbody>
-                    {exclusions.map((entry) => {
+                    {exclusionsPage.pageItems.map((entry) => {
                       const typeLabels = {
                         uri: 'URI Bypass',
                         parameter: 'Global Param',
@@ -590,22 +591,22 @@ export default function Exceptions() {
                           className="log-row"
                         >
                           <td>
-                            <span className="log-rule-id" style={{ background: 'rgba(255,255,255,0.05)', color: '#fff', fontSize: '11px', padding: '3px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>
+                            <span className="log-rule-id" style={{ background: 'var(--surface-hover)', color: 'var(--text-primary)', fontSize: '11px', padding: '3px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>
                               {entry.rule_id}
                             </span>
                           </td>
-                          <td style={{ fontWeight: 600, fontSize: '12px', color: '#fdba74' }}>
+                          <td style={{ fontWeight: 600, fontSize: '12px', color: 'var(--sev-high)' }}>
                             {typeLabels[entry.exclusion_type] || entry.exclusion_type}
                           </td>
-                          <td style={{ fontFamily: 'monospace', fontSize: '12px', color: '#cbd5e1', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-primary)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {entry.exclusion_type === 'parameter' && `Param: ${entry.parameter_name}`}
                             {entry.exclusion_type === 'uri' && `URI: ${entry.uri}`}
                             {entry.exclusion_type === 'uri_parameter' && `URI: ${entry.uri} [Param: ${entry.parameter_name}]`}
                             {entry.exclusion_type === 'endpoint_method' && `URI: ${entry.uri} [Method: ${entry.http_method}]`}
                             {entry.exclusion_type === 'ip_suppression' && `URI: ${entry.uri} [IP: ${entry.client_ip}]`}
                           </td>
-                          <td style={{ fontSize: '12px', color: '#94a3b8' }}>@{entry.created_by}</td>
-                          <td style={{ fontSize: '12px', color: '#94a3b8', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={entry.notes}>
+                          <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>@{entry.created_by}</td>
+                          <td style={{ fontSize: '12px', color: 'var(--text-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={entry.notes}>
                             {entry.notes}
                           </td>
                           <td>
@@ -616,9 +617,9 @@ export default function Exceptions() {
                                 fontWeight: 700,
                                 padding: '3px 8px',
                                 borderRadius: '12px',
-                                background: entry.status === 'Active' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                                color: entry.status === 'Active' ? '#a7f3d0' : '#fca5a5',
-                                border: entry.status === 'Active' ? '1px solid rgba(16,185,129,0.2)' : '1px solid rgba(239,68,68,0.2)',
+                                background: entry.status === 'Active' ? 'rgba(16,185,129,0.1)' : 'var(--danger-bg)',
+                                color: entry.status === 'Active' ? 'var(--success-color)' : 'var(--danger-color)',
+                                border: entry.status === 'Active' ? '1px solid rgba(16,185,129,0.2)' : '1px solid var(--danger-border)',
                                 textTransform: 'uppercase',
                                 cursor: 'pointer'
                               }}
@@ -643,7 +644,7 @@ export default function Exceptions() {
                                   setEditNotes(entry.notes);
                                   setIsNoteModalOpen(true);
                                 }}
-                                style={{ padding: '4px 8px', fontSize: '11px', borderColor: 'rgba(59, 130, 246, 0.4)', color: '#93c5fd' }}
+                                style={{ padding: '4px 8px', fontSize: '11px', borderColor: 'var(--sev-low-border)', color: 'var(--sev-low)' }}
                               >
                                 Edit Note
                               </button>
@@ -651,7 +652,7 @@ export default function Exceptions() {
                               <button
                                 className="action-btn-inspect"
                                 onClick={() => handleDeleteExclusion(entry.id)}
-                                style={{ padding: '4px 8px', fontSize: '11px', borderColor: 'rgba(239, 68, 68, 0.4)', color: '#fca5a5' }}
+                                style={{ padding: '4px 8px', fontSize: '11px', borderColor: 'var(--danger-border)', color: 'var(--danger-color)' }}
                               >
                                 Delete
                               </button>
@@ -664,23 +665,27 @@ export default function Exceptions() {
               </table>
             )}
           </div>
+          <Pagination
+            page={exclusionsPage.page} totalPages={exclusionsPage.totalPages} total={exclusionsPage.total}
+            itemLabel="exceptions" onPrev={exclusionsPage.goToPrev} onNext={exclusionsPage.goToNext}
+          />
 
           {analytics && analytics.top_excluded_rules && analytics.top_excluded_rules.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '10px' }}>
               <div className="glass-panel" style={{ padding: '20px' }}>
-                <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <AlertTriangle size={16} color="#f97316" />
+                <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <AlertTriangle size={16} color="var(--sev-high)" />
                   <span>Most Frequently Excluded WAF Rules</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {analytics.top_excluded_rules.map((rule) => (
                     <div key={rule.rule_id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-                        <span style={{ fontFamily: 'monospace', color: '#fdba74' }}>Rule #{rule.rule_id}</span>
+                        <span style={{ fontFamily: 'monospace', color: 'var(--sev-high)' }}>Rule #{rule.rule_id}</span>
                         <span style={{ fontWeight: 600 }}>{rule.count} Exception Policies</span>
                       </div>
-                      <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.03)', borderRadius: '3px', overflow: 'hidden' }}>
-                        <div style={{ width: `${Math.min((rule.count / (analytics.top_excluded_rules[0]?.count || 1)) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg, #fdba74, #f97316)', borderRadius: '3px' }}></div>
+                      <div style={{ width: '100%', height: '5px', background: 'var(--surface-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min((rule.count / (analytics.top_excluded_rules[0]?.count || 1)) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg, color-mix(in srgb, var(--sev-high) 55%, transparent), var(--sev-high))', borderRadius: '3px' }}></div>
                       </div>
                     </div>
                   ))}
@@ -688,8 +693,8 @@ export default function Exceptions() {
               </div>
 
               <div className="glass-panel" style={{ padding: '20px' }}>
-                <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <ShieldCheck size={16} color="#10b981" />
+                <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldCheck size={16} color="var(--success-color)" />
                   <span>Top False Positive Generating Rules (Tuning Candidates)</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -697,16 +702,16 @@ export default function Exceptions() {
                     analytics.top_fp_rules.map((rule) => (
                       <div key={rule.rule_id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-                          <span style={{ fontFamily: 'monospace', color: '#a7f3d0' }}>Rule #{rule.rule_id}</span>
+                          <span style={{ fontFamily: 'monospace', color: 'var(--success-color)' }}>Rule #{rule.rule_id}</span>
                           <span style={{ fontWeight: 600 }}>{rule.count} False Positives Flagged</span>
                         </div>
-                        <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.03)', borderRadius: '3px', overflow: 'hidden' }}>
-                          <div style={{ width: `${Math.min((rule.count / (analytics.top_fp_rules[0]?.count || 1)) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg, #a7f3d0, #10b981)', borderRadius: '3px' }}></div>
+                        <div style={{ width: '100%', height: '5px', background: 'var(--surface-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.min((rule.count / (analytics.top_fp_rules[0]?.count || 1)) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg, color-mix(in srgb, var(--success-color) 45%, transparent), var(--success-color))', borderRadius: '3px' }}></div>
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div style={{ color: '#a1a1aa', fontSize: '12px', textAlign: 'center', padding: '20px' }}>No marked false positives triggers discovered yet.</div>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center', padding: '20px' }}>No marked false positives triggers discovered yet.</div>
                   )}
                 </div>
               </div>
@@ -718,7 +723,7 @@ export default function Exceptions() {
       {activeSubTab === 'audit_history' && (
         <div className="table-container glass-panel" style={{ padding: 0 }}>
           {history.length === 0 ? (
-            <div style={{ padding: '60px 40px', textAlign: 'center', color: '#a1a1aa' }}>No exceptions audit history recorded yet.</div>
+            <div style={{ padding: '60px 40px', textAlign: 'center', color: 'var(--text-secondary)' }}>No exceptions audit history recorded yet.</div>
           ) : (
             <table className="logs-table">
               <thead>
@@ -731,17 +736,17 @@ export default function Exceptions() {
                 </tr>
               </thead>
               <tbody>
-                {history.map((log) => (
+                {historyPage.pageItems.map((log) => (
                   <tr key={log.id}>
-                    <td style={{ fontSize: '12px', color: '#94a3b8' }}>{formatLocalTime(log.timestamp)}</td>
+                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{formatLocalTime(log.timestamp)}</td>
                     <td>
                       <span style={{
                         fontSize: '9px',
                         fontWeight: 700,
                         padding: '2px 6px',
                         borderRadius: '4px',
-                        background: log.action === 'Create' ? 'rgba(16,185,129,0.1)' : log.action === 'Delete' ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)',
-                        color: log.action === 'Create' ? '#a7f3d0' : log.action === 'Delete' ? '#fca5a5' : '#93c5fd',
+                        background: log.action === 'Create' ? 'rgba(16,185,129,0.1)' : log.action === 'Delete' ? 'var(--danger-bg)' : 'var(--sev-low-bg)',
+                        color: log.action === 'Create' ? 'var(--success-color)' : log.action === 'Delete' ? 'var(--danger-color)' : 'var(--sev-low)',
                         textTransform: 'uppercase'
                       }}>
                         {log.action}
@@ -749,12 +754,16 @@ export default function Exceptions() {
                     </td>
                     <td style={{ fontSize: '12px', fontWeight: 500 }}>@{log.username}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>Ex-Ref #{log.exclusion_id}</td>
-                    <td style={{ fontSize: '12px', color: '#cbd5e1' }}>{log.details}</td>
+                    <td style={{ fontSize: '12px', color: 'var(--text-primary)' }}>{log.details}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
+          <Pagination
+            page={historyPage.page} totalPages={historyPage.totalPages} total={historyPage.total}
+            itemLabel="audit entries" onPrev={historyPage.goToPrev} onNext={historyPage.goToNext}
+          />
         </div>
       )}
 
@@ -764,26 +773,26 @@ export default function Exceptions() {
             <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
               <div className="modal-header">
                 <div className="modal-title">
-                  <Database size={18} color="#3b82f6" />
+                  <Database size={18} color="var(--sev-low)" />
                   <span>Update Exception Justification</span>
                 </div>
-                <button className="modal-close-btn" onClick={() => setIsNoteModalOpen(false)}>
+                <button className="modal-close-btn" onClick={() => setIsNoteModalOpen(false)} aria-label="Close">
                   <X size={18} />
                 </button>
               </div>
               <form onSubmit={handleSaveNotes}>
                 <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {errorMsg && (
-                    <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#fca5a5', padding: '8px 12px', borderRadius: '6px', fontSize: '12px' }}>
+                    <div style={{ background: 'var(--danger-bg)', border: '1px solid var(--danger-border)', color: 'var(--danger-color)', padding: '8px 12px', borderRadius: '6px', fontSize: '12px' }}>
                       {errorMsg}
                     </div>
                   )}
-                  <div style={{ fontSize: '12px', color: '#a1a1aa' }}>
-                    Edit the administrative review notes for Rule <strong style={{ color: '#fff' }}>{editingExclusion.rule_id}</strong> exception:
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    Edit the administrative review notes for Rule <strong style={{ color: 'var(--text-primary)' }}>{editingExclusion.rule_id}</strong> exception:
                   </div>
                   <textarea
                     className="settings-input"
-                    style={{ height: '100px', resize: 'none', background: 'rgba(0,0,0,0.2)', padding: '12px' }}
+                    style={{ height: '100px', resize: 'none', background: 'var(--inset-bg)', padding: '12px' }}
                     placeholder="Enter revised justification notes..."
                     value={editNotes}
                     onChange={(e) => setEditNotes(e.target.value)}
@@ -793,7 +802,7 @@ export default function Exceptions() {
                 </div>
                 <div className="modal-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                   <button type="button" className="modal-btn secondary" onClick={() => setIsNoteModalOpen(false)}>Cancel</button>
-                  <button type="submit" className="modal-btn primary" style={{ background: '#3b82f6', borderColor: '#3b82f6', color: '#fff', fontWeight: 600 }}>
+                  <button type="submit" className="modal-btn primary" style={{ background: 'var(--sev-low)', borderColor: 'var(--sev-low)', color: '#fff', fontWeight: 600 }}>
                     Save Note
                   </button>
                 </div>

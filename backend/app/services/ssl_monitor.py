@@ -2,7 +2,7 @@ import os
 import time
 import logging
 import asyncio
-from app.services.nginx_manager import reload_nginx
+from app.services.nginx_manager import reload_nginx, test_nginx_config
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +60,26 @@ async def start_ssl_monitor():
                     changed = True
             
             if changed:
-                logger.info("SSL Monitor: Triggering graceful Nginx configuration reload to load new certificates...")
-                success = reload_nginx()
-                if success:
-                    logger.info("SSL Monitor: Nginx reload completed successfully.")
+                # reload_nginx()/test_nginx_config() shell out via subprocess.run
+                # with per-candidate timeouts up to 10s each — run directly on
+                # this background task's event loop (shared with every HTTP
+                # request in the process), that call would stall the entire
+                # dashboard for other users while the SSL monitor reloads.
+                logger.info("SSL Monitor: Validating Nginx configuration before reload...")
+                valid, err_msg = await asyncio.to_thread(test_nginx_config)
+                if not valid:
+                    logger.error(
+                        f"SSL Monitor: Skipping reload — Nginx configuration is currently "
+                        f"invalid, applying it now would take the WAF down: {err_msg}"
+                    )
                 else:
-                    logger.error("SSL Monitor: Nginx reload failed. Check Nginx error logs.")
-                
+                    logger.info("SSL Monitor: Triggering graceful Nginx configuration reload to load new certificates...")
+                    success = await asyncio.to_thread(reload_nginx)
+                    if success:
+                        logger.info("SSL Monitor: Nginx reload completed successfully.")
+                    else:
+                        logger.error("SSL Monitor: Nginx reload failed. Check Nginx error logs.")
+
                 # Update baseline
                 _last_check_times = current_mtimes
             else:

@@ -4,7 +4,10 @@ CyberSentinel WAF - Notification Dispatcher & Channel Handlers
 import logging
 import smtplib
 import json
+import socket
+import ipaddress
 import requests
+from urllib.parse import urlparse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +16,45 @@ from abc import ABC, abstractmethod
 import datetime as dt_module
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_outbound_url(url: str) -> Optional[str]:
+    """
+    Blocks SSRF via admin-configured Slack/generic-webhook URLs: an admin
+    session (or a compromised one) could otherwise point an alert channel at
+    an internal service or the cloud metadata endpoint
+    (169.254.169.254) and have the backend fetch it on every alert. Returns
+    an error string if the URL should be rejected, or None if it's fine to
+    dispatch to.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "Invalid URL."
+
+    if parsed.scheme not in ("http", "https"):
+        return "Webhook URL must use http or https."
+    if not parsed.hostname:
+        return "Webhook URL is missing a host."
+
+    try:
+        addrs = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror as e:
+        return f"Could not resolve webhook host: {e}"
+
+    for family, _, _, _, sockaddr in addrs:
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+        ):
+            return f"Webhook host resolves to a non-public address ({ip_str}) — not allowed."
+
+    return None
 
 
 class BaseNotificationChannel(ABC):
@@ -119,6 +161,10 @@ class SlackNotificationChannel(BaseNotificationChannel):
             if not webhook_url:
                 return False, "Missing Slack Webhook URL."
 
+            ssrf_error = _validate_outbound_url(webhook_url)
+            if ssrf_error:
+                return False, ssrf_error
+
             # Determine severity color
             color = "#6b7280"  # info
             if severity.lower() == "critical":
@@ -173,10 +219,18 @@ class WebhookNotificationChannel(BaseNotificationChannel):
             method = config.get("method", "POST").upper()
             headers = config.get("headers", {})
             timeout = config.get("timeout", 10)
-            verify_ssl = config.get("verify_ssl", True)
+            # verify_ssl is intentionally NOT read from admin config anymore —
+            # letting the UI disable TLS verification on an outbound webhook
+            # is a pointless downgrade knob with no legitimate use case here
+            # and a real MITM/credential-exposure risk if ever flipped.
+            verify_ssl = True
 
             if not url:
                 return False, "Missing Webhook URL."
+
+            ssrf_error = _validate_outbound_url(url)
+            if ssrf_error:
+                return False, ssrf_error
 
             payload = {
                 "event_type": event_type,
