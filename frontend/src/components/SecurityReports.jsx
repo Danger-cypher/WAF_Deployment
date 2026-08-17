@@ -338,55 +338,53 @@ export default function SecurityReports() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
         >
-          {/* Print only header */}
-          <div className="print-header">
-            <h2>CyberSentinel WAF Audit & Threat Report</h2>
-            <div className="print-meta-grid">
-              <div><strong>Report ID:</strong> {reportData.reportId}</div>
-              <div><strong>Timeframe:</strong> {reportData.timeframe}</div>
-              <div><strong>Generated At:</strong> {reportData.generatedAt}</div>
-              <div><strong>Risk Rating:</strong> {reportData.riskLevel}</div>
-              <div><strong>Status:</strong> {reportData.health.status}</div>
-              <div><strong>Classification:</strong> Confidential — Internal Use Only</div>
-            </div>
-          </div>
-
           {/* Print-only footer — position:fixed repeats this on every printed
-              page (Chrome/Firefox both honor this for @media print), which is
-              the only reliable way to stamp page provenance: browsers don't
-              expose CSS counter(page)/counter(pages) to page content, only to
-              their own optional header/footer in the print dialog. */}
+              page (reliable in Chrome/Chromium-based "Save as PDF", the
+              primary target here; Firefox's print engine has known bugs
+              repeating fixed-position elements across pages). @page's
+              bottom margin (see print styles) reserves room for this so it
+              doesn't overlap the last line of content on each page. */}
           <div className="print-footer">
-            CyberSentinel WAF — {reportData.reportId} — Confidential
+            CyberSentinel WAF — {reportData.reportId} — Confidential — Internal Use Only
           </div>
 
-          {/* Report Sheet Header Card */}
+          {/* Letterhead — one header used for both the on-screen preview and
+              print, instead of a separate print-only header that used to
+              duplicate this content with different styling. A single
+              source means the preview is a true what-you-see-is-what-prints
+              view instead of two designs that could quietly drift apart. */}
+          <div className="report-letterhead">
+            <div className="report-letterhead-brand">
+              <div className="report-letterhead-mark">CS</div>
+              <div>
+                <div className="report-letterhead-name">CyberSentinel</div>
+                <div className="report-letterhead-tagline">Web Application Firewall</div>
+              </div>
+            </div>
+            <div className="report-letterhead-classification">Confidential — Internal Use Only</div>
+          </div>
+
           <div className="report-header-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '20px' }}>
               <div>
                 <span className="report-badge">SECURITY REPORT</span>
-                <h1 style={{ margin: '8px 0 4px', fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>
+                <h1 style={{ margin: '10px 0 6px', fontSize: '26px', fontWeight: 700, fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}>
                   {reportType === 'executive' && 'WAF Executive Summary'}
                   {reportType === 'threat' && 'Detailed Threat Analysis'}
                   {reportType === 'compliance' && 'System Audit & Compliance'}
                 </h1>
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                  Timeframe: <strong>{reportData.timeframe}</strong> · Generated at: <strong>{reportData.generatedAt}</strong>
-                </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  Report ID: <strong>{reportData.reportId}</strong> · Classification: <strong>Confidential — Internal Use Only</strong>
+                <div className="report-header-meta">
+                  <span><strong>Timeframe</strong> {reportData.timeframe}</span>
+                  <span className="report-header-meta-sep">•</span>
+                  <span><strong>Generated</strong> {reportData.generatedAt}</span>
+                  <span className="report-header-meta-sep">•</span>
+                  <span><strong>Report ID</strong> {reportData.reportId}</span>
                 </div>
               </div>
 
-              <div style={{ 
-                textAlign: 'right', 
-                padding: '12px 20px', 
-                borderRadius: '8px', 
-                background: 'var(--surface-subtle)',
-                border: '1px solid var(--border-color)'
-              }}>
-                <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>OVERALL RISK</div>
-                <div style={{ fontSize: '20px', fontWeight: 800, color: reportData.riskColor, letterSpacing: '0.5px' }}>
+              <div className="report-risk-badge">
+                <div className="report-risk-badge-label">Overall Risk</div>
+                <div className="report-risk-badge-value" style={{ color: reportData.riskColor }}>
                   {reportData.riskLevel}
                 </div>
               </div>
@@ -431,7 +429,14 @@ export default function SecurityReports() {
               <div className="report-section-box">
                 <h3>Violation Category Breakdown</h3>
                 {reportData.attackTypes.length > 0 && (
-                  <div style={{ height: '200px', width: '100%', marginBottom: '12px' }}>
+                  // no-print: Recharts sizes its SVG off the live DOM via
+                  // ResizeObserver, which doesn't reliably re-fire when the
+                  // browser switches to print media — the chart can print
+                  // blank, clipped, or frozen at its last on-screen size.
+                  // The table directly below already carries the same
+                  // numbers in a form that prints reliably, so the chart is
+                  // screen-only rather than risking either failure mode.
+                  <div className="no-print" style={{ height: '200px', width: '100%', marginBottom: '12px' }}>
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
@@ -835,30 +840,178 @@ export default function SecurityReports() {
           color: var(--danger-color);
         }
 
-        /* Report Preview Sheet */
+        /* ===================================================================
+           Report Preview Sheet — deliberately a fixed "paper" palette, not
+           the app's dark/light theme tokens. A security report is a
+           document handed to someone outside the dashboard (an auditor, an
+           exec, a ticket attachment); it should read the same regardless of
+           which theme the person generating it happens to have selected,
+           and it should look on screen like what actually prints — no
+           separate light-on-dark-preview vs black-on-white-printout split.
+           Every variable below is scoped to .report-sheet-preview only; it
+           overrides the SAME variable names used throughout this file's
+           inline styles (var(--text-secondary) etc.), so none of those
+           inline styles needed to change — they inherit these instead of
+           the app's real theme tokens for free via normal CSS cascade.
+           =================================================================== */
         .report-sheet-preview {
+          --text-primary:     #18181f;
+          --text-secondary:   #52525b;
+          --text-muted:       #8b8b96;
+          --danger-color:     #b91c1c;
+          --warning-color:    #b45309;
+          --success-color:    #15803d;
+          --sev-high:         #c2410c;
+          --accent-color:     #4338ca;
+          --accent-bg:        #eef2ff;
+          --accent-border:    #c7d2fe;
+          --surface-subtle:   #f8f9fb;
+          --surface-hover:    #eef0f3;
+          --surface-strong:   #e4e4e7;
+          --border-color:     #e4e4e7;
+          --border-subtle:    #ececf0;
+          --border-strong:    #d4d4d8;
+          --inset-bg:         #f8f9fb;
+          --bg-surface:       #ffffff;
+          --shadow-card:      0 1px 2px rgba(16,16,24,0.04);
+          --chart-tooltip-bg: #ffffff;
+          --cyan-color:       #0e7490;
+          --ml-color:         #6d28d9;
+          --pink-color:       #be185d;
+
           background: var(--bg-surface);
+          color: var(--text-primary);
+          max-width: 920px;
+          margin: 0 auto;
           border: 1px solid var(--border-color);
-          border-radius: 16px;
-          padding: 40px;
-          box-shadow: var(--shadow-card);
+          border-radius: 6px;
+          padding: 48px 56px 40px;
+          box-shadow: 0 12px 32px rgba(16,16,24,0.16), 0 2px 6px rgba(16,16,24,0.08);
+          font-family: var(--font-display);
+          line-height: 1.6;
+        }
+
+        .report-sheet-preview h1,
+        .report-sheet-preview h2,
+        .report-sheet-preview h3 {
+          font-family: var(--font-display);
+          color: var(--text-primary);
+        }
+
+        /* Letterhead */
+        .report-letterhead {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding-bottom: 20px;
+          margin-bottom: 20px;
+          border-bottom: 3px solid var(--text-primary);
+        }
+
+        .report-letterhead-brand {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .report-letterhead-mark {
+          width: 36px;
+          height: 36px;
+          border-radius: 8px;
+          background: var(--text-primary);
+          color: #fff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 800;
+          font-size: 14px;
+          letter-spacing: 0.5px;
+          flex-shrink: 0;
+        }
+
+        .report-letterhead-name {
+          font-size: 16px;
+          font-weight: 800;
+          letter-spacing: -0.01em;
+          color: var(--text-primary);
+        }
+
+        .report-letterhead-tagline {
+          font-size: 11px;
+          color: var(--text-secondary);
+          font-weight: 500;
+        }
+
+        .report-letterhead-classification {
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          color: var(--text-secondary);
+          padding: 4px 10px;
+          border: 1px solid var(--border-strong);
+          border-radius: 4px;
         }
 
         .report-header-card {
-          border-bottom: 2px solid var(--border-color);
-          padding-bottom: 24px;
-          margin-bottom: 24px;
+          padding-bottom: 28px;
+          margin-bottom: 28px;
+          border-bottom: 1px solid var(--border-color);
+          page-break-inside: avoid;
+        }
+
+        .report-header-meta {
+          font-size: 12px;
+          color: var(--text-secondary);
+          margin-top: 6px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+
+        .report-header-meta strong {
+          color: var(--text-primary);
+          font-weight: 600;
+          margin-right: 4px;
+        }
+
+        .report-header-meta-sep {
+          color: var(--border-strong);
         }
 
         .report-badge {
           font-size: 10px;
           font-weight: 700;
-          letter-spacing: 1px;
-          padding: 2px 8px;
+          letter-spacing: 0.06em;
+          padding: 3px 9px;
           border-radius: 4px;
           background: var(--accent-bg);
           color: var(--accent-color);
           border: 1px solid var(--accent-border);
+          text-transform: uppercase;
+        }
+
+        .report-risk-badge {
+          text-align: right;
+          padding: 14px 22px;
+          border-radius: 8px;
+          background: var(--surface-subtle);
+          border: 1px solid var(--border-color);
+          flex-shrink: 0;
+        }
+
+        .report-risk-badge-label {
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--text-secondary);
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+        }
+
+        .report-risk-badge-value {
+          font-size: 22px;
+          font-weight: 800;
+          letter-spacing: 0.02em;
         }
 
         .report-grid-3 {
@@ -870,12 +1023,13 @@ export default function SecurityReports() {
 
         .report-metric-card {
           background: var(--surface-subtle);
-          border: 1px solid var(--surface-hover);
+          border: 1px solid var(--border-color);
           border-radius: 8px;
-          padding: 20px;
+          padding: 18px 20px;
           display: flex;
           flex-direction: column;
           gap: 4px;
+          page-break-inside: avoid;
         }
 
         .metric-label {
@@ -883,11 +1037,11 @@ export default function SecurityReports() {
           font-weight: 700;
           color: var(--text-secondary);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0.05em;
         }
 
         .metric-value {
-          font-size: 28px;
+          font-size: 26px;
           font-weight: 800;
           color: var(--text-primary);
           font-family: var(--font-mono);
@@ -906,19 +1060,20 @@ export default function SecurityReports() {
         }
 
         .report-section-box {
-          background: var(--surface-subtle);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
-          padding: 24px;
+          background: var(--bg-surface);
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          padding: 22px 24px;
+          page-break-inside: avoid;
         }
 
         .report-section-box h3 {
-          font-size: 15px;
+          font-size: 14px;
           font-weight: 700;
           color: var(--text-primary);
-          margin: 0 0 16px 0;
-          border-bottom: 1px solid var(--surface-hover);
+          margin: 0 0 14px 0;
           padding-bottom: 10px;
+          border-bottom: 1px solid var(--border-color);
         }
 
         .report-table-wrapper {
@@ -928,36 +1083,37 @@ export default function SecurityReports() {
         .report-table {
           width: 100%;
           border-collapse: collapse;
-          font-size: 13px;
+          font-size: 12.5px;
         }
 
         .report-table th {
           text-align: left;
-          padding: 8px 12px;
+          padding: 8px 10px;
           color: var(--text-secondary);
-          font-weight: 600;
-          border-bottom: 1px solid var(--surface-strong);
-          font-size: 11px;
+          font-weight: 700;
+          border-bottom: 2px solid var(--border-strong);
+          font-size: 10.5px;
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0.04em;
         }
 
         .report-table td {
-          padding: 10px 12px;
+          padding: 9px 10px;
           border-bottom: 1px solid var(--border-subtle);
           color: var(--text-primary);
         }
 
-        .report-table tr:hover td {
-          background: var(--surface-subtle);
+        .report-table tr {
+          page-break-inside: avoid;
         }
 
         .report-footer-card {
-          margin-top: 32px;
-          padding: 20px 24px;
-          background: var(--inset-bg);
-          border: 1px solid var(--surface-hover);
+          margin-top: 8px;
+          padding: 18px 22px;
+          background: var(--surface-subtle);
+          border: 1px solid var(--border-color);
           border-radius: 8px;
+          page-break-inside: avoid;
         }
 
         .summary-label {
@@ -965,7 +1121,7 @@ export default function SecurityReports() {
           font-weight: 700;
           color: var(--text-secondary);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0.05em;
           margin-bottom: 4px;
         }
 
@@ -975,23 +1131,34 @@ export default function SecurityReports() {
           color: var(--text-primary);
         }
 
-        .print-header {
-          display: none;
-        }
-
         .print-footer {
           display: none;
         }
 
-        /* PDF / Print Optimization Styles */
+        /* ===================================================================
+           Print / Save-as-PDF
+           =================================================================== */
+        @page {
+          size: A4;
+          /* Generous bottom margin reserves room for the fixed footer below
+             so it can't overlap the last line of content on each page —
+             the previous version had no @page rule at all, so the footer
+             (position: fixed; bottom: 0) sat directly on top of whatever
+             content happened to end at the bottom of a page. */
+          margin: 14mm 14mm 22mm 14mm;
+        }
+
         @media print {
-          body {
+          html, body {
             background: #fff !important;
-            color: #000 !important;
           }
-          
-          /* Hide layout items */
-          .sidebar, .page-header, .subtabs-container, .no-print, .app-footer {
+
+          /* Real, current layout chrome that must not appear in the
+             printout. .page-header never matched anything in this app's
+             actual DOM (the top bar's real class is .siem-topbar) — the
+             live dashboard topbar, complete with the notification bell and
+             account menu, was printing at the top of every report. */
+          .sidebar, .siem-topbar, .subtabs-container, .no-print, .app-footer {
             display: none !important;
           }
 
@@ -1002,32 +1169,11 @@ export default function SecurityReports() {
           }
 
           .report-sheet-preview {
-            background: #fff !important;
-            color: #000 !important;
+            max-width: none;
+            margin: 0;
             border: none !important;
             box-shadow: none !important;
             padding: 0 !important;
-            margin: 0 !important;
-          }
-
-          .print-header {
-            display: block !important;
-            margin-bottom: 30px;
-            border-bottom: 2px solid #000;
-            padding-bottom: 15px;
-          }
-
-          .print-header h2 {
-            margin: 0 0 10px 0;
-            font-size: 22px;
-            color: #000;
-          }
-
-          .print-meta-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            font-size: 11px;
-            color: #444;
           }
 
           .print-footer {
@@ -1038,58 +1184,19 @@ export default function SecurityReports() {
             right: 0;
             text-align: center;
             font-size: 9px;
-            color: #666;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            color: var(--text-secondary, #52525b);
             border-top: 1px solid #ddd;
             padding-top: 6px;
           }
 
-          .report-header-card {
-            border-bottom: 1px solid #ddd !important;
+          .report-sections-layout {
+            grid-template-columns: 1fr;
           }
 
-          .report-header-card h1 {
-            color: #000 !important;
-          }
-
-          .report-metric-card {
-            background: #f8f9fa !important;
-            border: 1px solid #ddd !important;
-            color: #000 !important;
-          }
-
-          .metric-value {
-            color: #000 !important;
-          }
-
-          .report-section-box {
-            background: #fff !important;
-            border: 1px solid #ddd !important;
-            color: #000 !important;
-          }
-
-          .report-section-box h3 {
-            color: #000 !important;
-            border-bottom: 1px solid #ddd !important;
-          }
-
-          .report-table th {
-            color: #333 !important;
-            border-bottom: 1px solid #ccc !important;
-          }
-
-          .report-table td {
-            color: #000 !important;
-            border-bottom: 1px solid #eee !important;
-          }
-
-          .report-footer-card {
-            background: #f8f9fa !important;
-            border: 1px solid #ddd !important;
-            color: #000 !important;
-          }
-
-          .summary-value {
-            color: #000 !important;
+          .report-grid-3 {
+            grid-template-columns: repeat(3, 1fr);
           }
         }
       `}</style>
