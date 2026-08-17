@@ -90,6 +90,509 @@ function RiskMeter({ level }) {
   );
 }
 
+// ============================================================================
+// Two separate presentation layers over the SAME reportData object:
+//
+// ReportAppView   — always visible on screen. Uses the app's real theme
+//                    tokens (.glass-panel, var(--text-primary) etc, with NO
+//                    local color overrides) so it inherits dark/light theme
+//                    automatically like every other dashboard page, and
+//                    never renders a white document/page look.
+// ReportPrintView — invisible on screen (display:none), revealed ONLY by
+//                    the @media print rules below when the user actually
+//                    prints/saves as PDF. This is the one styled as a fixed
+//                    white "paper" A4 document with a letterhead, since
+//                    that's appropriate for something handed to someone
+//                    outside the dashboard — but it must never affect the
+//                    normal application view, which is why it's a wholly
+//                    separate component/DOM subtree rather than the same
+//                    markup re-themed by a media query.
+//
+// Both read the same already-fetched reportData; neither fetches or
+// transforms data on its own, so there is exactly one source of truth and
+// no risk of the two views drifting out of sync on the numbers.
+// ============================================================================
+
+function AttackTypesTable({ attackTypes, tableClass }) {
+  const totalDetections = attackTypes.reduce((sum, item) => sum + (item.count || 0), 0);
+  return (
+    <table className={tableClass}>
+      <thead>
+        <tr>
+          <th>Violation Type / Category</th>
+          <th style={{ textAlign: 'right' }}>Detections</th>
+          <th style={{ textAlign: 'right' }}>Percentage</th>
+        </tr>
+      </thead>
+      <tbody>
+        {attackTypes.length > 0 ? (
+          attackTypes.map((t, idx) => (
+            <tr key={idx}>
+              <td><strong>{t.attack_type || 'Unknown / Custom'}</strong></td>
+              <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{t.count}</td>
+              <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+                {totalDetections > 0 ? ((t.count / totalDetections) * 100).toFixed(1) : '0.0'}%
+              </td>
+            </tr>
+          ))
+        ) : (
+          <tr><td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No threat category data recorded.</td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function TopIpsTable({ topIps, tableClass }) {
+  return (
+    <table className={tableClass}>
+      <thead>
+        <tr>
+          <th>Source IP</th>
+          <th>Origin Country</th>
+          <th style={{ textAlign: 'right' }}>Total Hits</th>
+        </tr>
+      </thead>
+      <tbody>
+        {topIps.length > 0 ? (
+          topIps.map((ip, idx) => (
+            <tr key={idx}>
+              <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)' }}>{ip.ip || ip.client_ip || ip.source_ip || 'Unknown'}</td>
+              <td>{ip.country || 'Internal'}</td>
+              <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{ip.count}</td>
+            </tr>
+          ))
+        ) : (
+          <tr><td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No attacking source IP data recorded.</td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function ComplianceTable({ data, tableClass }) {
+  return (
+    <>
+      <table className={tableClass}>
+        <thead>
+          <tr>
+            <th>Compliance Check / Standard</th>
+            <th>Maps To</th>
+            <th style={{ textAlign: 'right' }}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>CyberSentinel Engine Enforcement</td>
+            <MapsToCell mapping={COMPLIANCE_MAPPINGS.engineEnforcement} />
+            {(() => {
+              const on = data.compliance.engineEnforcement;
+              if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
+              return on === 'On'
+                ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENFORCING</td>
+                : <td style={{ textAlign: 'right', color: 'var(--danger-color)', fontWeight: 600 }}>NOT ENFORCING</td>;
+            })()}
+          </tr>
+          <tr>
+            <td>SSL/TLS Dynamic Cipher Hardening (HSTS)</td>
+            <MapsToCell mapping={COMPLIANCE_MAPPINGS.tlsHardening} />
+            {(() => {
+              const on = data.compliance.tlsHardening;
+              if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
+              return on
+                ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENABLED</td>
+                : <td style={{ textAlign: 'right', color: 'var(--sev-high)', fontWeight: 600 }}>DISABLED</td>;
+            })()}
+          </tr>
+          <tr>
+            <td>Dynamic Web Anti-Defacement Integrity Check</td>
+            <MapsToCell mapping={COMPLIANCE_MAPPINGS.antiDefacement} />
+            <td style={{
+              textAlign: 'right', fontWeight: 600,
+              color: data.health.antiDefacement === 'ACTIVE' ? 'var(--success-color)' : 'var(--text-secondary)',
+            }}>{data.health.antiDefacement}</td>
+          </tr>
+          <tr>
+            <td>Admin Authentication Logging & Audits</td>
+            <MapsToCell mapping={COMPLIANCE_MAPPINGS.adminAuditLogging} />
+            {(() => {
+              const on = data.compliance.adminAuditLogging;
+              if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
+              return on
+                ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENFORCED</td>
+                : <td style={{ textAlign: 'right', color: 'var(--danger-color)', fontWeight: 600 }}>DISABLED</td>;
+            })()}
+          </tr>
+          <tr>
+            <td>Active Protected Virtual Hosts</td>
+            <MapsToCell mapping={null} />
+            <td style={{ textAlign: 'right', fontWeight: 600 }}>
+              {data.compliance.activeProtectedHosts == null
+                ? 'UNABLE TO VERIFY'
+                : `${data.compliance.activeProtectedHosts} / ${data.compliance.totalProtectedHosts} ACTIVE`}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px', lineHeight: 1.5 }}>
+        Control citations reference publicly published framework language for context only, based on this
+        system's current configuration state. This is <strong>not</strong> a certified compliance
+        assessment — consult a qualified auditor for official certification against any named standard.
+      </p>
+    </>
+  );
+}
+
+function AuditEventsTable({ audit, tableClass }) {
+  return (
+    <table className={tableClass}>
+      <thead>
+        <tr>
+          <th>Audit Event Type</th>
+          <th style={{ textAlign: 'right' }}>Event Count</th>
+        </tr>
+      </thead>
+      <tbody>
+        {Object.keys(audit.by_type).length > 0 ? (
+          Object.entries(audit.by_type).map(([key, val]) => (
+            <tr key={key}>
+              <td><strong>{key}</strong></td>
+              <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{val}</td>
+            </tr>
+          ))
+        ) : (
+          <tr><td colSpan="2" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No audit occurrences logged.</td></tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ReportAppView — native dashboard presentation
+// ---------------------------------------------------------------------------
+function ReportAppView({ data, reportType }) {
+  return (
+    <div className="report-app-view">
+      <div className="glass-panel report-app-header">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '20px' }}>
+          <div>
+            <span className="report-app-badge">SECURITY REPORT</span>
+            <h1 className="report-app-title">
+              {reportType === 'executive' && 'WAF Executive Summary'}
+              {reportType === 'threat' && 'Detailed Threat Analysis'}
+              {reportType === 'compliance' && 'System Audit & Compliance'}
+            </h1>
+            <div className="report-app-meta">
+              <span><strong>Timeframe</strong> {data.timeframe}</span>
+              <span className="report-app-meta-sep">•</span>
+              <span><strong>Generated</strong> {data.generatedAt}</span>
+              <span className="report-app-meta-sep">•</span>
+              <span><strong>Report ID</strong> {data.reportId}</span>
+            </div>
+          </div>
+          <div className="report-app-risk">
+            <div className="report-app-risk-label">Overall Risk</div>
+            <div className="report-app-risk-value" style={{ color: data.riskColor }}>{data.riskLevel}</div>
+            <RiskMeter level={data.riskLevel} />
+          </div>
+        </div>
+      </div>
+
+      <div className="glass-panel report-app-narrative">
+        <h3><Activity size={15} /> Executive Narrative</h3>
+        <p>{data.narrativeSummary}</p>
+      </div>
+
+      <div className="report-app-stat-grid">
+        <div className="glass-panel report-app-stat-card">
+          <span className="report-app-stat-label">Total HTTP Requests</span>
+          <span className="report-app-stat-value">{data.metrics.totalRequests.toLocaleString()}</span>
+          <span className="report-app-stat-sub">Analyzed by WAF Engine</span>
+        </div>
+        <div className="glass-panel report-app-stat-card">
+          <span className="report-app-stat-label">Blocked Violations</span>
+          <span className="report-app-stat-value" style={{ color: 'var(--danger-color)' }}>{data.metrics.totalBlocked.toLocaleString()}</span>
+          <span className="report-app-stat-sub">Malicious Payloads Dropped</span>
+        </div>
+        <div className="glass-panel report-app-stat-card">
+          <span className="report-app-stat-label">Attack Percentage</span>
+          <span className="report-app-stat-value" style={{ color: 'var(--warning-color)' }}>{data.metrics.blockRate}%</span>
+          <span className="report-app-stat-sub">Violations to traffic ratio</span>
+        </div>
+      </div>
+
+      {reportType === 'executive' && (
+        <div className="report-app-grid">
+          <div className="glass-panel report-app-section" style={{ '--section-accent': 'var(--danger-color)' }}>
+            <h3>Violation Category Breakdown</h3>
+            {data.attackTypes.length > 0 && (
+              <div style={{ height: '220px', width: '100%', marginBottom: '12px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={data.attackTypes} cx="50%" cy="50%" innerRadius={45} outerRadius={78} paddingAngle={2} dataKey="count" nameKey="attack_type" strokeWidth={0}>
+                      {data.attackTypes.map((entry, index) => (
+                        <Cell key={index} fill={ATTACK_CHART_COLORS[index % ATTACK_CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip
+                      contentStyle={{ background: 'var(--chart-tooltip-bg)', border: '1px solid var(--surface-strong)', borderRadius: '8px', fontSize: '12px' }}
+                      itemStyle={{ color: 'var(--text-primary)' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            <div className="report-app-table-wrapper">
+              <AttackTypesTable attackTypes={data.attackTypes} tableClass="report-app-table" />
+            </div>
+          </div>
+          <div className="glass-panel report-app-section" style={{ '--section-accent': 'var(--danger-color)' }}>
+            <h3>Top Attack Originators</h3>
+            <div className="report-app-table-wrapper">
+              <TopIpsTable topIps={data.topIps} tableClass="report-app-table" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reportType === 'threat' && (
+        <div className="report-app-grid">
+          <div className="glass-panel report-app-section" style={{ gridColumn: '1 / -1', '--section-accent': 'var(--danger-color)' }}>
+            <h3>Threat Intelligence & Signatures</h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+              Signature-based detections and CyberSentinel Engine Core Rule Set (CRS) triggers recorded for this timeframe.
+            </p>
+            <div className="report-app-stat-grid" style={{ marginBottom: '20px' }}>
+              <div className="report-app-mini-stat">
+                <span className="report-app-stat-label">SQL Injection Attacks</span>
+                <span className="report-app-stat-value" style={{ fontSize: '22px' }}>{data.metrics.sqlInjections}</span>
+                <span className="report-app-stat-sub">Signature database matches</span>
+              </div>
+              <div className="report-app-mini-stat">
+                <span className="report-app-stat-label">Cross-Site Scripting (XSS)</span>
+                <span className="report-app-stat-value" style={{ fontSize: '22px' }}>{data.metrics.xssAttacks}</span>
+                <span className="report-app-stat-sub">Browser payloads filtered</span>
+              </div>
+              <div className="report-app-mini-stat">
+                <span className="report-app-stat-label">Primary Attack Vector</span>
+                <span className="report-app-stat-value" style={{ fontSize: '18px', color: 'var(--accent-color)' }}>{data.metrics.topAttackType}</span>
+                <span className="report-app-stat-sub">Most frequent category</span>
+              </div>
+            </div>
+            <h3>Top Threat Originators</h3>
+            <div className="report-app-table-wrapper">
+              <TopIpsTable topIps={data.topIps} tableClass="report-app-table" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reportType === 'compliance' && (
+        <div className="report-app-grid">
+          <div className="glass-panel report-app-section" style={{ '--section-accent': 'var(--accent-color)' }}>
+            <h3>System Configuration & Compliance</h3>
+            <div className="report-app-table-wrapper">
+              <ComplianceTable data={data} tableClass="report-app-table" />
+            </div>
+          </div>
+          <div className="glass-panel report-app-section" style={{ '--section-accent': 'var(--warning-color)' }}>
+            <h3>Security Audit Event Types</h3>
+            <div className="report-app-table-wrapper">
+              <AuditEventsTable audit={data.audit} tableClass="report-app-table" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="glass-panel report-app-footer">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          <div>
+            <div className="report-app-footer-label">GATEWAY NODE STATUS</div>
+            <div
+              className="report-app-footer-value"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                color: data.health.status === 'HEALTHY' ? 'var(--success-color)' : 'var(--sev-high)',
+              }}
+            >
+              <ShieldCheck size={14} />
+              <span>{data.health.status}</span>
+            </div>
+          </div>
+          <div>
+            <div className="report-app-footer-label">WAF CORE ENGINE</div>
+            <div className="report-app-footer-value">{data.health.engine}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ReportPrintView — formal A4 document, hidden on screen, revealed only by
+// @media print. Never visible as part of the normal application UI.
+// ---------------------------------------------------------------------------
+function ReportPrintView({ data, reportType }) {
+  return (
+    <div className="report-print-view">
+      <div className="report-print-sheet">
+        <div className="print-footer">
+          CyberSentinel WAF — {data.reportId} — Confidential — Internal Use Only
+        </div>
+
+        <div className="report-print-letterhead">
+          <div className="report-print-letterhead-brand">
+            <div className="report-print-letterhead-mark">CS</div>
+            <div>
+              <div className="report-print-letterhead-name">CyberSentinel</div>
+              <div className="report-print-letterhead-tagline">Web Application Firewall</div>
+            </div>
+          </div>
+          <div className="report-print-letterhead-classification">Confidential — Internal Use Only</div>
+        </div>
+
+        <div className="report-print-header-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '20px' }}>
+            <div>
+              <span className="report-print-badge">SECURITY REPORT</span>
+              <h1 className="report-print-title">
+                {reportType === 'executive' && 'WAF Executive Summary'}
+                {reportType === 'threat' && 'Detailed Threat Analysis'}
+                {reportType === 'compliance' && 'System Audit & Compliance'}
+              </h1>
+              <div className="report-print-meta">
+                <span><strong>Timeframe</strong> {data.timeframe}</span>
+                <span className="report-print-meta-sep">•</span>
+                <span><strong>Generated</strong> {data.generatedAt}</span>
+                <span className="report-print-meta-sep">•</span>
+                <span><strong>Report ID</strong> {data.reportId}</span>
+              </div>
+            </div>
+            <div className="report-print-risk-badge">
+              <div className="report-print-risk-label">Overall Risk</div>
+              <div className="report-print-risk-value" style={{ color: data.riskColor }}>{data.riskLevel}</div>
+              <RiskMeter level={data.riskLevel} />
+            </div>
+          </div>
+        </div>
+
+        <div className="report-print-section" style={{ marginBottom: '20px' }}>
+          <h3>Executive Narrative</h3>
+          <p style={{ fontSize: '13px', lineHeight: 1.7 }}>{data.narrativeSummary}</p>
+        </div>
+
+        <div className="report-print-grid-3">
+          <div className="report-print-metric-card">
+            <span className="report-print-metric-label">Total HTTP Requests</span>
+            <span className="report-print-metric-value">{data.metrics.totalRequests.toLocaleString()}</span>
+            <span className="report-print-metric-sub">Analyzed by WAF Engine</span>
+          </div>
+          <div className="report-print-metric-card">
+            <span className="report-print-metric-label">Blocked Violations</span>
+            <span className="report-print-metric-value" style={{ color: 'var(--danger-color)' }}>{data.metrics.totalBlocked.toLocaleString()}</span>
+            <span className="report-print-metric-sub">Malicious Payloads Dropped</span>
+          </div>
+          <div className="report-print-metric-card">
+            <span className="report-print-metric-label">Attack Percentage</span>
+            <span className="report-print-metric-value" style={{ color: 'var(--warning-color)' }}>{data.metrics.blockRate}%</span>
+            <span className="report-print-metric-sub">Violations to traffic ratio</span>
+          </div>
+        </div>
+
+        {reportType === 'executive' && (
+          <div className="report-print-sections-layout">
+            <div className="report-print-section" style={{ '--section-accent': 'var(--danger-color)' }}>
+              <h3>Violation Category Breakdown</h3>
+              <div className="report-print-table-wrapper">
+                <AttackTypesTable attackTypes={data.attackTypes} tableClass="report-print-table" />
+              </div>
+            </div>
+            <div className="report-print-section" style={{ '--section-accent': 'var(--danger-color)' }}>
+              <h3>Top Attack Originators</h3>
+              <div className="report-print-table-wrapper">
+                <TopIpsTable topIps={data.topIps} tableClass="report-print-table" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {reportType === 'threat' && (
+          <div className="report-print-sections-layout">
+            <div className="report-print-section" style={{ gridColumn: 'span 2', '--section-accent': 'var(--danger-color)' }}>
+              <h3>Threat Intelligence & Signatures</h3>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                Signature-based detections and CyberSentinel Engine Core Rule Set (CRS) triggers recorded for this timeframe.
+              </p>
+              <div className="report-print-grid-3" style={{ margin: '0 0 20px 0' }}>
+                <div className="report-print-metric-card">
+                  <span className="report-print-metric-label">SQL Injection Attacks</span>
+                  <span className="report-print-metric-value" style={{ fontSize: '22px' }}>{data.metrics.sqlInjections}</span>
+                  <span className="report-print-metric-sub">Signature database matches</span>
+                </div>
+                <div className="report-print-metric-card">
+                  <span className="report-print-metric-label">Cross-Site Scripting (XSS)</span>
+                  <span className="report-print-metric-value" style={{ fontSize: '22px' }}>{data.metrics.xssAttacks}</span>
+                  <span className="report-print-metric-sub">Browser payloads filtered</span>
+                </div>
+                <div className="report-print-metric-card">
+                  <span className="report-print-metric-label">Primary Attack Vector</span>
+                  <span className="report-print-metric-value" style={{ fontSize: '18px', color: 'var(--accent-color)' }}>{data.metrics.topAttackType}</span>
+                  <span className="report-print-metric-sub">Most frequent category</span>
+                </div>
+              </div>
+              <h3 style={{ marginTop: '24px' }}>Top Threat Originators</h3>
+              <div className="report-print-table-wrapper">
+                <TopIpsTable topIps={data.topIps} tableClass="report-print-table" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {reportType === 'compliance' && (
+          <div className="report-print-sections-layout">
+            <div className="report-print-section" style={{ '--section-accent': 'var(--accent-color)' }}>
+              <h3>System Configuration & Compliance</h3>
+              <div className="report-print-table-wrapper">
+                <ComplianceTable data={data} tableClass="report-print-table" />
+              </div>
+            </div>
+            <div className="report-print-section" style={{ '--section-accent': 'var(--warning-color)' }}>
+              <h3>Security Audit Event Types</h3>
+              <div className="report-print-table-wrapper">
+                <AuditEventsTable audit={data.audit} tableClass="report-print-table" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="report-print-footer-card">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+            <div>
+              <div className="report-print-summary-label">GATEWAY NODE STATUS</div>
+              <div
+                className="report-print-summary-value"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  color: data.health.status === 'HEALTHY' ? 'var(--success-color)' : 'var(--sev-high)',
+                }}
+              >
+                <ShieldCheck size={14} />
+                <span>{data.health.status}</span>
+              </div>
+            </div>
+            <div>
+              <div className="report-print-summary-label">WAF CORE ENGINE</div>
+              <div className="report-print-summary-value">{data.health.engine}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SecurityReports() {
   const [timeframe, setTimeframe] = useState('24h'); // '24h', '7d', '30d'
   const [reportType, setReportType] = useState('executive'); // 'executive', 'threat', 'compliance'
@@ -358,391 +861,17 @@ export default function SecurityReports() {
       )}
 
       {reportData && !loading && (
-        <motion.div 
+        <motion.div
           ref={reportRef}
-          className="report-sheet-preview"
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
         >
-          {/* Print-only footer — position:fixed repeats this on every printed
-              page (reliable in Chrome/Chromium-based "Save as PDF", the
-              primary target here; Firefox's print engine has known bugs
-              repeating fixed-position elements across pages). @page's
-              bottom margin (see print styles) reserves room for this so it
-              doesn't overlap the last line of content on each page. */}
-          <div className="print-footer">
-            CyberSentinel WAF — {reportData.reportId} — Confidential — Internal Use Only
-          </div>
-
-          {/* Letterhead — one header used for both the on-screen preview and
-              print, instead of a separate print-only header that used to
-              duplicate this content with different styling. A single
-              source means the preview is a true what-you-see-is-what-prints
-              view instead of two designs that could quietly drift apart. */}
-          <div className="report-letterhead">
-            <div className="report-letterhead-brand">
-              <div className="report-letterhead-mark">CS</div>
-              <div>
-                <div className="report-letterhead-name">CyberSentinel</div>
-                <div className="report-letterhead-tagline">Web Application Firewall</div>
-              </div>
-            </div>
-            <div className="report-letterhead-classification">Confidential — Internal Use Only</div>
-          </div>
-
-          <div className="report-header-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '20px' }}>
-              <div>
-                <span className="report-badge">SECURITY REPORT</span>
-                <h1 style={{ margin: '10px 0 6px', fontSize: '26px', fontWeight: 700, fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}>
-                  {reportType === 'executive' && 'WAF Executive Summary'}
-                  {reportType === 'threat' && 'Detailed Threat Analysis'}
-                  {reportType === 'compliance' && 'System Audit & Compliance'}
-                </h1>
-                <div className="report-header-meta">
-                  <span><strong>Timeframe</strong> {reportData.timeframe}</span>
-                  <span className="report-header-meta-sep">•</span>
-                  <span><strong>Generated</strong> {reportData.generatedAt}</span>
-                  <span className="report-header-meta-sep">•</span>
-                  <span><strong>Report ID</strong> {reportData.reportId}</span>
-                </div>
-              </div>
-
-              <div className="report-risk-badge">
-                <div className="report-risk-badge-label">Overall Risk</div>
-                <div className="report-risk-badge-value" style={{ color: reportData.riskColor }}>
-                  {reportData.riskLevel}
-                </div>
-                <RiskMeter level={reportData.riskLevel} />
-              </div>
-            </div>
-          </div>
-
-          {/* Narrative Summary */}
-          <div className="report-section-box" style={{ marginBottom: '20px' }}>
-            <h3>Executive Narrative</h3>
-            <p style={{ fontSize: '13px', lineHeight: 1.7, color: 'var(--text-primary)' }}>
-              {reportData.narrativeSummary}
-            </p>
-          </div>
-
-          {/* Executive Summary stats grid */}
-          <div className="report-grid-3">
-            <div className="report-metric-card">
-              <span className="metric-label">Total HTTP Requests</span>
-              <span className="metric-value">{reportData.metrics.totalRequests.toLocaleString()}</span>
-              <span className="metric-sub">Analyzed by WAF Engine</span>
-            </div>
-            <div className="report-metric-card">
-              <span className="metric-label">Blocked Violations</span>
-              <span className="metric-value" style={{ color: 'var(--danger-color)' }}>
-                {reportData.metrics.totalBlocked.toLocaleString()}
-              </span>
-              <span className="metric-sub">Malicious Payloads Dropped</span>
-            </div>
-            <div className="report-metric-card">
-              <span className="metric-label">Attack Percentage</span>
-              <span className="metric-value" style={{ color: 'var(--warning-color)' }}>
-                {reportData.metrics.blockRate}%
-              </span>
-              <span className="metric-sub">Violations to traffic ratio</span>
-            </div>
-          </div>
-
-          {/* Report Sections depending on Selected template */}
-          {reportType === 'executive' && (
-            <div className="report-sections-layout">
-              {/* Category distribution */}
-              <div className="report-section-box" style={{ '--section-accent': 'var(--danger-color)' }}>
-                <h3>Violation Category Breakdown</h3>
-                {reportData.attackTypes.length > 0 && (
-                  // no-print: Recharts sizes its SVG off the live DOM via
-                  // ResizeObserver, which doesn't reliably re-fire when the
-                  // browser switches to print media — the chart can print
-                  // blank, clipped, or frozen at its last on-screen size.
-                  // The table directly below already carries the same
-                  // numbers in a form that prints reliably, so the chart is
-                  // screen-only rather than risking either failure mode.
-                  <div className="no-print" style={{ height: '200px', width: '100%', marginBottom: '12px' }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={reportData.attackTypes}
-                          cx="50%" cy="50%"
-                          innerRadius={40} outerRadius={70}
-                          paddingAngle={2}
-                          dataKey="count"
-                          nameKey="attack_type"
-                          strokeWidth={0}
-                        >
-                          {reportData.attackTypes.map((entry, index) => (
-                            <Cell key={index} fill={ATTACK_CHART_COLORS[index % ATTACK_CHART_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <RechartsTooltip
-                          contentStyle={{ background: 'var(--chart-tooltip-bg)', border: '1px solid var(--surface-strong)', borderRadius: '8px', fontSize: '12px' }}
-                          itemStyle={{ color: 'var(--text-primary)' }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-                <div className="report-table-wrapper">
-                  <table className="report-table">
-                    <thead>
-                      <tr>
-                        <th>Violation Type / Category</th>
-                        <th style={{ textAlign: 'right' }}>Detections</th>
-                        <th style={{ textAlign: 'right' }}>Percentage</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.attackTypes.length > 0 ? (
-                        (() => {
-                          const totalDetections = reportData.attackTypes.reduce((sum, item) => sum + (item.count || 0), 0);
-                          return reportData.attackTypes.map((t, idx) => (
-                            <tr key={idx}>
-                              <td><strong>{t.attack_type || 'Unknown / Custom'}</strong></td>
-                              <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{t.count}</td>
-                              <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
-                                {totalDetections > 0 ? ((t.count / totalDetections) * 100).toFixed(1) : '0.0'}%
-                              </td>
-                            </tr>
-                          ));
-                        })()
-                      ) : (
-                        <tr>
-                          <td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No threat category data recorded.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Top Attacking IPs */}
-              <div className="report-section-box" style={{ '--section-accent': 'var(--danger-color)' }}>
-                <h3>Top Attack Originators</h3>
-                <div className="report-table-wrapper">
-                  <table className="report-table">
-                    <thead>
-                      <tr>
-                        <th>Source IP</th>
-                        <th>Origin Country</th>
-                        <th style={{ textAlign: 'right' }}>Total Hits</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.topIps.length > 0 ? (
-                        reportData.topIps.map((ip, idx) => (
-                          <tr key={idx}>
-                            <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)' }}>{ip.ip || ip.client_ip || ip.source_ip || 'Unknown'}</td>
-                            <td>{ip.country || 'Internal'}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{ip.count}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No attacking source IP data recorded.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {reportType === 'threat' && (
-            <div className="report-sections-layout">
-              {/* Detailed Threat Metrics */}
-              <div className="report-section-box" style={{ gridColumn: 'span 2', '--section-accent': 'var(--danger-color)' }}>
-                <h3>Threat Intelligence & Signatures</h3>
-                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                  Signature-based detections and CyberSentinel Engine Core Rule Set (CRS) triggers recorded for this timeframe.
-                </p>
-                <div className="report-grid-3" style={{ margin: '0 0 20px 0', padding: 0, border: 'none', background: 'transparent' }}>
-                  <div className="report-metric-card" style={{ background: 'var(--surface-subtle)' }}>
-                    <span className="metric-label">SQL Injection Attacks</span>
-                    <span className="metric-value" style={{ fontSize: '24px' }}>{reportData.metrics.sqlInjections}</span>
-                    <span className="metric-sub">Signature database matches</span>
-                  </div>
-                  <div className="report-metric-card" style={{ background: 'var(--surface-subtle)' }}>
-                    <span className="metric-label">Cross-Site Scripting (XSS)</span>
-                    <span className="metric-value" style={{ fontSize: '24px' }}>{reportData.metrics.xssAttacks}</span>
-                    <span className="metric-sub">Browser payloads filtered</span>
-                  </div>
-                  <div className="report-metric-card" style={{ background: 'var(--surface-subtle)' }}>
-                    <span className="metric-label">Primary Attack Vector</span>
-                    <span className="metric-value" style={{ fontSize: '20px', color: 'var(--accent-color)' }}>{reportData.metrics.topAttackType}</span>
-                    <span className="metric-sub">Most frequent category</span>
-                  </div>
-                </div>
-
-                <h3 style={{ marginTop: '24px' }}>Top Threat Originators</h3>
-                <div className="report-table-wrapper">
-                  <table className="report-table">
-                    <thead>
-                      <tr>
-                        <th>Source IP</th>
-                        <th>Origin Country</th>
-                        <th style={{ textAlign: 'right' }}>Total Hits</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportData.topIps.length > 0 ? (
-                        reportData.topIps.map((ip, idx) => (
-                          <tr key={idx}>
-                            <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)' }}>{ip.ip || ip.client_ip || ip.source_ip || 'Unknown'}</td>
-                            <td>{ip.country || 'Internal'}</td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{ip.count}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No attacking source IP data recorded.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {reportType === 'compliance' && (
-            <div className="report-sections-layout">
-              {/* Compliance checks */}
-              <div className="report-section-box" style={{ '--section-accent': 'var(--accent-color)' }}>
-                <h3>System Configuration & Compliance</h3>
-                <div className="report-table-wrapper">
-                  <table className="report-table">
-                    <thead>
-                      <tr>
-                        <th>Compliance Check / Standard</th>
-                        <th>Maps To</th>
-                        <th style={{ textAlign: 'right' }}>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td>CyberSentinel Engine Enforcement</td>
-                        <MapsToCell mapping={COMPLIANCE_MAPPINGS.engineEnforcement} />
-                        {(() => {
-                          const on = reportData.compliance.engineEnforcement;
-                          if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
-                          return on === 'On'
-                            ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENFORCING</td>
-                            : <td style={{ textAlign: 'right', color: 'var(--danger-color)', fontWeight: 600 }}>NOT ENFORCING</td>;
-                        })()}
-                      </tr>
-                      <tr>
-                        <td>SSL/TLS Dynamic Cipher Hardening (HSTS)</td>
-                        <MapsToCell mapping={COMPLIANCE_MAPPINGS.tlsHardening} />
-                        {(() => {
-                          const on = reportData.compliance.tlsHardening;
-                          if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
-                          return on
-                            ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENABLED</td>
-                            : <td style={{ textAlign: 'right', color: 'var(--sev-high)', fontWeight: 600 }}>DISABLED</td>;
-                        })()}
-                      </tr>
-                      <tr>
-                        <td>Dynamic Web Anti-Defacement Integrity Check</td>
-                        <MapsToCell mapping={COMPLIANCE_MAPPINGS.antiDefacement} />
-                        <td style={{
-                          textAlign: 'right', fontWeight: 600,
-                          color: reportData.health.antiDefacement === 'ACTIVE' ? 'var(--success-color)' : 'var(--text-secondary)',
-                        }}>{reportData.health.antiDefacement}</td>
-                      </tr>
-                      <tr>
-                        <td>Admin Authentication Logging & Audits</td>
-                        <MapsToCell mapping={COMPLIANCE_MAPPINGS.adminAuditLogging} />
-                        {(() => {
-                          const on = reportData.compliance.adminAuditLogging;
-                          if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
-                          return on
-                            ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENFORCED</td>
-                            : <td style={{ textAlign: 'right', color: 'var(--danger-color)', fontWeight: 600 }}>DISABLED</td>;
-                        })()}
-                      </tr>
-                      <tr>
-                        <td>Active Protected Virtual Hosts</td>
-                        <MapsToCell mapping={null} />
-                        <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                          {reportData.compliance.activeProtectedHosts == null
-                            ? 'UNABLE TO VERIFY'
-                            : `${reportData.compliance.activeProtectedHosts} / ${reportData.compliance.totalProtectedHosts} ACTIVE`}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px', lineHeight: 1.5 }}>
-                  Control citations reference publicly published framework language for context only, based on this
-                  system's current configuration state. This is <strong>not</strong> a certified compliance
-                  assessment — consult a qualified auditor for official certification against any named standard.
-                </p>
-              </div>
-
-              {/* Security Audit Events */}
-              <div className="report-section-box" style={{ '--section-accent': 'var(--warning-color)' }}>
-                <h3>Security Audit Event Types</h3>
-                <div className="report-table-wrapper">
-                  <table className="report-table">
-                    <thead>
-                      <tr>
-                        <th>Audit Event Type</th>
-                        <th style={{ textAlign: 'right' }}>Event Count</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.keys(reportData.audit.by_type).length > 0 ? (
-                        Object.entries(reportData.audit.by_type).map(([key, val]) => (
-                          <tr key={key}>
-                            <td><strong>{key}</strong></td>
-                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{val}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="2" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No audit occurrences logged.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Health & Engine Status footer card */}
-          <div className="report-footer-card">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-              <div>
-                <div className="summary-label">GATEWAY NODE STATUS</div>
-                <div
-                  className="summary-value"
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: '6px',
-                    color: reportData.health.status === 'HEALTHY' ? 'var(--success-color)' : 'var(--sev-high)',
-                  }}
-                >
-                  <ShieldCheck size={14} />
-                  <span>{reportData.health.status}</span>
-                </div>
-              </div>
-              <div>
-                <div className="summary-label">WAF CORE ENGINE</div>
-                <div className="summary-value">{reportData.health.engine}</div>
-              </div>
-            </div>
-          </div>
+          <ReportAppView data={reportData} reportType={reportType} />
+          <ReportPrintView data={reportData} reportType={reportType} />
         </motion.div>
       )}
 
-      {/* Styled block (scoped to component and custom printing rules) */}
       <style>{`
         .security-reports-tab {
           display: flex;
@@ -868,26 +997,324 @@ export default function SecurityReports() {
           color: var(--danger-color);
         }
 
+        /* Shared risk meter — plain colors via inline style, not theme
+           tokens, so it looks identical (and correctly semantic) in both
+           the app view and the print view without needing its own variant. */
+        .report-risk-meter {
+          display: flex;
+          gap: 3px;
+          margin-top: 10px;
+          min-width: 140px;
+        }
+
+        .report-risk-meter-segment {
+          flex: 1;
+          height: 6px;
+          border-radius: 3px;
+          opacity: 0.22;
+        }
+
+        .report-risk-meter-segment.active {
+          opacity: 1;
+          box-shadow: 0 0 0 1px rgba(0,0,0,0.15) inset;
+        }
+
         /* ===================================================================
-           Report Preview Sheet — deliberately a fixed "paper" palette, not
-           the app's dark/light theme tokens. A security report is a
-           document handed to someone outside the dashboard (an auditor, an
-           exec, a ticket attachment); it should read the same regardless of
-           which theme the person generating it happens to have selected,
-           and it should look on screen like what actually prints — no
-           separate light-on-dark-preview vs black-on-white-printout split.
-           Every variable below is scoped to .report-sheet-preview only; it
-           overrides the SAME variable names used throughout this file's
-           inline styles (var(--text-secondary) etc.), so none of those
-           inline styles needed to change — they inherit these instead of
-           the app's real theme tokens for free via normal CSS cascade.
+           APPLICATION VIEW — native CyberSentinel dashboard presentation.
+           Uses .glass-panel and the app's real theme variables throughout;
+           deliberately defines NO color overrides of its own, so dark/light
+           theme switching works exactly like every other page for free.
            =================================================================== */
-        .report-sheet-preview {
-          /* Exact hex values from this app's own light-theme tokens
-             (index.css :root[data-theme="light"]) — not approximations —
-             so the report's severity/risk colors read as the same
-             semantic language as the rest of the dashboard (Events,
-             Overview, etc.), just rendered on paper instead of glass. */
+        .report-app-view {
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+        }
+
+        .report-app-header { padding: 24px; }
+
+        .report-app-badge {
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.06em;
+          padding: 3px 9px;
+          border-radius: 4px;
+          background: var(--accent-bg, rgba(129,140,248,0.12));
+          color: var(--accent-color);
+          border: 1px solid var(--accent-border, rgba(129,140,248,0.3));
+          text-transform: uppercase;
+        }
+
+        .report-app-title {
+          margin: 10px 0 6px;
+          font-size: 24px;
+          font-weight: 700;
+          font-family: var(--font-display);
+          letter-spacing: -0.02em;
+          color: var(--text-primary);
+        }
+
+        .report-app-meta {
+          font-size: 12px;
+          color: var(--text-secondary);
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+
+        .report-app-meta strong {
+          color: var(--text-primary);
+          font-weight: 600;
+          margin-right: 4px;
+        }
+
+        .report-app-meta-sep { color: var(--border-strong); }
+
+        .report-app-risk {
+          text-align: right;
+          padding: 14px 22px;
+          border-radius: 10px;
+          background: var(--surface-subtle);
+          border: 1px solid var(--border-color, var(--surface-strong));
+          flex-shrink: 0;
+        }
+
+        .report-app-risk-label {
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--text-secondary);
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+        }
+
+        .report-app-risk-value {
+          font-size: 22px;
+          font-weight: 800;
+          letter-spacing: 0.02em;
+        }
+
+        .report-app-narrative { padding: 22px 24px; }
+
+        .report-app-narrative h3 {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 14px;
+          font-weight: 700;
+          color: var(--text-primary);
+          margin: 0 0 12px 0;
+        }
+
+        .report-app-narrative p {
+          font-size: 13px;
+          line-height: 1.7;
+          color: var(--text-primary);
+          margin: 0;
+        }
+
+        .report-app-stat-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: 16px;
+        }
+
+        .report-app-stat-card {
+          padding: 20px;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .report-app-mini-stat {
+          background: var(--surface-subtle);
+          border: 1px solid var(--border-subtle, var(--surface-hover));
+          border-radius: 8px;
+          padding: 16px 18px;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .report-app-stat-label {
+          font-size: 11px;
+          font-weight: 700;
+          color: var(--text-secondary);
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+
+        .report-app-stat-value {
+          font-size: 26px;
+          font-weight: 800;
+          color: var(--text-primary);
+          font-family: var(--font-mono);
+        }
+
+        .report-app-stat-sub {
+          font-size: 12px;
+          color: var(--text-muted);
+        }
+
+        .report-app-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+          gap: 20px;
+        }
+
+        .report-app-section {
+          padding: 22px 24px;
+          border-left: 3px solid var(--section-accent, var(--accent-color));
+        }
+
+        .report-app-section h3 {
+          font-size: 14px;
+          font-weight: 700;
+          color: var(--text-primary);
+          margin: 0 0 14px 0;
+          padding-bottom: 10px;
+          border-bottom: 1px solid var(--border-subtle, var(--surface-hover));
+        }
+
+        .report-app-table-wrapper { overflow-x: auto; }
+
+        .report-app-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 12.5px;
+        }
+
+        .report-app-table th {
+          text-align: left;
+          padding: 8px 10px;
+          color: var(--text-secondary);
+          font-weight: 700;
+          border-bottom: 1px solid var(--surface-strong);
+          font-size: 10.5px;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
+
+        .report-app-table td {
+          padding: 9px 10px;
+          border-bottom: 1px solid var(--border-subtle, var(--surface-hover));
+          color: var(--text-primary);
+        }
+
+        .report-app-table tbody tr:hover td {
+          background: var(--surface-subtle);
+        }
+
+        .report-app-footer { padding: 20px 24px; }
+
+        .report-app-footer-label {
+          font-size: 9px;
+          font-weight: 700;
+          color: var(--text-secondary);
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          margin-bottom: 4px;
+        }
+
+        .report-app-footer-value {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-primary);
+        }
+
+        /* ===================================================================
+           PRINT / SAVE-AS-PDF VIEW — a fixed white "paper" A4 document.
+           Hidden on screen (display:none) unconditionally; only @media
+           print below reveals it, and only for this subtree — the
+           application view above is hidden in print instead, so the two
+           never render at the same time in either context.
+           =================================================================== */
+        .report-print-view {
+          display: none;
+        }
+
+        .print-footer { display: none; }
+
+        @page {
+          size: A4;
+          /* Bottom margin reserves room for the fixed footer so it can't
+             overlap the last line of content on each printed page. */
+          margin: 14mm 14mm 22mm 14mm;
+        }
+
+        @media print {
+          html, body {
+            background: #fff !important;
+          }
+
+          /* Real, current layout chrome that must never appear in a
+             printout — .siem-topbar is this app's actual top-bar class
+             (App.jsx); .report-app-view is the on-screen dashboard
+             presentation, which is swapped out for .report-print-view
+             below rather than printed as-is. */
+          .sidebar, .siem-topbar, .subtabs-container, .no-print, .app-footer,
+          .report-app-view {
+            display: none !important;
+          }
+
+          .report-print-view {
+            display: block !important;
+          }
+
+          .main-content {
+            padding: 0 !important;
+            margin: 0 !important;
+            width: 100% !important;
+          }
+
+          .print-footer {
+            display: block !important;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            color: #52525b;
+            border-top: 1px solid #ddd;
+            padding-top: 6px;
+          }
+
+          .report-print-sections-layout {
+            grid-template-columns: 1fr;
+          }
+
+          .report-print-grid-3 {
+            grid-template-columns: repeat(3, 1fr);
+          }
+
+          /* overflow-x:auto (screen: horizontal scroll) has nothing to
+             scroll on paper — it just clips content past the page edge.
+             Let a wide table wrap/shrink instead of losing columns. */
+          .report-print-table-wrapper {
+            overflow-x: visible;
+          }
+
+          .report-print-table {
+            font-size: 11px;
+          }
+
+          .report-risk-meter-segment,
+          .report-print-table tbody tr:nth-child(even) td,
+          .report-print-section {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+        }
+
+        /* Paper palette — fixed regardless of the app's dark/light theme,
+           scoped to .report-print-sheet only. Exact hex values from this
+           app's own light-theme tokens (index.css :root[data-theme="light"])
+           so the printed report's severity/risk colors are literally the
+           same palette as the rest of the dashboard, just rendered on
+           paper instead of glass. */
+        .report-print-sheet {
           --text-primary:     #18181f;
           --text-secondary:   #52525b;
           --text-muted:       #8b8b96;
@@ -926,15 +1353,14 @@ export default function SecurityReports() {
           line-height: 1.6;
         }
 
-        .report-sheet-preview h1,
-        .report-sheet-preview h2,
-        .report-sheet-preview h3 {
+        .report-print-sheet h1,
+        .report-print-sheet h2,
+        .report-print-sheet h3 {
           font-family: var(--font-display);
           color: var(--text-primary);
         }
 
-        /* Letterhead */
-        .report-letterhead {
+        .report-print-letterhead {
           display: flex;
           justify-content: space-between;
           align-items: center;
@@ -943,13 +1369,13 @@ export default function SecurityReports() {
           border-bottom: 3px solid var(--text-primary);
         }
 
-        .report-letterhead-brand {
+        .report-print-letterhead-brand {
           display: flex;
           align-items: center;
           gap: 12px;
         }
 
-        .report-letterhead-mark {
+        .report-print-letterhead-mark {
           width: 36px;
           height: 36px;
           border-radius: 8px;
@@ -964,20 +1390,20 @@ export default function SecurityReports() {
           flex-shrink: 0;
         }
 
-        .report-letterhead-name {
+        .report-print-letterhead-name {
           font-size: 16px;
           font-weight: 800;
           letter-spacing: -0.01em;
           color: var(--text-primary);
         }
 
-        .report-letterhead-tagline {
+        .report-print-letterhead-tagline {
           font-size: 11px;
           color: var(--text-secondary);
           font-weight: 500;
         }
 
-        .report-letterhead-classification {
+        .report-print-letterhead-classification {
           font-size: 10px;
           font-weight: 700;
           letter-spacing: 0.06em;
@@ -988,33 +1414,14 @@ export default function SecurityReports() {
           border-radius: 4px;
         }
 
-        .report-header-card {
+        .report-print-header-card {
           padding-bottom: 28px;
           margin-bottom: 28px;
           border-bottom: 1px solid var(--border-color);
           page-break-inside: avoid;
         }
 
-        .report-header-meta {
-          font-size: 12px;
-          color: var(--text-secondary);
-          margin-top: 6px;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-        }
-
-        .report-header-meta strong {
-          color: var(--text-primary);
-          font-weight: 600;
-          margin-right: 4px;
-        }
-
-        .report-header-meta-sep {
-          color: var(--border-strong);
-        }
-
-        .report-badge {
+        .report-print-badge {
           font-size: 10px;
           font-weight: 700;
           letter-spacing: 0.06em;
@@ -1026,7 +1433,31 @@ export default function SecurityReports() {
           text-transform: uppercase;
         }
 
-        .report-risk-badge {
+        .report-print-title {
+          margin: 10px 0 6px;
+          font-size: 26px;
+          font-weight: 700;
+          letter-spacing: -0.02em;
+        }
+
+        .report-print-meta {
+          font-size: 12px;
+          color: var(--text-secondary);
+          margin-top: 6px;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+
+        .report-print-meta strong {
+          color: var(--text-primary);
+          font-weight: 600;
+          margin-right: 4px;
+        }
+
+        .report-print-meta-sep { color: var(--border-strong); }
+
+        .report-print-risk-badge {
           text-align: right;
           padding: 14px 22px;
           border-radius: 8px;
@@ -1035,7 +1466,7 @@ export default function SecurityReports() {
           flex-shrink: 0;
         }
 
-        .report-risk-badge-label {
+        .report-print-risk-label {
           font-size: 10px;
           font-weight: 700;
           color: var(--text-secondary);
@@ -1043,39 +1474,20 @@ export default function SecurityReports() {
           letter-spacing: 0.06em;
         }
 
-        .report-risk-badge-value {
+        .report-print-risk-value {
           font-size: 22px;
           font-weight: 800;
           letter-spacing: 0.02em;
         }
 
-        .report-risk-meter {
-          display: flex;
-          gap: 3px;
-          margin-top: 10px;
-          min-width: 140px;
-        }
-
-        .report-risk-meter-segment {
-          flex: 1;
-          height: 6px;
-          border-radius: 3px;
-          opacity: 0.22;
-        }
-
-        .report-risk-meter-segment.active {
-          opacity: 1;
-          box-shadow: 0 0 0 1px rgba(16,16,24,0.15) inset;
-        }
-
-        .report-grid-3 {
+        .report-print-grid-3 {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
           gap: 16px;
           margin-bottom: 24px;
         }
 
-        .report-metric-card {
+        .report-print-metric-card {
           background: var(--surface-subtle);
           border: 1px solid var(--border-color);
           border-radius: 8px;
@@ -1086,7 +1498,7 @@ export default function SecurityReports() {
           page-break-inside: avoid;
         }
 
-        .metric-label {
+        .report-print-metric-label {
           font-size: 11px;
           font-weight: 700;
           color: var(--text-secondary);
@@ -1094,26 +1506,26 @@ export default function SecurityReports() {
           letter-spacing: 0.05em;
         }
 
-        .metric-value {
+        .report-print-metric-value {
           font-size: 26px;
           font-weight: 800;
           color: var(--text-primary);
           font-family: var(--font-mono);
         }
 
-        .metric-sub {
+        .report-print-metric-sub {
           font-size: 12px;
           color: var(--text-muted);
         }
 
-        .report-sections-layout {
+        .report-print-sections-layout {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
           gap: 20px;
           margin-bottom: 24px;
         }
 
-        .report-section-box {
+        .report-print-section {
           background: var(--bg-surface);
           border: 1px solid var(--border-color);
           border-left: 3px solid var(--section-accent, var(--accent-color));
@@ -1122,26 +1534,23 @@ export default function SecurityReports() {
           page-break-inside: avoid;
         }
 
-        .report-section-box h3 {
+        .report-print-section h3 {
           font-size: 14px;
           font-weight: 700;
-          color: var(--text-primary);
           margin: 0 0 14px 0;
           padding-bottom: 10px;
           border-bottom: 1px solid var(--border-color);
         }
 
-        .report-table-wrapper {
-          overflow-x: auto;
-        }
+        .report-print-table-wrapper { overflow-x: auto; }
 
-        .report-table {
+        .report-print-table {
           width: 100%;
           border-collapse: collapse;
           font-size: 12.5px;
         }
 
-        .report-table th {
+        .report-print-table th {
           text-align: left;
           padding: 8px 10px;
           color: var(--text-secondary);
@@ -1152,21 +1561,21 @@ export default function SecurityReports() {
           letter-spacing: 0.04em;
         }
 
-        .report-table td {
+        .report-print-table td {
           padding: 9px 10px;
           border-bottom: 1px solid var(--border-subtle);
           color: var(--text-primary);
         }
 
-        .report-table tr {
+        .report-print-table tr {
           page-break-inside: avoid;
         }
 
-        .report-table tbody tr:nth-child(even) td {
+        .report-print-table tbody tr:nth-child(even) td {
           background: var(--surface-subtle);
         }
 
-        .report-footer-card {
+        .report-print-footer-card {
           margin-top: 8px;
           padding: 18px 22px;
           background: var(--surface-subtle);
@@ -1175,7 +1584,7 @@ export default function SecurityReports() {
           page-break-inside: avoid;
         }
 
-        .summary-label {
+        .report-print-summary-label {
           font-size: 9px;
           font-weight: 700;
           color: var(--text-secondary);
@@ -1184,102 +1593,10 @@ export default function SecurityReports() {
           margin-bottom: 4px;
         }
 
-        .summary-value {
+        .report-print-summary-value {
           font-size: 12px;
           font-weight: 600;
           color: var(--text-primary);
-        }
-
-        .print-footer {
-          display: none;
-        }
-
-        /* ===================================================================
-           Print / Save-as-PDF
-           =================================================================== */
-        @page {
-          size: A4;
-          /* Generous bottom margin reserves room for the fixed footer below
-             so it can't overlap the last line of content on each page —
-             the previous version had no @page rule at all, so the footer
-             (position: fixed; bottom: 0) sat directly on top of whatever
-             content happened to end at the bottom of a page. */
-          margin: 14mm 14mm 22mm 14mm;
-        }
-
-        @media print {
-          html, body {
-            background: #fff !important;
-          }
-
-          /* Real, current layout chrome that must not appear in the
-             printout. .page-header never matched anything in this app's
-             actual DOM (the top bar's real class is .siem-topbar) — the
-             live dashboard topbar, complete with the notification bell and
-             account menu, was printing at the top of every report. */
-          .sidebar, .siem-topbar, .subtabs-container, .no-print, .app-footer {
-            display: none !important;
-          }
-
-          .main-content {
-            padding: 0 !important;
-            margin: 0 !important;
-            width: 100% !important;
-          }
-
-          .report-sheet-preview {
-            max-width: none;
-            margin: 0;
-            border: none !important;
-            box-shadow: none !important;
-            padding: 0 !important;
-          }
-
-          .print-footer {
-            display: block !important;
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            text-align: center;
-            font-size: 9px;
-            font-weight: 600;
-            letter-spacing: 0.03em;
-            color: var(--text-secondary, #52525b);
-            border-top: 1px solid #ddd;
-            padding-top: 6px;
-          }
-
-          .report-sections-layout {
-            grid-template-columns: 1fr;
-          }
-
-          .report-grid-3 {
-            grid-template-columns: repeat(3, 1fr);
-          }
-
-          /* overflow-x:auto (screen: horizontal scroll on a wide table)
-             has nothing to scroll on a printed page — it just clips
-             anything past the page edge instead. Letting content flow
-             naturally means a wide table shrinks/wraps instead of losing
-             columns off the right edge. */
-          .report-table-wrapper {
-            overflow-x: visible;
-          }
-
-          .report-table {
-            font-size: 11px;
-          }
-
-          /* Force color to print even under browsers/print-dialog settings
-             that default to omitting backgrounds — the risk meter, zebra
-             striping, and section accent bars are semantic, not decorative. */
-          .report-risk-meter-segment,
-          .report-table tbody tr:nth-child(even) td,
-          .report-section-box {
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
         }
       `}</style>
     </div>
