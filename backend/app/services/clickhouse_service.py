@@ -14,7 +14,7 @@ Design notes:
 import json
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import clickhouse_connect
@@ -1228,7 +1228,14 @@ def get_endpoint_threat_counts(hours: Optional[int] = None) -> Dict[Tuple[str, s
 def get_recently_discovered_endpoints(hours: int = 48) -> List[Dict[str, Any]]:
     """Retrieve endpoints first seen within the last N hours from ClickHouse."""
     endpoints = get_all_discovered_endpoints()
-    cutoff = datetime.now() - timedelta(hours=hours)
+    # first_seen/last_seen are true UTC strings (api_discovery.py's
+    # parse_nginx_timestamp converts using the log line's own offset) — the
+    # cutoff must be built the same way. Using naive datetime.now() here
+    # would silently use this process's local system tz (this deployment
+    # runs every container on host-local IST via a bind-mounted
+    # /etc/localtime), producing a cutoff off by that offset relative to
+    # the UTC data it's compared against.
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
     return [e for e in endpoints if e["first_seen"] >= cutoff_str]
 
@@ -1237,7 +1244,7 @@ def get_stale_discovered_endpoints(days: int = 30) -> List[Dict[str, Any]]:
     """Retrieve endpoints not seen in at least `days` days — shadow/zombie
     API candidates. Inverse of get_recently_discovered_endpoints."""
     endpoints = get_all_discovered_endpoints()
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
     return [e for e in endpoints if e["last_seen"] < cutoff_str]
 

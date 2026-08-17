@@ -75,6 +75,36 @@ def test_legacy_tier_matches_oldest_format():
 
 
 # ---------------------------------------------------------------------------
+# parse_nginx_timestamp — must convert to true UTC using the log line's own
+# offset, not discard it. Regression coverage for a real bug: this used to
+# strip the "+0530" and return raw local wall-clock digits unconverted,
+# causing first_seen/last_seen to mean different things depending on
+# whether SQLite (plain-text, no tz math) or ClickHouse (client-interpreted
+# naive datetime) answered a query for the same endpoint.
+# ---------------------------------------------------------------------------
+
+def test_parse_nginx_timestamp_converts_ist_offset_to_utc():
+    assert api_discovery.parse_nginx_timestamp("17/Aug/2026:14:44:04 +0530") == "2026-08-17 09:14:04"
+
+
+def test_parse_nginx_timestamp_handles_utc_offset_as_noop():
+    assert api_discovery.parse_nginx_timestamp("17/Aug/2026:09:14:04 +0000") == "2026-08-17 09:14:04"
+
+
+def test_parse_nginx_timestamp_handles_negative_offset():
+    # -0500 (US Eastern-ish): local time is behind UTC, so UTC is later
+    assert api_discovery.parse_nginx_timestamp("17/Aug/2026:04:44:04 -0500") == "2026-08-17 09:44:04"
+
+
+def test_parse_nginx_timestamp_falls_back_to_utc_now_on_malformed_input():
+    result = api_discovery.parse_nginx_timestamp("not a real timestamp")
+    # Just confirm it's a well-formed UTC-ish string, not that it matches
+    # a specific instant (this branch uses "now").
+    from datetime import datetime
+    datetime.strptime(result, "%Y-%m-%d %H:%M:%S")  # raises if malformed
+
+
+# ---------------------------------------------------------------------------
 # is_internal_ip
 # ---------------------------------------------------------------------------
 

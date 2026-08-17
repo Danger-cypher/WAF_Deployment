@@ -3,7 +3,7 @@ import re
 import logging
 import ipaddress
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qsl
 import threading
 from app.services import db_service
@@ -103,14 +103,29 @@ STATIC_EXTENSIONS = (
 
 
 def parse_nginx_timestamp(ts_str: str) -> str:
-    # Format: 08/Jun/2026:10:35:51 +0530
+    """
+    Convert nginx's $time_local format ("08/Jun/2026:10:35:51 +0530") into
+    a true UTC timestamp string.
+
+    This used to discard the offset entirely ("Strip timezone offset for
+    simplicity") and return raw local wall-clock digits with no
+    conversion — unlike this codebase's other two log parsers
+    (modsec_parser.py, nginx_errorlog_parser.py), which already convert to
+    UTC before storage. That caused a real, confirmed inconsistency:
+    SQLite (plain-text storage, no tz math) kept the uncorrected local
+    time verbatim, while ClickHouse's plain (implicitly UTC) DateTime
+    column for this data ended up storing something different depending
+    on how the client interpreted the ambiguous naive value — so the same
+    logical first_seen/last_seen could read differently depending on
+    which store answered a query. Parsing the offset nginx already
+    provides (%z) and converting to UTC removes the ambiguity at the
+    source instead of guessing a fixed offset.
+    """
     try:
-        # Strip timezone offset for simplicity
-        base_time = ts_str.split(" ")[0]
-        dt = datetime.strptime(base_time, "%d/%b/%Y:%H:%M:%S")
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
+        dt = datetime.strptime(ts_str, "%d/%b/%Y:%H:%M:%S %z")
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def parse_request_time(raw: str) -> float:
