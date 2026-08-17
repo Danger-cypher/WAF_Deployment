@@ -35,4 +35,5 @@ class HealthResponse(BaseModel):
     total_parsed_files: int
     db_initialized: Optional[bool] = None
     redis_connected: Optional[bool] = None
+    clickhouse_connected: Optional[bool] = None
     ml_enabled: Optional[bool] = None

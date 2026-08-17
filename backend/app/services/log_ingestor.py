@@ -47,6 +47,14 @@ NGINX_ERROR_LOG_ROTATED = "/var/log/nginx/error.log.1"
 _event_queue: asyncio.Queue = asyncio.Queue(maxsize=50_000)
 _ingestor_running: bool = False
 
+# Consecutive-failure tracking for the flush loop — lets us alert instead of
+# silently dropping events forever on a ClickHouse outage (e.g. stale
+# credentials after a password rotation, or a connection drop).
+_consecutive_flush_failures: int = 0
+_last_failure_alert_ts: float = 0.0
+_FLUSH_ALERT_THRESHOLD: int = 3            # consecutive failed flushes before alerting
+_FLUSH_ALERT_REPEAT_SECONDS: float = 1800  # re-alert at most every 30 min while still failing
+
 
 # ---------------------------------------------------------------------------
 # Watchdog file event handler
@@ -90,7 +98,7 @@ async def _flush_loop():
     Background coroutine: collects events from the queue and batch-inserts
     them into ClickHouse every FLUSH_INTERVAL seconds or at BATCH_SIZE.
     """
-    global _ingestor_running
+    global _ingestor_running, _consecutive_flush_failures
     _ingestor_running = True
     logger.info("ClickHouse ingestor flush loop started")
 
@@ -108,15 +116,39 @@ async def _flush_loop():
 
         now = time.monotonic()
         if buffer and (len(buffer) >= BATCH_SIZE or now - last_flush >= FLUSH_INTERVAL):
-            _flush_to_clickhouse(buffer)
-            buffer = []
-            last_flush = now
+            success = _flush_to_clickhouse(buffer)
+            last_flush = time.monotonic()
+            if success:
+                if _consecutive_flush_failures:
+                    logger.info(
+                        "ClickHouse ingestion recovered after %d consecutive failed flushes",
+                        _consecutive_flush_failures,
+                    )
+                _consecutive_flush_failures = 0
+                buffer = []
+            else:
+                # Keep the batch and retry next cycle instead of dropping it —
+                # events pile up on the bounded queue (maxsize=50_000, oldest
+                # dropped with a logged warning once full) rather than being
+                # silently lost. Sleep here because with `buffer` still full
+                # the inner drain loop above never awaits, which would
+                # otherwise busy-spin the event loop until ClickHouse recovers.
+                _consecutive_flush_failures += 1
+                await _alert_on_flush_failure(_consecutive_flush_failures, len(buffer))
+                await asyncio.sleep(FLUSH_INTERVAL)
 
 
-def _flush_to_clickhouse(entries: list):
-    """Convert LogEntry objects to dicts and batch-insert into ClickHouse."""
+def _flush_to_clickhouse(entries: list) -> bool:
+    """
+    Convert LogEntry objects to dicts and batch-insert into ClickHouse.
+    Returns True if the batch was inserted, False otherwise — callers use
+    this to retry instead of silently dropping events on a ClickHouse
+    hiccup (previously any insert failure just discarded the batch with
+    nothing but a buried logger.error, so an outage looked identical to a
+    quiet network).
+    """
     if not entries:
-        return
+        return True
 
     rows = []
     for entry in entries:
@@ -127,10 +159,52 @@ def _flush_to_clickhouse(entries: list):
         except Exception as ex:
             logger.warning("Failed to serialize log entry: %s", ex)
 
-    if rows:
-        inserted = clickhouse_service.insert_waf_events(rows)
-        if inserted:
-            logger.debug("Flushed %d WAF events to ClickHouse", inserted)
+    if not rows:
+        return True
+
+    inserted = clickhouse_service.insert_waf_events(rows)
+    if inserted == len(rows):
+        logger.debug("Flushed %d WAF events to ClickHouse", inserted)
+        return True
+
+    logger.error(
+        "ClickHouse flush failed — inserted %d/%d events, batch retained for retry",
+        inserted, len(rows),
+    )
+    return False
+
+
+async def _alert_on_flush_failure(consecutive_failures: int, batch_size: int) -> None:
+    """
+    Fire a health_check_failed alert (existing alerts pipeline) once
+    ClickHouse ingestion has failed a few flush cycles in a row, then
+    re-alert periodically while it stays down.
+    """
+    global _last_failure_alert_ts
+    if consecutive_failures < _FLUSH_ALERT_THRESHOLD:
+        return
+    now = time.monotonic()
+    if now - _last_failure_alert_ts < _FLUSH_ALERT_REPEAT_SECONDS:
+        return
+    _last_failure_alert_ts = now
+    try:
+        from app.services.alert_manager import alert_manager
+        await alert_manager.trigger_event(
+            event_type="health_check_failed",
+            event_data={
+                "component": "log_ingestor",
+                "consecutive_flush_failures": consecutive_failures,
+                "batch_size": batch_size,
+            },
+            custom_message=(
+                f"WAF event ingestion into ClickHouse has failed {consecutive_failures} "
+                f"consecutive flush cycles ({batch_size} events currently stuck retrying). "
+                f"Likely cause: ClickHouse is unreachable or its credentials are stale "
+                f"(e.g. CLICKHOUSE_PASSWORD rotated without restarting the backend)."
+            ),
+        )
+    except Exception as e:
+        logger.error(f"[LogIngestor] Failed to dispatch ingestion-failure alert: {e}")
 
 
 # ---------------------------------------------------------------------------

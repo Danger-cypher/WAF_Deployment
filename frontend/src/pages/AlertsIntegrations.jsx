@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { Activity, Lock, Database, Code, Server, AlertTriangle, RotateCw } from 'lucide-react';
 import {
   getAlertChannels, createAlertChannel, updateAlertChannel, deleteAlertChannel,
-  testAlertChannel, getAlertRules, createAlertRule, deleteAlertRule, getHealth,
+  testAlertChannel, getAlertRules, createAlertRule, updateAlertRule, deleteAlertRule, getHealth,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
@@ -22,8 +22,20 @@ export default function AlertsIntegrations({ userRole }) {
   const [rules, setRules] = useState([]);
   const [isChannelCreateOpen, setIsChannelCreateOpen] = useState(false);
   const [isRuleCreateOpen, setIsRuleCreateOpen] = useState(false);
+  // null = the open form is creating a new rule; a rule id = editing that
+  // existing rule (PUT /alerts/rules/{id}, wired to the UI but previously
+  // only reachable directly through the API, no button anywhere used it).
+  const [editingRuleId, setEditingRuleId] = useState(null);
   const [channelForm, setChannelForm] = useState({ name: '', channel_type: 'slack', config: {} });
   const [ruleForm, setRuleForm] = useState({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
+  // Text-input mirrors of ruleForm.conditions/channels — the raw fields are
+  // JSON/array values, but the inputs below are free-text, so they need
+  // their own controlled string state to display correctly when editing an
+  // existing rule (the inputs were previously uncontrolled, fine for
+  // create-only where they always start blank, but that silently shows a
+  // blank field instead of the real value when populating from an edit).
+  const [conditionsText, setConditionsText] = useState('');
+  const [channelsText, setChannelsText] = useState('');
 
   const isFetchingHealthRef = useRef(false);
 
@@ -108,16 +120,43 @@ export default function AlertsIntegrations({ userRole }) {
     }
   };
 
-  const handleCreateRule = async (e) => {
+  const resetRuleForm = () => {
+    setIsRuleCreateOpen(false);
+    setEditingRuleId(null);
+    setRuleForm({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
+    setConditionsText('');
+    setChannelsText('');
+  };
+
+  const handleSubmitRule = async (e) => {
     e.preventDefault();
     try {
-      await createAlertRule(ruleForm);
-      setIsRuleCreateOpen(false);
-      setRuleForm({ name: '', event_type: 'attack_detected', severity: 'high', conditions: {}, channels: [], throttle_minutes: 5 });
+      if (editingRuleId != null) {
+        await updateAlertRule(editingRuleId, ruleForm);
+        showToast("Alert rule updated.");
+      } else {
+        await createAlertRule(ruleForm);
+      }
+      resetRuleForm();
       loadAlertData();
     } catch (err) {
-      showToast("Failed to create rule: " + err.message, "error");
+      showToast(`Failed to ${editingRuleId != null ? 'update' : 'create'} rule: ` + err.message, "error");
     }
+  };
+
+  const handleEditRuleClick = (rule) => {
+    setEditingRuleId(rule.id);
+    setRuleForm({
+      name: rule.name,
+      event_type: rule.event_type,
+      severity: rule.severity,
+      conditions: rule.conditions || {},
+      channels: rule.channels || [],
+      throttle_minutes: rule.throttle_minutes,
+    });
+    setConditionsText(rule.conditions && Object.keys(rule.conditions).length ? JSON.stringify(rule.conditions) : '');
+    setChannelsText((rule.channels || []).join(', '));
+    setIsRuleCreateOpen(true);
   };
 
   const handleDeleteRule = async (id) => {
@@ -417,7 +456,7 @@ export default function AlertsIntegrations({ userRole }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Define warning and critical event alerting thresholds:</span>
             {userRole === 'admin' && (
-              <button className="action-btn-inspect" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={() => setIsRuleCreateOpen(true)}>
+              <button className="action-btn-inspect" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={() => { setEditingRuleId(null); setIsRuleCreateOpen(true); }}>
                 + Create Alert Rule
               </button>
             )}
@@ -425,8 +464,8 @@ export default function AlertsIntegrations({ userRole }) {
 
           {isRuleCreateOpen && (
             <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', padding: '20px', borderRadius: '8px', marginBottom: '16px' }}>
-              <form onSubmit={handleCreateRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <h4 style={{ margin: 0, fontSize: '14px', color: 'var(--sev-low)' }}>Create Incident Alerting Rule</h4>
+              <form onSubmit={handleSubmitRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <h4 style={{ margin: 0, fontSize: '14px', color: 'var(--sev-low)' }}>{editingRuleId != null ? 'Edit Incident Alerting Rule' : 'Create Incident Alerting Rule'}</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
@@ -438,6 +477,8 @@ export default function AlertsIntegrations({ userRole }) {
                       <option value="attack_detected">Attack Detected (WAF)</option>
                       <option value="high_threat_score">High Anomaly Threat Score</option>
                       <option value="ml_anomaly">ML Engine Anomaly Event</option>
+                      <option value="health_check_failed">Health Check Failed (System)</option>
+                      <option value="system_error">System Error</option>
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -452,9 +493,10 @@ export default function AlertsIntegrations({ userRole }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON (Optional)</label>
-                    <input className="settings-input" type="text" placeholder='e.g. {"threat_score_gt": 80}' onChange={(e) => {
+                    <input className="settings-input" type="text" placeholder='e.g. {"threat_score_gt": 80}' value={conditionsText} onChange={(e) => {
+                      setConditionsText(e.target.value);
                       try {
-                        const conds = JSON.parse(e.target.value);
+                        const conds = e.target.value.trim() ? JSON.parse(e.target.value) : {};
                         setRuleForm({ ...ruleForm, conditions: conds });
                       } catch {
                         // ignore invalid JSON while typing
@@ -468,14 +510,15 @@ export default function AlertsIntegrations({ userRole }) {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Routing Targets (Channel IDs, comma-separated e.g. 1, 2)</label>
-                  <input className="settings-input" type="text" placeholder="Enter channel numeric IDs..." onChange={(e) => {
+                  <input className="settings-input" type="text" placeholder="Enter channel numeric IDs..." value={channelsText} onChange={(e) => {
+                    setChannelsText(e.target.value);
                     const ids = e.target.value.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x));
                     setRuleForm({ ...ruleForm, channels: ids });
                   }} />
                 </div>
                 <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
-                  <button type="submit" className="modal-btn primary" style={{ margin: 0 }}>Create Rule</button>
-                  <button type="button" className="modal-btn secondary" onClick={() => setIsRuleCreateOpen(false)} style={{ margin: 0 }}>Cancel</button>
+                  <button type="submit" className="modal-btn primary" style={{ margin: 0 }}>{editingRuleId != null ? 'Save Changes' : 'Create Rule'}</button>
+                  <button type="button" className="modal-btn secondary" onClick={resetRuleForm} style={{ margin: 0 }}>Cancel</button>
                 </div>
               </form>
             </motion.div>
@@ -501,9 +544,14 @@ export default function AlertsIntegrations({ userRole }) {
                     <div><strong>Channels assigned:</strong> Channel IDs: {JSON.stringify(rule.channels)}</div>
                   </div>
                   {userRole === 'admin' && (
-                    <button className="action-btn-inspect" style={{ alignSelf: 'flex-end', padding: '4px 10px', fontSize: '11px', color: 'var(--danger-color)', border: '1px solid var(--danger-border)', background: 'var(--danger-bg)', margin: 0, marginTop: '8px' }} onClick={() => handleDeleteRule(rule.id)}>
-                      Delete Rule
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', alignSelf: 'flex-end', marginTop: '8px' }}>
+                      <button className="action-btn-inspect" style={{ padding: '4px 10px', fontSize: '11px', margin: 0 }} onClick={() => handleEditRuleClick(rule)}>
+                        Edit
+                      </button>
+                      <button className="action-btn-inspect" style={{ padding: '4px 10px', fontSize: '11px', color: 'var(--danger-color)', border: '1px solid var(--danger-border)', background: 'var(--danger-bg)', margin: 0 }} onClick={() => handleDeleteRule(rule.id)}>
+                        Delete Rule
+                      </button>
+                    </div>
                   )}
                 </div>
               ))

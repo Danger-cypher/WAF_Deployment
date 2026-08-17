@@ -13,6 +13,7 @@ Design notes:
 
 import json
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,24 +25,43 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Client singleton
+# Client pool — one client per thread
 # ---------------------------------------------------------------------------
-_client: Optional[clickhouse_connect.driver.Client] = None
+# clickhouse-connect's HttpClient auto-generates a server-side session_id per
+# client instance (autogenerate_session_id defaults to True), and ClickHouse
+# serializes queries within a session. A single client shared across every
+# request — the previous module-level singleton — meant any two concurrent
+# queries against it collided with "Attempt to execute concurrent queries
+# within the same session", e.g. the dashboard Overview page firing 6 stats
+# queries in parallel (each dispatched via asyncio.to_thread onto a
+# different worker thread, but all sharing one session_id).
+#
+# Route handlers call every query/insert function here via asyncio.to_thread,
+# so each concurrent request already lands on its own worker thread from the
+# executor's thread pool; background tasks (log ingestion, retention) call
+# these functions synchronously on the single event-loop thread, where
+# blocking I/O serializes them anyway. Keying the client by thread — rather
+# than one global client — gives each thread its own session, which is safe
+# for genuine concurrency and is naturally bounded by the thread pool's
+# worker count (in effect a connection pool), with no change needed at any
+# of the 30 call sites in this module.
+_thread_local = threading.local()
 
 
 def _get_client() -> Optional[clickhouse_connect.driver.Client]:
-    """Return a live ClickHouse client, reconnecting if needed."""
-    global _client
+    """Return a live ClickHouse client for the current thread, reconnecting if needed."""
+    client = getattr(_thread_local, "client", None)
     try:
-        if _client is not None:
+        if client is not None:
             # Ping to verify connection is still alive
-            _client.ping()
-            return _client
+            client.ping()
+            return client
     except Exception:
-        _client = None
+        client = None
+        _thread_local.client = None
 
     try:
-        _client = clickhouse_connect.get_client(
+        client = clickhouse_connect.get_client(
             host=settings.CLICKHOUSE_HOST,
             port=settings.CLICKHOUSE_PORT,
             username=settings.CLICKHOUSE_USER,
@@ -50,11 +70,12 @@ def _get_client() -> Optional[clickhouse_connect.driver.Client]:
             connect_timeout=10,
             send_receive_timeout=30,
         )
+        _thread_local.client = client
         logger.info(
-            f"ClickHouse connected: {settings.CLICKHOUSE_HOST}:{settings.CLICKHOUSE_PORT} "
-            f"db={settings.CLICKHOUSE_DB}"
+            f"ClickHouse connected (thread={threading.current_thread().name}): "
+            f"{settings.CLICKHOUSE_HOST}:{settings.CLICKHOUSE_PORT} db={settings.CLICKHOUSE_DB}"
         )
-        return _client
+        return client
     except Exception as e:
         logger.error(f"ClickHouse connection failed: {e}")
         return None
@@ -1122,6 +1143,47 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"get_all_discovered_endpoints failed: {e}")
         return []
+
+
+def get_endpoint_threat_counts(hours: Optional[int] = None) -> Dict[Tuple[str, str], Dict[str, int]]:
+    """
+    Real ModSecurity detection counts per (uri, method), keyed the same way
+    api_discovery.py aggregates endpoints (query string stripped).
+
+    API Protection's endpoint score previously derived malicious/suspicious
+    counts purely from nginx access-log status codes plus a 6-keyword
+    substring blocklist (".. etc/passwd select union <script> alert(") —
+    disconnected from the ModSecurity engine actually protecting the site.
+    This gives the score real signal instead: malicious_count is confirmed
+    WAF blocks (same http_code set used everywhere else in this file for
+    "blocked"); suspicious_count is ModSecurity-flagged Medium/Low severity
+    hits that were NOT blocked (e.g. detection-only paranoia rules).
+    """
+    client = _get_client()
+    if client is None:
+        return {}
+    time_filter = _time_filter_clause(hours)
+    try:
+        result = client.query(f"""
+            SELECT
+                splitByChar('?', uri)[1] AS clean_uri,
+                method,
+                countIf(http_code IN ('401', '403', '406', '429')) AS malicious_count,
+                countIf(
+                    lower(severity) IN ('medium', 'med', 'low', 'info', 'notice')
+                    AND http_code NOT IN ('401', '403', '406', '429')
+                ) AS suspicious_count
+            FROM waf_events
+            WHERE uri != '' AND method != '' {time_filter}
+            GROUP BY clean_uri, method
+        """)
+        return {
+            (row[0], row[1]): {"malicious_count": row[2], "suspicious_count": row[3]}
+            for row in result.result_rows
+        }
+    except Exception as e:
+        logger.error(f"get_endpoint_threat_counts failed: {e}")
+        return {}
 
 
 def get_recently_discovered_endpoints(hours: int = 48) -> List[Dict[str, Any]]:

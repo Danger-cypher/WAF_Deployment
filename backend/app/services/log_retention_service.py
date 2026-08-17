@@ -22,6 +22,7 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -40,16 +41,24 @@ def _parse_retention_days(retention_str: str) -> int:
     return 30
 
 
-def _purge_modsec_audit_files(cutoff: datetime) -> int:
+def _purge_modsec_audit_files(cutoff: datetime) -> tuple[int, int]:
     """
     Delete ModSecurity JSON audit log files OLDER than cutoff.
     These files are already ingested into ClickHouse; we remove them
-    to reclaim disk space. Returns the number of files deleted.
+    to reclaim disk space. Returns (deleted_count, error_count).
+
+    error_count is tracked separately from a silent `logger.warning` because
+    a permission mismatch (audit files written as root, backend running as a
+    non-root user) fails every unlink() the same way every cycle, forever,
+    with nothing but a debug-level log line to notice it by — the retention
+    service looks healthy while doing nothing. Callers use error_count to
+    decide whether to page someone.
     """
     deleted = 0
+    errors = 0
     audit_dir = Path(MODSEC_AUDIT_DIR)
     if not audit_dir.exists():
-        return 0
+        return 0, 0
 
     for child in audit_dir.iterdir():
         try:
@@ -60,8 +69,12 @@ def _purge_modsec_audit_files(cutoff: datetime) -> int:
                     )
                     if dir_date < cutoff:
                         for f in child.rglob("*.json"):
-                            f.unlink(missing_ok=True)
-                            deleted += 1
+                            try:
+                                f.unlink(missing_ok=True)
+                                deleted += 1
+                            except OSError as e:
+                                errors += 1
+                                logger.warning(f"Could not delete audit file {f}: {e}")
                         try:
                             # Remove empty leaf dirs
                             for d in sorted(child.rglob("*"), reverse=True):
@@ -78,12 +91,46 @@ def _purge_modsec_audit_files(cutoff: datetime) -> int:
             elif child.is_file() and child.suffix == ".json":
                 mtime = datetime.fromtimestamp(child.stat().st_mtime, tz=timezone.utc)
                 if mtime < cutoff:
-                    child.unlink(missing_ok=True)
-                    deleted += 1
+                    try:
+                        child.unlink(missing_ok=True)
+                        deleted += 1
+                    except OSError as e:
+                        errors += 1
+                        logger.warning(f"Could not delete audit file {child}: {e}")
         except Exception as e:
+            errors += 1
             logger.warning(f"Error processing audit path {child}: {e}")
 
-    return deleted
+    return deleted, errors
+
+
+def _count_stale_audit_dirs(cutoff: datetime) -> tuple[int, Optional[str]]:
+    """
+    Cheap post-purge self-check: count top-level dated audit directories
+    that are still older than cutoff after a purge cycle just ran, and
+    report the oldest one. A non-zero count here — right after purging —
+    means the purge silently failed to keep up (most likely a permissions
+    problem), not just that nothing needed deleting.
+    """
+    audit_dir = Path(MODSEC_AUDIT_DIR)
+    if not audit_dir.exists():
+        return 0, None
+
+    stale = []
+    for child in audit_dir.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            dir_date = datetime.strptime(child.name[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if dir_date < cutoff:
+            stale.append((dir_date, child.name))
+
+    if not stale:
+        return 0, None
+    stale.sort()
+    return len(stale), stale[0][1]
 
 
 def _sync_clickhouse_ttl(retention_days: int):
@@ -144,20 +191,66 @@ def run_retention_cleanup() -> dict:
     _sync_clickhouse_ttl(retention_days)
 
     # 2. Purge old audit JSON files from disk (already in ClickHouse)
-    audit_deleted = _purge_modsec_audit_files(cutoff)
+    audit_deleted, audit_errors = _purge_modsec_audit_files(cutoff)
+
+    # 3. Self-check: anything still older than cutoff right after purging
+    #    means the purge isn't keeping up (permissions, disk, etc.) even if
+    #    it reported zero errors on this particular cycle's files.
+    stale_dirs, oldest_stale_dir = _count_stale_audit_dirs(cutoff)
 
     summary = {
         "retention_days": retention_days,
         "cutoff": cutoff.isoformat(),
         "audit_files_deleted": audit_deleted,
+        "audit_purge_errors": audit_errors,
+        "stale_audit_dirs_remaining": stale_dirs,
+        "oldest_stale_audit_dir": oldest_stale_dir,
         "clickhouse_ttl_synced": True,
     }
 
     logger.info(
         f"[LogRetention] Cleanup complete — "
-        f"audit files removed: {audit_deleted}, ClickHouse TTL: {retention_days} days"
+        f"audit files removed: {audit_deleted} (errors: {audit_errors}), "
+        f"stale dirs remaining: {stale_dirs}, ClickHouse TTL: {retention_days} days"
     )
     return summary
+
+
+async def _alert_if_unhealthy(summary: dict) -> None:
+    """
+    Fire a health_check_failed alert (existing alerts pipeline — dashboard
+    bell + any configured notification channels) when the retention cycle
+    shows signs of not actually working: delete errors this cycle, or
+    audit directories that are still older than the retention cutoff right
+    after a purge just ran.
+    """
+    errors = summary.get("audit_purge_errors", 0)
+    stale = summary.get("stale_audit_dirs_remaining", 0)
+    if not errors and not stale:
+        return
+    try:
+        from app.services.alert_manager import alert_manager
+        detail = (
+            f"Log retention purge is not keeping up: {errors} delete error(s) this cycle, "
+            f"{stale} audit director{'y' if stale == 1 else 'ies'} still older than the "
+            f"{summary.get('retention_days')}-day retention cutoff "
+            f"(oldest: {summary.get('oldest_stale_audit_dir') or 'n/a'}). "
+            f"Likely cause: the backend process lacks permission to delete files under "
+            f"{MODSEC_AUDIT_DIR}."
+        )
+        await alert_manager.trigger_event(
+            event_type="health_check_failed",
+            event_data={
+                "component": "log_retention_service",
+                "audit_purge_errors": errors,
+                "stale_audit_dirs_remaining": stale,
+                "oldest_stale_audit_dir": summary.get("oldest_stale_audit_dir"),
+                "retention_days": summary.get("retention_days"),
+            },
+            custom_message=detail,
+        )
+    except Exception as e:
+        logger.error(f"[LogRetention] Failed to dispatch health-check alert: {e}")
 
 
 async def start_log_retention_service():
@@ -173,7 +266,17 @@ async def start_log_retention_service():
 
     while True:
         try:
-            run_retention_cleanup()
+            summary = run_retention_cleanup()
+            await _alert_if_unhealthy(summary)
         except Exception as e:
             logger.error(f"[LogRetention] Unexpected error during cleanup: {e}")
+            try:
+                from app.services.alert_manager import alert_manager
+                await alert_manager.trigger_event(
+                    event_type="health_check_failed",
+                    event_data={"component": "log_retention_service", "error": str(e)},
+                    custom_message=f"Log retention cleanup cycle crashed: {e}",
+                )
+            except Exception as alert_err:
+                logger.error(f"[LogRetention] Failed to dispatch crash alert: {alert_err}")
         await asyncio.sleep(RETENTION_CHECK_INTERVAL_SECONDS)

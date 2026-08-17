@@ -176,14 +176,28 @@ def test_run_api_discovery_merges_known_encoding_over_unknown(fake_access_log):
     assert ep["has_https"] == 1
 
 
-def test_run_api_discovery_skips_internal_ips(fake_access_log):
+def test_run_api_discovery_tags_internal_ips_without_polluting_score_metrics(fake_access_log):
+    """Internal/RFC1918 traffic is tagged (so the endpoint isn't invisible
+    and Traffic Source classification works) but must not touch any
+    score-driving metric — hit_count, error/malicious/suspicious counts,
+    latency, or the https/encoding measurements all stay at their
+    untouched defaults."""
     log_path, captured = fake_access_log
     internal_line = FULL_LINE.replace("203.0.113.5", "192.168.1.5")
     log_path.write_text(internal_line + "\n")
 
     api_discovery.run_api_discovery()
 
-    assert captured == {}
+    ep = captured[("/api/v1/orders", "GET")]
+    assert ep["internal_hit_count"] == 1
+    assert ep["external_hit_count"] == 0
+    assert ep["hit_count"] == 0
+    assert ep["error_count"] == 0
+    assert ep["malicious_count"] == 0
+    assert ep["suspicious_count"] == 0
+    assert ep["response_time_ms_sum"] == 0.0
+    assert ep["has_https"] == api_discovery.HTTPS_UNKNOWN
+    assert ep["content_encoding"] == api_discovery.ENCODING_UNKNOWN
 
 
 # ---------------------------------------------------------------------------

@@ -4,11 +4,35 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import List, Dict, Any
-from app.services import db_service
+from app.services import db_service, clickhouse_service
 from app.services.auth import require_admin, require_any_role, TokenData
 from app.services.api_discovery import run_api_discovery
 
 router = APIRouter()
+
+
+def _overlay_real_threat_counts(endpoints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Replace each endpoint's malicious_count/suspicious_count — normally
+    derived at discovery time from nginx status codes plus a narrow
+    keyword heuristic (see api_discovery.py) — with real counts from
+    ModSecurity's own detections in waf_events, keyed by (uri, method).
+    No-ops (leaves the heuristic-derived counts as-is) if ClickHouse isn't
+    available, since that heuristic is the only signal SQLite-only
+    deployments have.
+    """
+    if not clickhouse_service.is_available():
+        return endpoints
+    threat_counts = clickhouse_service.get_endpoint_threat_counts()
+    if not threat_counts:
+        return endpoints
+    for ep in endpoints:
+        key = (ep.get("uri", ""), ep.get("method", ""))
+        counts = threat_counts.get(key)
+        if counts is not None:
+            ep["malicious_count"] = counts["malicious_count"]
+            ep["suspicious_count"] = counts["suspicious_count"]
+    return endpoints
 
 
 def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
@@ -100,7 +124,7 @@ def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
 def get_discovered_endpoints(current_user: TokenData = Depends(require_any_role)):
     """Runs a discovery pass on the access log, and returns all discovered endpoints with scores."""
     run_api_discovery()  # Scan for any new lines in access.log
-    endpoints = db_service.get_all_discovered_endpoints()
+    endpoints = _overlay_real_threat_counts(db_service.get_all_discovered_endpoints())
     return [calculate_endpoint_score(ep) for ep in endpoints]
 
 
@@ -108,7 +132,7 @@ def get_discovered_endpoints(current_user: TokenData = Depends(require_any_role)
 def get_recently_discovered(current_user: TokenData = Depends(require_any_role)):
     """Returns endpoints discovered in the last 48 hours."""
     run_api_discovery()
-    endpoints = db_service.get_recently_discovered_endpoints(hours=48)
+    endpoints = _overlay_real_threat_counts(db_service.get_recently_discovered_endpoints(hours=48))
     return [calculate_endpoint_score(ep) for ep in endpoints]
 
 
@@ -116,7 +140,7 @@ def get_recently_discovered(current_user: TokenData = Depends(require_any_role))
 def get_api_protection_analytics(current_user: TokenData = Depends(require_any_role)):
     """Computes API analytics such as most consumed, slowest, and traffic band breakdown."""
     run_api_discovery()
-    endpoints = db_service.get_all_discovered_endpoints()
+    endpoints = _overlay_real_threat_counts(db_service.get_all_discovered_endpoints())
     scored_endpoints = [calculate_endpoint_score(ep) for ep in endpoints]
 
     # Sort for top lists

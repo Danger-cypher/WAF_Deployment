@@ -20,8 +20,9 @@ _db_init_error = None
 
 # Cache for health check — avoid ClickHouse and Redis pings on every request
 _health_cache: dict = {}
-_HEALTH_CACHE_TTL = 60  # seconds for parsed_files count
-_REDIS_CHECK_TTL = 15   # seconds for Redis connectivity check
+_HEALTH_CACHE_TTL = 60      # seconds for parsed_files count
+_REDIS_CHECK_TTL = 15       # seconds for Redis connectivity check
+_CLICKHOUSE_CHECK_TTL = 15  # seconds for ClickHouse connectivity check
 
 
 def check_db_initialized():
@@ -68,6 +69,22 @@ async def health_check():
         _health_cache["parsed_files_ts"] = now
     parsed_files = _health_cache["parsed_files"]
 
+    # Cache ClickHouse connectivity check. This exists because every
+    # ClickHouse-backed function in this codebase catches its own exceptions
+    # and returns an empty/zero fallback (by design, so one bad query doesn't
+    # 500 a dashboard page) — which means total_parsed_files silently reads 0
+    # on a ClickHouse outage/auth failure with nothing distinguishing that
+    # from "genuinely no traffic yet". This is the exact blind spot that let
+    # a real multi-day ClickHouse ingestion outage go undetected: Docker's
+    # own healthcheck (`curl -f http://localhost:8000/health`) kept getting
+    # a 200 "ok" the entire time. Checking real connectivity here, and
+    # folding it into `status`, closes that gap.
+    if "clickhouse_ok" not in _health_cache or (now - _health_cache.get("clickhouse_ts", 0)) > _CLICKHOUSE_CHECK_TTL:
+        from app.services import clickhouse_service
+        _health_cache["clickhouse_ok"] = await asyncio.to_thread(clickhouse_service.is_available)
+        _health_cache["clickhouse_ts"] = now
+    clickhouse_ok = _health_cache["clickhouse_ok"]
+
     # Check database initialization (uses in-memory flag after first success)
     db_ok = await asyncio.to_thread(check_db_initialized)
     if not db_ok and not _db_initialized:
@@ -88,11 +105,12 @@ async def health_check():
     ml_enabled = bool(os.environ.get("ML_HOST", ""))
 
     return HealthResponse(
-        status="ok" if db_ok else "warning",
+        status="ok" if (db_ok and clickhouse_ok) else "warning",
         log_directory_exists=log_dir_exists,
         total_parsed_files=parsed_files,
         db_initialized=db_ok,
         redis_connected=redis_ok,
+        clickhouse_connected=clickhouse_ok,
         ml_enabled=ml_enabled,
     )
 
@@ -209,9 +227,10 @@ async def run_log_retention(current_user: TokenData = Depends(require_admin)):
     Purges ModSecurity audit files and SQLite log entries older than the
     configured retention window. Requires admin role.
     """
-    from app.services.log_retention_service import run_retention_cleanup
+    from app.services.log_retention_service import run_retention_cleanup, _alert_if_unhealthy
     try:
         result = run_retention_cleanup()
+        await _alert_if_unhealthy(result)
         return {"status": "success", "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Log retention cleanup failed: {e}")
@@ -223,7 +242,10 @@ async def log_retention_status(current_user: TokenData = Depends(require_admin))
     Get current log retention policy and storage usage stats.
     """
     import shutil
-    from app.services.log_retention_service import _parse_retention_days, MODSEC_AUDIT_DIR
+    from datetime import datetime, timedelta, timezone
+    from app.services.log_retention_service import (
+        _parse_retention_days, _count_stale_audit_dirs, MODSEC_AUDIT_DIR,
+    )
 
     log_settings = settings_manager.get_log_settings()
     retention_str = log_settings.get("retention", "30 Days")
@@ -242,10 +264,19 @@ async def log_retention_status(current_user: TokenData = Depends(require_admin))
                 except OSError:
                     pass
 
+    # Signal whether the background purge is actually keeping up — does not
+    # trigger a purge itself, just reports current staleness (cheap: only
+    # inspects top-level dated directory names, not the file tree).
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    stale_dirs, oldest_stale_dir = _count_stale_audit_dirs(cutoff)
+
     return {
         "retention_policy": retention_str,
         "retention_days": retention_days,
         "audit_log_directory": MODSEC_AUDIT_DIR,
         "audit_log_files": audit_file_count,
         "audit_log_size_mb": round(audit_usage_bytes / (1024 * 1024), 2),
+        "stale_audit_dirs_beyond_retention": stale_dirs,
+        "oldest_stale_audit_dir": oldest_stale_dir,
+        "purge_appears_healthy": stale_dirs == 0,
     }

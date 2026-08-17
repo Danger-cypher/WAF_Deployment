@@ -73,8 +73,13 @@ ACCESS_LINE_RE_LEGACY = re.compile(
 HTTPS_UNKNOWN = 2  # vs. 1 = confirmed https, 0 = confirmed http
 ENCODING_UNKNOWN = "unknown"  # vs. "" = confirmed no Content-Encoding header, or a real value like "gzip"
 
-# Global last read file position
-_last_position = 0
+# Last read file position. Persisted to SQLite (ingestion_state) so a
+# backend restart doesn't forget where it left off — without this, every
+# cold start reseeks to `filesize - 100KB`, which can silently reprocess
+# (double-count) or skip lines depending on how much the log grew while the
+# process was down.
+_LAST_POSITION_STATE_KEY = "api_discovery_last_position"
+_last_position = None  # None = not yet loaded from persisted state this process
 NGINX_ACCESS_LOG = "/var/log/nginx/access.log"
 
 # Static files patterns to ignore in API Discovery
@@ -141,9 +146,12 @@ def run_api_discovery():
         try:
             file_size = os.path.getsize(NGINX_ACCESS_LOG)
 
-            # If last_position is 0, start scanning only from the last 100KB
-            if _last_position == 0:
-                _last_position = max(0, file_size - 100 * 1024)
+            # First call this process: load the cursor persisted by a prior
+            # run instead of assuming a cold start. Falls back to "last
+            # 100KB" only if nothing was ever persisted (fresh install).
+            if _last_position is None:
+                saved = db_service.get_ingestion_state(_LAST_POSITION_STATE_KEY)
+                _last_position = int(saved) if saved is not None else max(0, file_size - 100 * 1024)
 
             # If file was truncated/rotated, reset position to 0
             if file_size < _last_position:
@@ -163,7 +171,7 @@ def run_api_discovery():
                 return
 
             endpoints_aggregated = {}
-            skipped_internal = 0
+            internal_lines = 0
 
             for line in lines:
                 # Try the current format first (real timing + real scheme/encoding),
@@ -181,19 +189,27 @@ def run_api_discovery():
                     continue
                 is_legacy = format_tier == "legacy"
 
-                # Skip management/internal traffic before any processing.
-                # This prevents dashboard polling and RFC1918 scanners from
-                # inflating hit counts and distorting threat ratio metrics.
+                # Internal/management traffic (dashboard polling, RFC1918
+                # scanners) is tagged, not dropped. It used to be discarded
+                # entirely here so it couldn't inflate hit counts or distort
+                # threat ratios — but that also meant internal_hit_count could
+                # never be nonzero and the "Internal"/"Mixed" Traffic Source
+                # badge in the UI was unreachable dead code. Below, an
+                # internal hit still counts toward internal_hit_count (so the
+                # badge is meaningful) but is excluded from hit_count,
+                # error/malicious/suspicious counts, latency, and the
+                # https/encoding measurements — every score-driving metric
+                # stays exactly as protected from internal-traffic skew as
+                # before.
                 client_ip = match.group("ip")
-                if is_internal_ip(client_ip):
-                    skipped_internal += 1
-                    continue
+                is_internal = is_internal_ip(client_ip)
+                if is_internal:
+                    internal_lines += 1
 
                 data = match.groupdict()
                 uri = data["uri"]
                 method = data["method"]
                 status_code = int(data["status"])
-                # All remaining IPs at this point are external (internal already filtered above)
 
                 clean_uri = uri.split("?")[0]
 
@@ -276,9 +292,21 @@ def run_api_discovery():
                     }
 
                 ep = endpoints_aggregated[key]
+                # Keep the latest timestamp regardless of traffic origin —
+                # an internal-only hit still means the endpoint is alive.
+                ep["timestamp"] = timestamp
+
+                if is_internal:
+                    # Registers the endpoint and its Traffic Source
+                    # classification without touching any score-driving
+                    # metric (hit_count, error/malicious/suspicious counts,
+                    # latency, https/encoding) — matches the original
+                    # anti-skew intent, just without discarding the endpoint.
+                    ep["internal_hit_count"] += 1
+                    continue
+
                 ep["response_time_ms_sum"] += response_time_ms
                 ep["hit_count"] += 1
-                # Since internal IPs are filtered out above, all logged hits are external
                 ep["external_hit_count"] += 1
                 if is_error:
                     ep["error_count"] += 1
@@ -286,8 +314,6 @@ def run_api_discovery():
                     ep["malicious_count"] += 1
                 if is_suspicious:
                     ep["suspicious_count"] += 1
-                # Keep the latest timestamp
-                ep["timestamp"] = timestamp
                 # Prefer known measurements over the unknown sentinel within
                 # this batch. For has_https, a confirmed-insecure hit (0)
                 # always wins even over a confirmed-secure one (1) — a real
@@ -297,20 +323,23 @@ def run_api_discovery():
                 if content_encoding != ENCODING_UNKNOWN:
                     ep["content_encoding"] = content_encoding
 
-            if skipped_internal > 0:
+            if internal_lines > 0:
                 logger.debug(
-                    f"API Discovery: skipped {skipped_internal} internal/RFC1918 IP lines from access log."
+                    f"API Discovery: {internal_lines} internal/RFC1918 IP lines tagged as internal "
+                    f"(counted toward internal_hit_count, excluded from score-driving metrics)."
                 )
 
             if endpoints_aggregated:
                 db_service.bulk_upsert_discovered_endpoints(endpoints_aggregated)
                 logger.info(
                     f"Bulk processed {len(lines)} access log records into {len(endpoints_aggregated)} unique API endpoints "
-                    f"(skipped {skipped_internal} internal-IP lines)."
+                    f"({internal_lines} internal-IP lines tagged)."
                 )
 
-            # ONLY update the global file position after successful DB commit
+            # ONLY update the file position after successful DB commit, and
+            # persist it so a restart resumes from here instead of guessing.
             _last_position = new_position
+            db_service.set_ingestion_state(_LAST_POSITION_STATE_KEY, str(new_position))
 
         except Exception as e:
             logger.error(f"Error executing API discovery: {e}")

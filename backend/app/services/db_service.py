@@ -81,6 +81,19 @@ def init_db():
                 )
             """)
 
+            # Ingestion state — small key/value store for cross-restart cursors
+            # (e.g. api_discovery.py's nginx access-log read offset). Without
+            # this, a backend restart forgets where it left off and either
+            # re-scans/double-counts recent lines or, on a slow-growth log,
+            # can silently skip lines written between shutdown and the next
+            # cold-start's fixed "last 100KB" seek.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ingestion_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+
             # 4. Discovered Endpoints table for API Protection
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS discovered_endpoints (
@@ -807,6 +820,37 @@ def get_exclusions_analytics():
             "top_fp_rules": [],
             "exclusions_by_date": [],
         }
+
+
+# ========================================================
+# Ingestion state — small cross-restart key/value cursor store
+# ========================================================
+
+
+def get_ingestion_state(key: str, default: Optional[str] = None) -> Optional[str]:
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM ingestion_state WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row["value"] if row else default
+    except Exception as e:
+        logger.error(f"Error reading ingestion_state[{key}]: {e}")
+        return default
+
+
+def set_ingestion_state(key: str, value: str) -> None:
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO ingestion_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Error writing ingestion_state[{key}]: {e}")
 
 
 # ========================================================
