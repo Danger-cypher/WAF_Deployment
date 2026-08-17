@@ -160,6 +160,25 @@ def init_db():
             except Exception:
                 pass  # Column already exists — reset already ran on a prior startup
 
+            # API Protection: the active OpenAPI/Swagger spec, for shadow/
+            # undocumented-endpoint drift detection. Single-row model (id=1)
+            # — there's only ever one "current" spec; uploading a new one
+            # replaces it. No versioning/history, matching how other single-
+            # purpose config blobs in this app work (e.g. positive_security
+            # settings) rather than building a spec-history feature nobody
+            # asked for.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS api_spec (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    filename TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    raw_content TEXT NOT NULL,
+                    endpoint_count INTEGER NOT NULL,
+                    uploaded_by TEXT NOT NULL,
+                    uploaded_at TEXT NOT NULL
+                )
+            """)
+
             # 5. Protected Applications table for dynamic multi-app proxying
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS protected_apps (
@@ -949,6 +968,47 @@ def get_stale_discovered_endpoints(days: int = 30):
     except Exception as e:
         logger.error(f"Error fetching stale discovered endpoints: {e}")
         return []
+
+
+def save_api_spec(filename: str, version: str, raw_content: str, endpoint_count: int, uploaded_by: str, uploaded_at: str) -> None:
+    """Replaces the active spec (single-row table, id=1) — an upload
+    always supersedes whatever was there before."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO api_spec (id, filename, version, raw_content, endpoint_count, uploaded_by, uploaded_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                filename = excluded.filename,
+                version = excluded.version,
+                raw_content = excluded.raw_content,
+                endpoint_count = excluded.endpoint_count,
+                uploaded_by = excluded.uploaded_by,
+                uploaded_at = excluded.uploaded_at
+            """,
+            (filename, version, raw_content, endpoint_count, uploaded_by, uploaded_at),
+        )
+        conn.commit()
+
+
+def get_api_spec() -> Optional[dict]:
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM api_spec WHERE id = 1")
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error fetching API spec: {e}")
+        return None
+
+
+def delete_api_spec() -> None:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM api_spec WHERE id = 1")
+        conn.commit()
 
 
 def bulk_upsert_discovered_endpoints(endpoints_data: dict):

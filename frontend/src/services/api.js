@@ -884,6 +884,62 @@ export async function getStaleEndpoints(days = 30) {
 }
 
 /**
+ * Upload/replace the active OpenAPI/Swagger spec for drift detection
+ */
+export async function uploadApiSpec(filename, content) {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/spec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, content })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to upload API spec:", error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch metadata about the currently active spec (null if none uploaded)
+ */
+export async function getApiSpec() {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/spec`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch API spec metadata:", error);
+    throw error;
+  }
+}
+
+/**
+ * Remove the active spec
+ */
+export async function deleteApiSpec() {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/spec`, { method: 'DELETE' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to delete API spec:", error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch shadow-endpoint / undocumented-spec-endpoint drift comparison
+ */
+export async function getApiDrift() {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/drift`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch API drift:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch API Protection analytics, top lists, and traffic band volumes
  */
 export async function getApiProtectionAnalytics() {

@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, BarChart2, Clock, Globe, Shield, ShieldCheck, ShieldOff, X } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart2, Clock, FileUp, Globe, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import {
   getApiProtectionAnalytics, getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getStaleEndpoints,
   getDdosBotSettings, saveDdosBotSettings,
   getBlockedEndpoints, blockEndpoint, unblockEndpoint,
+  getApiSpec, uploadApiSpec, deleteApiSpec, getApiDrift,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
@@ -65,6 +66,13 @@ export default function ApiProtection() {
   const [blockedEndpoints, setBlockedEndpoints] = useState([]);
   const [blockingKey, setBlockingKey] = useState(null); // "METHOD uri" currently in flight
 
+  // OpenAPI spec upload + drift detection
+  const [apiSpec, setApiSpec] = useState(null); // metadata, or null if none uploaded
+  const [drift, setDrift] = useState(null);
+  const [driftTab, setDriftTab] = useState('shadow'); // 'shadow', 'undocumented'
+  const [uploadingSpec, setUploadingSpec] = useState(false);
+  const specFileInputRef = useRef(null);
+
   const { toast, showToast } = useToast();
   const confirm = useConfirm();
 
@@ -77,13 +85,15 @@ export default function ApiProtection() {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
-      const [epsData, recentData, staleData, analyticsData, ddosData, blockedData] = await Promise.all([
+      const [epsData, recentData, staleData, analyticsData, ddosData, blockedData, specData, driftData] = await Promise.all([
         getDiscoveredEndpoints(),
         getRecentlyDiscoveredEndpoints(),
         getStaleEndpoints(),
         getApiProtectionAnalytics(),
         getDdosBotSettings(),
         getBlockedEndpoints(),
+        getApiSpec(),
+        getApiDrift(),
       ]);
       setEndpoints(epsData);
       setRecentlyDiscovered(recentData);
@@ -91,6 +101,8 @@ export default function ApiProtection() {
       setAnalytics(analyticsData);
       setDdosSettings(ddosData);
       setBlockedEndpoints(blockedData);
+      setApiSpec(specData);
+      setDrift(driftData);
       setFetchError(null);
     } catch (err) {
       console.error("Failed to fetch API protection data", err);
@@ -209,6 +221,47 @@ export default function ApiProtection() {
       showToast('Failed to unblock endpoint: ' + (err.message || 'Unknown error'), 'error');
     } finally {
       setBlockingKey(null);
+    }
+  };
+
+  const handleSpecFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    // Clear the input immediately so selecting the same file again still fires onChange
+    if (specFileInputRef.current) specFileInputRef.current.value = '';
+    if (!file) return;
+
+    setUploadingSpec(true);
+    try {
+      const content = await file.text();
+      const result = await uploadApiSpec(file.name, content);
+      showToast(`Spec uploaded: ${result.endpoint_count} operations found in ${file.name}.`);
+      const [specData, driftData] = await Promise.all([getApiSpec(), getApiDrift()]);
+      setApiSpec(specData);
+      setDrift(driftData);
+    } catch (err) {
+      showToast('Failed to upload spec: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setUploadingSpec(false);
+    }
+  };
+
+  const handleDeleteSpec = async () => {
+    if (!(await confirm({
+      title: 'Remove API spec',
+      message: 'Remove the active OpenAPI/Swagger spec? Shadow-endpoint and undocumented-endpoint drift detection will stop until a new one is uploaded.',
+      confirmLabel: 'Remove',
+      danger: true,
+    }))) {
+      return;
+    }
+    try {
+      await deleteApiSpec();
+      setApiSpec(null);
+      const driftData = await getApiDrift();
+      setDrift(driftData);
+      showToast('Spec removed.');
+    } catch (err) {
+      showToast('Failed to remove spec: ' + (err.message || 'Unknown error'), 'error');
     }
   };
 
@@ -618,6 +671,126 @@ export default function ApiProtection() {
           </table>
         </div>
 
+      </div>
+
+      {/* OpenAPI Spec Upload + Drift Detection */}
+      <div className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <FileUp size={18} color="var(--sev-low)" />
+              <span>OpenAPI / Swagger Drift Detection</span>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px', marginBottom: 0, maxWidth: '640px', lineHeight: 1.5 }}>
+              Upload your API's OpenAPI or Swagger spec (JSON or YAML) to compare it against real observed
+              traffic — endpoints hit in production but never documented (shadow endpoints), and documented
+              endpoints nobody's actually seen hit. Compares paths and methods only, not schemas or auth.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+            {apiSpec && (
+              <Button variant="secondary" size="sm" icon={Trash2} onClick={handleDeleteSpec}>
+                Remove Spec
+              </Button>
+            )}
+            <input
+              ref={specFileInputRef}
+              type="file"
+              accept=".json,.yaml,.yml"
+              onChange={handleSpecFileSelected}
+              style={{ display: 'none' }}
+            />
+            <button
+              onClick={() => specFileInputRef.current?.click()}
+              disabled={uploadingSpec}
+              className="modal-btn primary"
+              style={{ margin: 0, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <FileUp size={14} /> {uploadingSpec ? 'Uploading...' : apiSpec ? 'Replace Spec' : 'Upload Spec'}
+            </button>
+          </div>
+        </div>
+
+        {apiSpec && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', padding: '12px 16px', backgroundColor: 'var(--surface-subtle)', borderRadius: '8px', fontSize: '12px' }}>
+            <div><span style={{ color: 'var(--text-secondary)' }}>File: </span><span style={{ color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'monospace' }}>{apiSpec.filename}</span></div>
+            <div><span style={{ color: 'var(--text-secondary)' }}>Version: </span><span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{apiSpec.version}</span></div>
+            <div><span style={{ color: 'var(--text-secondary)' }}>Documented operations: </span><span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{apiSpec.endpoint_count}</span></div>
+            <div><span style={{ color: 'var(--text-secondary)' }}>Uploaded by: </span><span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{apiSpec.uploaded_by}</span></div>
+          </div>
+        )}
+
+        {!apiSpec ? (
+          <div style={{ padding: '32px 8px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>
+            No spec uploaded yet — upload one to see shadow-endpoint and undocumented-endpoint drift.
+          </div>
+        ) : (
+          <>
+            <div className="btn-group" style={{ display: 'flex', gap: '8px', padding: '2px', backgroundColor: 'var(--surface-subtle)', borderRadius: '6px', width: 'fit-content' }}>
+              <button
+                className={`tab-btn ${driftTab === 'shadow' ? 'active' : ''}`}
+                onClick={() => setDriftTab('shadow')}
+                style={{
+                  border: 'none', padding: '8px 16px', borderRadius: '4px', fontSize: '13px', cursor: 'pointer',
+                  backgroundColor: driftTab === 'shadow' ? 'var(--sev-low-border)' : 'transparent',
+                  color: driftTab === 'shadow' ? 'var(--sev-low)' : 'var(--text-secondary)',
+                  fontWeight: driftTab === 'shadow' ? 600 : 500,
+                }}
+              >
+                Shadow Endpoints (undocumented){drift?.shadow_endpoints?.length > 0 ? ` (${drift.shadow_endpoints.length})` : ''}
+              </button>
+              <button
+                className={`tab-btn ${driftTab === 'undocumented' ? 'active' : ''}`}
+                onClick={() => setDriftTab('undocumented')}
+                title="Documented in the spec, never observed in traffic"
+                style={{
+                  border: 'none', padding: '8px 16px', borderRadius: '4px', fontSize: '13px', cursor: 'pointer',
+                  backgroundColor: driftTab === 'undocumented' ? 'var(--sev-low-border)' : 'transparent',
+                  color: driftTab === 'undocumented' ? 'var(--sev-low)' : 'var(--text-secondary)',
+                  fontWeight: driftTab === 'undocumented' ? 600 : 500,
+                }}
+              >
+                Never Observed (spec-only){drift?.undocumented_spec_endpoints?.length > 0 ? ` (${drift.undocumented_spec_endpoints.length})` : ''}
+              </button>
+            </div>
+
+            {driftTab === 'shadow' ? (
+              drift?.shadow_endpoints?.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {drift.shadow_endpoints.map((ep, idx) => (
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--surface-subtle)', borderRadius: '6px' }}>
+                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                        <AlertTriangle size={14} color="var(--sev-medium)" />
+                        <span style={getMethodStyle(ep.method)}>{ep.method}</span>
+                        <span style={{ color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'monospace' }}>{ep.uri}</span>
+                      </div>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Hits: <strong style={{ color: 'var(--text-primary)' }}>{ep.hit_count}</strong></span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>
+                  No shadow endpoints — every observed endpoint matches something in the spec.
+                </div>
+              )
+            ) : (
+              drift?.undocumented_spec_endpoints?.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {drift.undocumented_spec_endpoints.map((ep, idx) => (
+                    <div key={idx} style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--surface-subtle)', borderRadius: '6px' }}>
+                      <span style={getMethodStyle(ep.method)}>{ep.method}</span>
+                      <span style={{ color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'monospace' }}>{ep.path_template}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>
+                  Every documented endpoint has been observed in real traffic.
+                </div>
+              )
+            )}
+          </>
+        )}
       </div>
 
       <Toast toast={toast} />

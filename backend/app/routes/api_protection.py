@@ -1,10 +1,11 @@
 import hashlib
 import os
 import re
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import List, Dict, Any
-from app.services import db_service, clickhouse_service
+from app.services import db_service, clickhouse_service, api_spec
 from app.services.auth import require_admin, require_any_role, TokenData
 
 router = APIRouter()
@@ -396,3 +397,94 @@ def unblock_endpoint(req: EndpointBlockRequest, current_user: TokenData = Depend
             detail=f"Failed to remove endpoint block: {err_msg}",
         )
     return {"message": f"{method} {uri} is no longer blocked."}
+
+
+# ============================================================================
+# OpenAPI/Swagger spec upload + traffic-drift comparison — shadow endpoints
+# (seen in traffic, undocumented) and undocumented spec endpoints (documented,
+# never observed). Single active spec, no versioning/history (see api_spec.py
+# and the api_spec table for the reasoning).
+# ============================================================================
+
+class ApiSpecUploadRequest(BaseModel):
+    filename: str
+    content: str
+
+
+@router.post("/api-protection/spec")
+def upload_api_spec(req: ApiSpecUploadRequest, current_user: TokenData = Depends(require_admin)):
+    """Uploads/replaces the active OpenAPI/Swagger spec (Admin only —
+    this changes what every other user sees as the documented/shadow
+    endpoint breakdown)."""
+    try:
+        parsed = api_spec.parse_spec(req.content)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    db_service.save_api_spec(
+        filename=req.filename,
+        version=parsed["version"],
+        raw_content=req.content,
+        endpoint_count=len(parsed["endpoints"]),
+        uploaded_by=current_user.username,
+        uploaded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    return {
+        "message": f"Spec uploaded: {len(parsed['endpoints'])} operations found.",
+        "filename": req.filename,
+        "version": parsed["version"],
+        "endpoint_count": len(parsed["endpoints"]),
+    }
+
+
+@router.get("/api-protection/spec")
+def get_api_spec_metadata(current_user: TokenData = Depends(require_any_role)):
+    """Returns metadata about the currently active spec, or null if none uploaded."""
+    spec = db_service.get_api_spec()
+    if not spec:
+        return None
+    return {
+        "filename": spec["filename"],
+        "version": spec["version"],
+        "endpoint_count": spec["endpoint_count"],
+        "uploaded_by": spec["uploaded_by"],
+        "uploaded_at": spec["uploaded_at"],
+    }
+
+
+@router.delete("/api-protection/spec")
+def remove_api_spec(current_user: TokenData = Depends(require_admin)):
+    """Clears the active spec (Admin only)."""
+    db_service.delete_api_spec()
+    return {"message": "Spec removed."}
+
+
+@router.get("/api-protection/drift")
+def get_api_drift(current_user: TokenData = Depends(require_any_role)):
+    """
+    Compares the active spec against real observed traffic:
+    - shadow_endpoints: real, reachable endpoints with no matching spec path
+    - undocumented_spec_endpoints: documented paths never observed in traffic
+    Returns spec_loaded: false with empty lists if no spec has been uploaded.
+    """
+    spec = db_service.get_api_spec()
+    if not spec:
+        return {
+            "spec_loaded": False,
+            "shadow_endpoints": [],
+            "undocumented_spec_endpoints": [],
+            "spec_endpoint_count": 0,
+            "matched_spec_endpoint_count": 0,
+        }
+
+    try:
+        parsed = api_spec.parse_spec(spec["raw_content"])
+    except ValueError as e:
+        # Spec was valid at upload time but somehow isn't now (shouldn't
+        # happen — surfaced rather than silently returning stale/empty data).
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Stored spec failed to re-parse: {e}")
+
+    discovered = db_service.get_all_discovered_endpoints()
+    drift = api_spec.compute_drift(parsed["endpoints"], discovered)
+    drift["spec_loaded"] = True
+    return drift
