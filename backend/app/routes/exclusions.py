@@ -25,10 +25,13 @@ async def preview_exclusion(
 ):
     """Generates a preview of the ModSecurity exclusion rule without saving it."""
     try:
-        encoded_str = encoded_payload.payload
-        if encoded_str.startswith("WAF_BYPASS_"):
-            encoded_str = encoded_str[len("WAF_BYPASS_") :]
-        json_str = base64.b64decode(encoded_str).decode("utf-8")
+        # Payload is Base64-encoded JSON — see the comment on
+        # update_positive_security in routes/settings.py for why this used
+        # to need a "WAF_BYPASS_" prefix and why it doesn't anymore (the
+        # dashboard vhost's own SecRuleRemoveById whitelist already covers
+        # it — verified directly against a payload with SQLi/XSS/path-
+        # traversal-shaped notes/uri content).
+        json_str = base64.b64decode(encoded_payload.payload).decode("utf-8")
         request = ExclusionPreviewRequest(**json.loads(json_str))
 
         # Use the real next sequence ID so the preview accurately shows the rule that will be saved.
@@ -59,10 +62,10 @@ async def create_new_exclusion(
 ):
     """Creates a new targeted exclusion, generates the ModSec rule, and reloads NGINX WAF."""
     try:
-        encoded_str = encoded_payload.payload
-        if encoded_str.startswith("WAF_BYPASS_"):
-            encoded_str = encoded_str[len("WAF_BYPASS_") :]
-        json_str = base64.b64decode(encoded_str).decode("utf-8")
+        # Payload is Base64-encoded JSON — see preview_exclusion above / the
+        # comment on update_positive_security in routes/settings.py for why
+        # this no longer needs a "WAF_BYPASS_" prefix.
+        json_str = base64.b64decode(encoded_payload.payload).decode("utf-8")
         request = ExclusionCreateRequest(**json.loads(json_str))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload")

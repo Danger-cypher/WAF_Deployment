@@ -52,7 +52,7 @@ from typing import List
 class PositiveSecurityModel(BaseModel):
     # Not actually used to validate the request body — update_positive_security
     # below takes an EncodedPayloadModel and decodes it manually (see the
-    # WAF_BYPASS_ handling there). Kept here to document the real shape of
+    # Base64 handling there). Kept here to document the real shape of
     # what's stored/generated into NGINX. Defaults to disabled: turning this
     # on enforces allowed_methods/allowed_content_types/restricted_extensions
     # for every protected app's traffic — never the dashboard's own API.
@@ -184,12 +184,19 @@ async def update_positive_security(
     current_user: TokenData = Depends(require_admin),
 ):
     logger.info("Updating Positive Security allowlist.")
-    # Decode WAF evasion payload
+    # Payload is Base64-encoded JSON — restricted_extensions/allowed_content_types
+    # values (".bak", "application/x-www-form-urlencoded", etc.) previously
+    # tripped CRS's own inspection of the dashboard's admin traffic, so this
+    # used to be sent under a "WAF_BYPASS_" prefix that deliberately broke
+    # the Base64 encoding just so CRS's t:base64Decode transform couldn't
+    # decode it and match the real content — smuggling admin payloads past
+    # the WAF's inspection of its own traffic. The dashboard vhost's
+    # SecRuleRemoveById whitelist (configs/nginx/sites-available/cybersentinel)
+    # already covers this false-positive class directly; verified a plain
+    # payload with SQLi/XSS/path-traversal-shaped content in every field
+    # passes cleanly, so the prefix trick added no protection, just noise.
     try:
-        encoded_str = settings_payload.payload
-        if encoded_str.startswith("WAF_BYPASS_"):
-            encoded_str = encoded_str[len("WAF_BYPASS_") :]
-        json_str = base64.b64decode(encoded_str).decode("utf-8")
+        json_str = base64.b64decode(settings_payload.payload).decode("utf-8")
         settings_dict = json.loads(json_str)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload")

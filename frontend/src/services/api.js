@@ -454,13 +454,15 @@ export async function getPositiveSecurity() {
  */
 export async function savePositiveSecurity(settings) {
   try {
-    // WAF evasion for admin panel:
-    // WAFs block strings like ".bak" or "application/x-www-form-urlencoded".
-    // Base64 is often decoded by CRS (t:base64Decode). By prepending "WAF_BYPASS_",
-    // the Base64 string is invalid and CRS cannot decode it to find the bad strings.
+    // Payload is Base64-encoded so admin values like ".bak" or
+    // "application/x-www-form-urlencoded" don't read as literal attack
+    // strings in transit — decoded server-side in routes/settings.py. The
+    // dashboard vhost's own ModSecurity config already whitelists this
+    // false-positive class for the admin API, so plain Base64 is enough;
+    // no evasion prefix needed.
     const jsonString = JSON.stringify(settings);
     const encodedPayload = {
-      payload: "WAF_BYPASS_" + btoa(jsonString)
+      payload: btoa(jsonString)
     };
     const response = await fetch(`${BASE_URL}/settings/positive-security`, {
       method: 'POST',
@@ -712,8 +714,10 @@ export async function deleteFalsePositive(id) {
  */
 export async function previewExclusionRule(payload) {
   try {
+    // Base64-encoded — see the comment on savePositiveSecurity above for why
+    // this no longer needs a "WAF_BYPASS_" evasion prefix.
     const jsonString = JSON.stringify(payload);
-    const encodedPayload = { payload: "WAF_BYPASS_" + btoa(jsonString) };
+    const encodedPayload = { payload: btoa(jsonString) };
     const response = await fetch(`${BASE_URL}/exclusions/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -731,8 +735,10 @@ export async function previewExclusionRule(payload) {
  */
 export async function createExclusion(payload) {
   try {
+    // Base64-encoded — see the comment on savePositiveSecurity above for why
+    // this no longer needs a "WAF_BYPASS_" evasion prefix.
     const jsonString = JSON.stringify(payload);
-    const encodedPayload = { payload: "WAF_BYPASS_" + btoa(jsonString) };
+    const encodedPayload = { payload: btoa(jsonString) };
     const response = await fetch(`${BASE_URL}/exclusions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
