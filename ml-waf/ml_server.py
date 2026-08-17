@@ -25,22 +25,30 @@ try:
     _CH_USER = os.environ.get("CLICKHOUSE_USER", "wafuser")
     _CH_PASS = os.environ.get("CLICKHOUSE_PASSWORD", "")
     _CH_DB   = os.environ.get("CLICKHOUSE_DB", "cybersentinel")
-    _ch_client = None
+    # /predict is a sync endpoint, so Starlette dispatches concurrent
+    # requests across its threadpool. A single shared client here caused
+    # clickhouse-connect's session-id serialization to race across threads,
+    # silently failing ~45% of inserts (caught by the broad except below,
+    # falling back to SQLite with no visible error) — same failure mode
+    # already fixed for the backend in clickhouse_service.py via
+    # threading.local(). One client per thread avoids the race entirely.
+    _ch_thread_local = threading.local()
     def _get_ch_client():
-        global _ch_client
         try:
-            if _ch_client:
-                _ch_client.ping()
-                return _ch_client
+            client = getattr(_ch_thread_local, "client", None)
+            if client:
+                client.ping()
+                return client
         except Exception:
-            _ch_client = None
+            _ch_thread_local.client = None
         try:
-            _ch_client = _ch_connect.get_client(
+            client = _ch_connect.get_client(
                 host=_CH_HOST, port=_CH_PORT,
                 username=_CH_USER, password=_CH_PASS,
                 database=_CH_DB, connect_timeout=5,
             )
-            return _ch_client
+            _ch_thread_local.client = client
+            return client
         except Exception as exc:
             return None
     _CLICKHOUSE_AVAILABLE = True
