@@ -492,11 +492,19 @@ export default function Exceptions() {
           <div className="metric-card glass-panel" style={{ gridColumn: 'span 4' }}>
             <div className="metric-header">
               <span>Global System Health</span>
-              <div className="metric-icon-wrapper green"><ShieldCheck size={18} /></div>
+              <div className={`metric-icon-wrapper ${analytics.config_valid ? 'green' : 'red'}`}>
+                <ShieldCheck size={18} />
+              </div>
             </div>
-            <div className="metric-value" style={{ color: 'var(--success-color)' }}>100%</div>
-            <div className="metric-trend trend-down">
-              <span>System engine sync OK</span>
+            <div className="metric-value" style={{ color: analytics.config_valid ? 'var(--success-color)' : 'var(--danger-color)' }}>
+              {analytics.config_valid ? '100%' : 'Error'}
+            </div>
+            <div className="metric-trend trend-down" title={analytics.config_error || ''}>
+              <span>
+                {analytics.config_valid
+                  ? 'NGINX/ModSecurity config sync OK'
+                  : 'Config validation failed — see server logs'}
+              </span>
             </div>
           </div>
 

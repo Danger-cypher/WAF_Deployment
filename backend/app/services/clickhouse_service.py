@@ -1556,3 +1556,45 @@ def get_alert_stats(days: int = 30) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"get_alert_stats failed: {e}")
         return {}
+
+
+# ---------------------------------------------------------------------------
+# audit_log — Write (system configuration change history)
+# ---------------------------------------------------------------------------
+def insert_audit_log(
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    username: str,
+    details: Optional[Dict[str, Any]] = None,
+    ip_address: str = "",
+) -> bool:
+    """
+    Append a system-configuration-change record to audit_log (365-day TTL —
+    see init.sql). This function didn't exist despite the table and its
+    schema already being defined and despite 4 call sites in db_service.py
+    (exclusion create/toggle-status/update-note/delete) already calling it —
+    every one of those SQLite writes (already committed by the point this
+    is reached) was throwing AttributeError and getting swallowed by the
+    caller's outer try/except, silently returning failure to the route
+    layer despite the underlying data having actually been written.
+    """
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        details_str = json.dumps(details) if isinstance(details, dict) else str(details or "")
+        client.insert("audit_log", [[
+            str(entity_type),
+            str(entity_id),
+            str(action),
+            str(username),
+            details_str,
+            str(ip_address or ""),
+        ]], column_names=[
+            "entity_type", "entity_id", "action", "username", "details", "ip_address",
+        ])
+        return True
+    except Exception as e:
+        logger.error(f"insert_audit_log failed: {e}")
+        return False

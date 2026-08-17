@@ -1,3 +1,5 @@
+import asyncio
+import time
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional
 from datetime import datetime
@@ -16,6 +18,15 @@ from app.services import db_service, rule_manager
 from app.services.auth import require_admin, require_any_role, TokenData
 
 router = APIRouter()
+
+# Cache for the nginx config-validity check backing "Global System Health" on
+# the Exceptions page — that card used to just say "100%" unconditionally,
+# regardless of whether the config nginx is actually running on is even
+# valid. test_nginx_config() shells out to nginx/openresty (up to several
+# subprocess attempts, each with its own timeout) so it's cached rather than
+# re-run on every page load.
+_config_health_cache: dict = {}
+_CONFIG_HEALTH_CACHE_TTL = 30  # seconds
 
 
 @router.post("/exclusions/preview")
@@ -110,9 +121,21 @@ async def create_new_exclusion(
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Resolve to the SQLite integer PK the false_positive_id FK column
+    # actually needs — create_false_positive() returns a ClickHouse UUID
+    # string as `id` whenever ClickHouse is available (the normal case),
+    # not the SQLite row's real autoincrement integer. Passed through
+    # unresolved, that UUID gets stored as literal text that can never
+    # match false_positives.id — the FK link would silently do nothing.
+    resolved_fp_id = (
+        db_service.resolve_false_positive_sqlite_id(request.false_positive_id)
+        if request.false_positive_id
+        else None
+    )
+
     # Store in database
     exclusion = db_service.create_exclusion(
-        false_positive_id=request.false_positive_id,
+        false_positive_id=resolved_fp_id,
         rule_id=request.rule_id,
         exclusion_type=request.exclusion_type,
         uri=request.uri,
@@ -157,7 +180,20 @@ async def list_exclusions(
 @router.get("/exclusions/analytics")
 async def get_analytics(current_user: TokenData = Depends(require_any_role)):
     """Returns analytics data for exceptions and false positive rules triggers."""
-    return db_service.get_exclusions_analytics()
+    analytics = db_service.get_exclusions_analytics()
+
+    now = time.monotonic()
+    if "checked" not in _config_health_cache or (now - _config_health_cache.get("ts", 0)) > _CONFIG_HEALTH_CACHE_TTL:
+        from app.services.nginx_manager import test_nginx_config
+        valid, err = await asyncio.to_thread(test_nginx_config)
+        _config_health_cache["checked"] = True
+        _config_health_cache["valid"] = valid
+        _config_health_cache["error"] = err
+        _config_health_cache["ts"] = now
+
+    analytics["config_valid"] = _config_health_cache["valid"]
+    analytics["config_error"] = _config_health_cache["error"] or None
+    return analytics
 
 
 @router.get("/exclusions/history")

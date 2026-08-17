@@ -177,6 +177,20 @@ function FalsePositiveDetailsModal({ isOpen, entry, onClose, onUpdateStatus, onS
             </div>
           </div>
 
+          {entry.linked_exclusion_id != null && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px',
+              background: 'var(--sev-low-bg)', border: '1px solid var(--sev-low-border)',
+              borderRadius: '6px', fontSize: '12.5px', color: 'var(--sev-low)',
+            }}>
+              <ShieldCheck size={14} />
+              <span>
+                This report already has a linked exclusion (<strong>#{entry.linked_exclusion_id}</strong>) —
+                see the Exceptions page to view/edit it before creating another.
+              </span>
+            </div>
+          )}
+
           {/* Review Status Selector */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Triage Review Stage</span>
@@ -282,7 +296,7 @@ function FalsePositiveDetailsModal({ isOpen, entry, onClose, onUpdateStatus, onS
                 }}
                 style={{ background: 'var(--sev-high)', borderColor: 'var(--sev-high)', color: '#000', fontWeight: 600 }}
               >
-                Bypass & Create Exception
+                {entry.linked_exclusion_id != null ? 'Create Additional Exception' : 'Bypass & Create Exception'}
               </button>
             )}
           </div>
@@ -559,9 +573,10 @@ export default function FalsePositives({ userRole, onCreateException }) {
                             <button
                               className="action-btn-inspect"
                               onClick={() => onCreateException(entry)}
+                              title={entry.linked_exclusion_id != null ? `Already has exclusion #${entry.linked_exclusion_id} — this creates an additional one` : undefined}
                               style={{ padding: '4px 8px', fontSize: '11px', borderColor: 'var(--sev-high-border)', color: 'var(--sev-high)' }}
                             >
-                              Bypass WAF
+                              {entry.linked_exclusion_id != null ? `Bypass WAF (#${entry.linked_exclusion_id} linked)` : 'Bypass WAF'}
                             </button>
                           )}
                         </div>

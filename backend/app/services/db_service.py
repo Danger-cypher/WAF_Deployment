@@ -3,7 +3,7 @@ import sqlite3
 import logging
 import json
 import uuid
-from typing import Optional, Any, Union
+from typing import Optional, Any, Union, List
 
 from app.services import clickhouse_service
 
@@ -257,17 +257,78 @@ def get_false_positive_by_log_id(log_id: str):
         return None
 
 
+def resolve_false_positive_sqlite_id(entry_id: Any) -> Optional[int]:
+    """
+    Resolves any valid false-positive identifier to its SQLite integer
+    primary key — the only ID type exclusions.false_positive_id can
+    actually work as a foreign key, since exclusions live in SQLite only.
+
+    Why this is needed: create_false_positive() returns a ClickHouse UUID
+    string as `id` whenever ClickHouse is available (the normal case),
+    not the SQLite row's real autoincrement integer — every other FP
+    operation (status update, delete) works around this by matching
+    `id = ? OR log_id = ?`, but exclusions.false_positive_id is a single
+    INTEGER column with no such fallback. Passed a UUID string
+    unresolved, it gets stored as literal text that can never match
+    false_positives.id in a join — the FK link silently does nothing.
+    log_id is the one natural key present identically in both stores for
+    the same underlying FP, so it's the resolution path here.
+    """
+    entry = get_false_positive_by_id(entry_id)
+    log_id = entry.get("log_id") if entry else None
+    if log_id is None:
+        return None
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM false_positives WHERE log_id = ?", (log_id,))
+            row = cursor.fetchone()
+            return row["id"] if row else None
+    except Exception as e:
+        logger.error(f"Error resolving false_positive sqlite id for {entry_id}: {e}")
+        return None
+
+
+def _get_exclusion_link_map(log_ids: List[str]) -> dict:
+    """Bulk log_id -> linked exclusion id, for enriching a list of false
+    positives without one query per row."""
+    if not log_ids:
+        return {}
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            placeholders = ",".join("?" for _ in log_ids)
+            cursor.execute(
+                f"""
+                SELECT fp.log_id, e.id AS exclusion_id
+                FROM exclusions e
+                JOIN false_positives fp ON fp.id = e.false_positive_id
+                WHERE fp.log_id IN ({placeholders})
+                """,
+                log_ids,
+            )
+            return {row["log_id"]: row["exclusion_id"] for row in cursor.fetchall()}
+    except Exception as e:
+        logger.error(f"Error building exclusion link map: {e}")
+        return {}
+
+
 def get_false_positive_by_id(entry_id: Any):
     if clickhouse_service.is_available():
         res = clickhouse_service.get_false_positive_by_id(str(entry_id))
         if res is not None:
+            res["linked_exclusion_id"] = _get_exclusion_link_map([res.get("log_id")]).get(res.get("log_id"))
             return res
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM false_positives WHERE id = ?", (entry_id,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            entry = dict(row)
+            entry["linked_exclusion_id"] = _get_exclusion_link_map([entry.get("log_id")]).get(entry.get("log_id"))
+            return entry
     except Exception as e:
         logger.error(f"Error fetching false positive by id {entry_id}: {e}")
         return None
@@ -350,9 +411,13 @@ def create_false_positive(
 
 def get_all_false_positives(status=None, severity=None, rule_id=None, search=None):
     if clickhouse_service.is_available():
-        return clickhouse_service.get_all_false_positives(
+        entries = clickhouse_service.get_all_false_positives(
             status=status, severity=severity, rule_id=rule_id, search=search
         )
+        link_map = _get_exclusion_link_map([e.get("log_id") for e in entries if e.get("log_id")])
+        for e in entries:
+            e["linked_exclusion_id"] = link_map.get(e.get("log_id"))
+        return entries
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -376,7 +441,11 @@ def get_all_false_positives(status=None, severity=None, rule_id=None, search=Non
             query += " ORDER BY id DESC"
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+            entries = [dict(row) for row in rows]
+            link_map = _get_exclusion_link_map([e.get("log_id") for e in entries if e.get("log_id")])
+            for e in entries:
+                e["linked_exclusion_id"] = link_map.get(e.get("log_id"))
+            return entries
     except Exception as e:
         logger.error(f"Error getting all false positives: {e}")
         return []
