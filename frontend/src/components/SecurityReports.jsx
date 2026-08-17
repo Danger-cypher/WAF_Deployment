@@ -63,6 +63,33 @@ function MapsToCell({ mapping }) {
   );
 }
 
+// Segmented risk meter — shows all 4 severity levels (using the same
+// severity color language as the rest of the dashboard: success/warning/
+// sev-high/danger), with the level matching reportData.riskLevel picked
+// out at full opacity so the reader sees both the exact rating and where
+// it sits on the full spectrum at a glance, not just a single colored word.
+const RISK_LEVELS = [
+  { key: 'LOW', color: 'var(--success-color)' },
+  { key: 'MEDIUM', color: 'var(--warning-color)' },
+  { key: 'HIGH', color: 'var(--sev-high)' },
+  { key: 'CRITICAL', color: 'var(--danger-color)' },
+];
+
+function RiskMeter({ level }) {
+  return (
+    <div className="report-risk-meter">
+      {RISK_LEVELS.map((l) => (
+        <div
+          key={l.key}
+          className={`report-risk-meter-segment${l.key === level ? ' active' : ''}`}
+          style={{ background: l.color }}
+          title={l.key}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function SecurityReports() {
   const [timeframe, setTimeframe] = useState('24h'); // '24h', '7d', '30d'
   const [reportType, setReportType] = useState('executive'); // 'executive', 'threat', 'compliance'
@@ -387,6 +414,7 @@ export default function SecurityReports() {
                 <div className="report-risk-badge-value" style={{ color: reportData.riskColor }}>
                   {reportData.riskLevel}
                 </div>
+                <RiskMeter level={reportData.riskLevel} />
               </div>
             </div>
           </div>
@@ -426,7 +454,7 @@ export default function SecurityReports() {
           {reportType === 'executive' && (
             <div className="report-sections-layout">
               {/* Category distribution */}
-              <div className="report-section-box">
+              <div className="report-section-box" style={{ '--section-accent': 'var(--danger-color)' }}>
                 <h3>Violation Category Breakdown</h3>
                 {reportData.attackTypes.length > 0 && (
                   // no-print: Recharts sizes its SVG off the live DOM via
@@ -494,7 +522,7 @@ export default function SecurityReports() {
               </div>
 
               {/* Top Attacking IPs */}
-              <div className="report-section-box">
+              <div className="report-section-box" style={{ '--section-accent': 'var(--danger-color)' }}>
                 <h3>Top Attack Originators</h3>
                 <div className="report-table-wrapper">
                   <table className="report-table">
@@ -529,7 +557,7 @@ export default function SecurityReports() {
           {reportType === 'threat' && (
             <div className="report-sections-layout">
               {/* Detailed Threat Metrics */}
-              <div className="report-section-box" style={{ gridColumn: 'span 2' }}>
+              <div className="report-section-box" style={{ gridColumn: 'span 2', '--section-accent': 'var(--danger-color)' }}>
                 <h3>Threat Intelligence & Signatures</h3>
                 <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
                   Signature-based detections and CyberSentinel Engine Core Rule Set (CRS) triggers recorded for this timeframe.
@@ -586,7 +614,7 @@ export default function SecurityReports() {
           {reportType === 'compliance' && (
             <div className="report-sections-layout">
               {/* Compliance checks */}
-              <div className="report-section-box">
+              <div className="report-section-box" style={{ '--section-accent': 'var(--accent-color)' }}>
                 <h3>System Configuration & Compliance</h3>
                 <div className="report-table-wrapper">
                   <table className="report-table">
@@ -659,7 +687,7 @@ export default function SecurityReports() {
               </div>
 
               {/* Security Audit Events */}
-              <div className="report-section-box">
+              <div className="report-section-box" style={{ '--section-accent': 'var(--warning-color)' }}>
                 <h3>Security Audit Event Types</h3>
                 <div className="report-table-wrapper">
                   <table className="report-table">
@@ -855,14 +883,21 @@ export default function SecurityReports() {
            the app's real theme tokens for free via normal CSS cascade.
            =================================================================== */
         .report-sheet-preview {
+          /* Exact hex values from this app's own light-theme tokens
+             (index.css :root[data-theme="light"]) — not approximations —
+             so the report's severity/risk colors read as the same
+             semantic language as the rest of the dashboard (Events,
+             Overview, etc.), just rendered on paper instead of glass. */
           --text-primary:     #18181f;
           --text-secondary:   #52525b;
           --text-muted:       #8b8b96;
-          --danger-color:     #b91c1c;
+          --danger-color:     #e11d48;
           --warning-color:    #b45309;
-          --success-color:    #15803d;
+          --success-color:    #059669;
           --sev-high:         #c2410c;
-          --accent-color:     #4338ca;
+          --sev-medium:       #a16207;
+          --sev-low:          #1d4ed8;
+          --accent-color:     #4f46e5;
           --accent-bg:        #eef2ff;
           --accent-border:    #c7d2fe;
           --surface-subtle:   #f8f9fb;
@@ -1014,6 +1049,25 @@ export default function SecurityReports() {
           letter-spacing: 0.02em;
         }
 
+        .report-risk-meter {
+          display: flex;
+          gap: 3px;
+          margin-top: 10px;
+          min-width: 140px;
+        }
+
+        .report-risk-meter-segment {
+          flex: 1;
+          height: 6px;
+          border-radius: 3px;
+          opacity: 0.22;
+        }
+
+        .report-risk-meter-segment.active {
+          opacity: 1;
+          box-shadow: 0 0 0 1px rgba(16,16,24,0.15) inset;
+        }
+
         .report-grid-3 {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1062,7 +1116,8 @@ export default function SecurityReports() {
         .report-section-box {
           background: var(--bg-surface);
           border: 1px solid var(--border-color);
-          border-radius: 8px;
+          border-left: 3px solid var(--section-accent, var(--accent-color));
+          border-radius: 6px;
           padding: 22px 24px;
           page-break-inside: avoid;
         }
@@ -1105,6 +1160,10 @@ export default function SecurityReports() {
 
         .report-table tr {
           page-break-inside: avoid;
+        }
+
+        .report-table tbody tr:nth-child(even) td {
+          background: var(--surface-subtle);
         }
 
         .report-footer-card {
@@ -1197,6 +1256,29 @@ export default function SecurityReports() {
 
           .report-grid-3 {
             grid-template-columns: repeat(3, 1fr);
+          }
+
+          /* overflow-x:auto (screen: horizontal scroll on a wide table)
+             has nothing to scroll on a printed page — it just clips
+             anything past the page edge instead. Letting content flow
+             naturally means a wide table shrinks/wraps instead of losing
+             columns off the right edge. */
+          .report-table-wrapper {
+            overflow-x: visible;
+          }
+
+          .report-table {
+            font-size: 11px;
+          }
+
+          /* Force color to print even under browsers/print-dialog settings
+             that default to omitting backgrounds — the risk meter, zebra
+             striping, and section accent bars are semantic, not decorative. */
+          .report-risk-meter-segment,
+          .report-table tbody tr:nth-child(even) td,
+          .report-section-box {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
         }
       `}</style>
