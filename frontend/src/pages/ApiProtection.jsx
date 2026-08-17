@@ -571,11 +571,13 @@ export default function ApiProtection() {
           </div>
         </div>
 
-        {/* Table representation */}
-        <div style={{ overflowX: 'auto' }}>
+        {/* Table representation — scrolls within its own fixed-height area
+            instead of pushing the rest of the page down, since inventory
+            can run into the hundreds of rows. */}
+        <div style={{ maxHeight: '520px', overflowY: 'auto', overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid var(--surface-strong)', color: 'var(--text-secondary)' }}>
+              <tr style={{ borderBottom: '1px solid var(--surface-strong)', color: 'var(--text-secondary)', position: 'sticky', top: 0, zIndex: 1, backgroundColor: 'var(--glass-bg)' }}>
                 <th style={{ padding: '12px 8px' }}>Method</th>
                 <th style={{ padding: '12px 8px' }}>Endpoint URI</th>
                 <th style={{ padding: '12px 8px' }}>Avg Latency</th>
