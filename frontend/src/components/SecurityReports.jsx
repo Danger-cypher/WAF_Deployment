@@ -16,6 +16,53 @@ const ATTACK_CHART_COLORS = [
   'var(--pink-color)', 'var(--text-secondary)',
 ];
 
+// Maps each compliance-table row to the specific control it actually
+// corresponds to in a named framework, rather than leaving the "Compliance"
+// label pointing at nothing external. Deliberately not exhaustive — only
+// rows that genuinely map to a real control get a citation; a row with no
+// entry here (e.g. "Active Protected Virtual Hosts", a coverage metric, not
+// a pass/fail control) renders without one rather than forcing a citation
+// that doesn't actually apply. Citations reference publicly published
+// framework language for context only — see the disclaimer rendered under
+// the table; this is not a certified compliance assessment.
+const COMPLIANCE_MAPPINGS = {
+  engineEnforcement: {
+    framework: 'PCI-DSS v4.0',
+    control: 'Req. 6.4.2',
+    note: 'Automated technical solution that detects and prevents web-based attacks on public-facing web applications',
+  },
+  tlsHardening: {
+    framework: 'PCI-DSS v4.0 / OWASP Top 10',
+    control: 'Req. 4.2.1 / A02:2021',
+    note: 'Strong cryptography for data in transit; Cryptographic Failures',
+  },
+  antiDefacement: {
+    framework: 'OWASP Top 10 2021',
+    control: 'A08:2021',
+    note: 'Software and Data Integrity Failures',
+  },
+  adminAuditLogging: {
+    framework: 'PCI-DSS v4.0 / OWASP Top 10',
+    control: 'Req. 10.2.1 / A09:2021',
+    note: 'Audit trails for individual user access to system components; Security Logging and Monitoring Failures',
+  },
+};
+
+// Renders a compliance row's framework citation, or an explicit "not a
+// mapped control" note for rows that are coverage metrics rather than
+// pass/fail controls (see COMPLIANCE_MAPPINGS' comment above).
+function MapsToCell({ mapping }) {
+  if (!mapping) {
+    return <td style={{ color: 'var(--text-secondary)', fontSize: '12px', fontStyle: 'italic' }}>Coverage metric — not a mapped control</td>;
+  }
+  return (
+    <td>
+      <div style={{ fontWeight: 600, fontSize: '12px' }}>{mapping.framework}</div>
+      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{mapping.control}</div>
+    </td>
+  );
+}
+
 export default function SecurityReports() {
   const [timeframe, setTimeframe] = useState('24h'); // '24h', '7d', '30d'
   const [reportType, setReportType] = useState('executive'); // 'executive', 'threat', 'compliance'
@@ -541,12 +588,14 @@ export default function SecurityReports() {
                     <thead>
                       <tr>
                         <th>Compliance Check / Standard</th>
+                        <th>Maps To</th>
                         <th style={{ textAlign: 'right' }}>Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr>
                         <td>CyberSentinel Engine Enforcement</td>
+                        <MapsToCell mapping={COMPLIANCE_MAPPINGS.engineEnforcement} />
                         {(() => {
                           const on = reportData.compliance.engineEnforcement;
                           if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
@@ -557,6 +606,7 @@ export default function SecurityReports() {
                       </tr>
                       <tr>
                         <td>SSL/TLS Dynamic Cipher Hardening (HSTS)</td>
+                        <MapsToCell mapping={COMPLIANCE_MAPPINGS.tlsHardening} />
                         {(() => {
                           const on = reportData.compliance.tlsHardening;
                           if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
@@ -567,6 +617,7 @@ export default function SecurityReports() {
                       </tr>
                       <tr>
                         <td>Dynamic Web Anti-Defacement Integrity Check</td>
+                        <MapsToCell mapping={COMPLIANCE_MAPPINGS.antiDefacement} />
                         <td style={{
                           textAlign: 'right', fontWeight: 600,
                           color: reportData.health.antiDefacement === 'ACTIVE' ? 'var(--success-color)' : 'var(--text-secondary)',
@@ -574,6 +625,7 @@ export default function SecurityReports() {
                       </tr>
                       <tr>
                         <td>Admin Authentication Logging & Audits</td>
+                        <MapsToCell mapping={COMPLIANCE_MAPPINGS.adminAuditLogging} />
                         {(() => {
                           const on = reportData.compliance.adminAuditLogging;
                           if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
@@ -584,6 +636,7 @@ export default function SecurityReports() {
                       </tr>
                       <tr>
                         <td>Active Protected Virtual Hosts</td>
+                        <MapsToCell mapping={null} />
                         <td style={{ textAlign: 'right', fontWeight: 600 }}>
                           {reportData.compliance.activeProtectedHosts == null
                             ? 'UNABLE TO VERIFY'
@@ -593,6 +646,11 @@ export default function SecurityReports() {
                     </tbody>
                   </table>
                 </div>
+                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px', lineHeight: 1.5 }}>
+                  Control citations reference publicly published framework language for context only, based on this
+                  system's current configuration state. This is <strong>not</strong> a certified compliance
+                  assessment — consult a qualified auditor for official certification against any named standard.
+                </p>
               </div>
 
               {/* Security Audit Events */}
