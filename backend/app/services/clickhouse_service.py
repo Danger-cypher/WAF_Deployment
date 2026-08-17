@@ -1092,7 +1092,7 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
                 error_count, malicious_count, suspicious_count,
                 external_hit_count, internal_hit_count,
                 has_https, has_versioning, content_encoding,
-                weighted_response_sum
+                weighted_response_sum, p95_response_time_ms, p99_response_time_ms
             FROM (
                 SELECT uri, method,
                        min(first_seen)  AS first_seen,
@@ -1116,7 +1116,18 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
                            anyIf(content_encoding, content_encoding != 'unknown'),
                            'unknown'
                        ) AS content_encoding,
-                       sum(avg_response_time_ms * hit_count) AS weighted_response_sum
+                       sum(avg_response_time_ms * hit_count) AS weighted_response_sum,
+                       -- Approximation, not a true per-request percentile: each
+                       -- api_discovery row is already an average over one
+                       -- ~10s discovery-cycle batch (see api_discovery.py),
+                       -- not a single request. This is the 95th/99th
+                       -- percentile of those per-batch averages — i.e. "how
+                       -- bad do this endpoint's worst time windows get",
+                       -- which still distinguishes a consistently-slow
+                       -- endpoint from one with one-off outliers, without
+                       -- needing per-request storage.
+                       quantile(0.95)(avg_response_time_ms) AS p95_response_time_ms,
+                       quantile(0.99)(avg_response_time_ms) AS p99_response_time_ms
                 FROM api_discovery
                 GROUP BY uri, method
             )
@@ -1126,7 +1137,8 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
         columns = [
             "uri", "method", "first_seen", "last_seen", "hit_count", "error_count",
             "malicious_count", "suspicious_count", "external_hit_count", "internal_hit_count",
-            "has_https", "has_versioning", "content_encoding", "weighted_response_sum"
+            "has_https", "has_versioning", "content_encoding", "weighted_response_sum",
+            "p95_response_time_ms", "p99_response_time_ms",
         ]
         rows = []
         for row in result.result_rows:
@@ -1138,6 +1150,8 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
             wsum = d.pop("weighted_response_sum", 0) or 0
             hits = d.get("hit_count", 0) or 0
             d["avg_response_time_ms"] = round(wsum / hits, 2) if hits > 0 else 0.0
+            d["p95_response_time_ms"] = round(d.get("p95_response_time_ms") or 0.0, 2)
+            d["p99_response_time_ms"] = round(d.get("p99_response_time_ms") or 0.0, 2)
             rows.append(d)
         return rows
     except Exception as e:
@@ -1192,6 +1206,15 @@ def get_recently_discovered_endpoints(hours: int = 48) -> List[Dict[str, Any]]:
     cutoff = datetime.now() - timedelta(hours=hours)
     cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
     return [e for e in endpoints if e["first_seen"] >= cutoff_str]
+
+
+def get_stale_discovered_endpoints(days: int = 30) -> List[Dict[str, Any]]:
+    """Retrieve endpoints not seen in at least `days` days — shadow/zombie
+    API candidates. Inverse of get_recently_discovered_endpoints."""
+    endpoints = get_all_discovered_endpoints()
+    cutoff = datetime.now() - timedelta(days=days)
+    cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+    return [e for e in endpoints if e["last_seen"] < cutoff_str]
 
 
 # ---------------------------------------------------------------------------

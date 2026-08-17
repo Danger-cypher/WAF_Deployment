@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { Activity, AlertTriangle, BarChart2, Clock, Globe, Shield, ShieldCheck, ShieldOff, X } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import {
-  getApiProtectionAnalytics, getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints,
+  getApiProtectionAnalytics, getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getStaleEndpoints,
   getDdosBotSettings, saveDdosBotSettings,
   getBlockedEndpoints, blockEndpoint, unblockEndpoint,
 } from '../services/api';
@@ -43,8 +43,9 @@ export default function ApiProtection() {
   const [fetchError, setFetchError] = useState(null);
   const [endpoints, setEndpoints] = useState([]);
   const [recentlyDiscovered, setRecentlyDiscovered] = useState([]);
+  const [staleEndpoints, setStaleEndpoints] = useState([]);
   const [analytics, setAnalytics] = useState(null);
-  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory', 'recent'
+  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory', 'recent', 'stale'
   const [topListTab, setTopListTab] = useState('consumed'); // 'consumed', 'resource'
 
   // Protect-this-endpoint state — reuses DDoS & Bot Shield's existing
@@ -76,15 +77,17 @@ export default function ApiProtection() {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
-      const [epsData, recentData, analyticsData, ddosData, blockedData] = await Promise.all([
+      const [epsData, recentData, staleData, analyticsData, ddosData, blockedData] = await Promise.all([
         getDiscoveredEndpoints(),
         getRecentlyDiscoveredEndpoints(),
+        getStaleEndpoints(),
         getApiProtectionAnalytics(),
         getDdosBotSettings(),
         getBlockedEndpoints(),
       ]);
       setEndpoints(epsData);
       setRecentlyDiscovered(recentData);
+      setStaleEndpoints(staleData);
       setAnalytics(analyticsData);
       setDdosSettings(ddosData);
       setBlockedEndpoints(blockedData);
@@ -248,6 +251,11 @@ export default function ApiProtection() {
     { name: 'Suspicious', value: analytics.traffic_bands.suspicious, color: 'var(--sev-medium)' },
     { name: 'Malicious', value: analytics.traffic_bands.malicious, color: 'var(--danger-color)' }
   ] : [];
+
+  const activeRows = activeTab === 'inventory' ? endpoints : activeTab === 'recent' ? recentlyDiscovered : staleEndpoints;
+  const emptyStateMessage = activeTab === 'stale'
+    ? "No stale endpoints — nothing discovered has gone 30+ days without traffic."
+    : 'No discovered endpoints listed.';
 
   return (
     <motion.div
@@ -455,6 +463,23 @@ export default function ApiProtection() {
             >
               Recently Discovered (Last 48h)
             </button>
+            <button
+              className={`tab-btn ${activeTab === 'stale' ? 'active' : ''}`}
+              onClick={() => setActiveTab('stale')}
+              title="Endpoints that used to receive traffic but haven't in 30+ days — possible deprecated/forgotten routes"
+              style={{
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '4px',
+                fontSize: '13px',
+                cursor: 'pointer',
+                backgroundColor: activeTab === 'stale' ? 'var(--sev-low-border)' : 'transparent',
+                color: activeTab === 'stale' ? 'var(--sev-low)' : 'var(--text-secondary)',
+                fontWeight: activeTab === 'stale' ? 600 : 500
+              }}
+            >
+              Stale / Zombie (30d+){staleEndpoints.length > 0 ? ` (${staleEndpoints.length})` : ''}
+            </button>
           </div>
           <button className="refresh-btn" onClick={fetchData} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--surface-strong)', backgroundColor: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '12px' }}>
             Scan Logs Now
@@ -479,8 +504,8 @@ export default function ApiProtection() {
               </tr>
             </thead>
             <tbody>
-              {(activeTab === 'inventory' ? endpoints : recentlyDiscovered).length > 0 ? (
-                (activeTab === 'inventory' ? endpoints : recentlyDiscovered).map((ep, idx) => {
+              {activeRows.length > 0 ? (
+                activeRows.map((ep, idx) => {
                   // Traffic Source badge styles
                   const trafficSource = ep.traffic_source || 'Unknown';
                   const trafficBadgeStyle = (() => {
@@ -497,7 +522,17 @@ export default function ApiProtection() {
                     <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
                       <td style={{ padding: '12px 8px', ...getMethodStyle(ep.method) }}>{ep.method}</td>
                       <td style={{ padding: '12px 8px', fontFamily: 'monospace' }}>{ep.uri}</td>
-                      <td style={{ padding: '12px 8px' }}>{ep.avg_response_time_ms} ms</td>
+                      <td style={{ padding: '12px 8px' }}>
+                        <div>{ep.avg_response_time_ms} ms</div>
+                        {(ep.p95_response_time_ms > 0 || ep.p99_response_time_ms > 0) && (
+                          <div
+                            style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}
+                            title="95th/99th percentile of this endpoint's per-interval average latency — approximates tail latency without per-request storage, so it distinguishes occasional slow windows from consistently slow ones. Not a true per-request percentile."
+                          >
+                            p95 {ep.p95_response_time_ms}ms · p99 {ep.p99_response_time_ms}ms
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: '12px 8px' }}>{ep.hit_count}</td>
                       <td style={{ padding: '12px 8px' }}>
                         <span style={{
@@ -565,7 +600,7 @@ export default function ApiProtection() {
               ) : (
                 <tr>
                   <td colSpan="10" style={{ padding: '32px 8px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                    No discovered endpoints listed.
+                    {emptyStateMessage}
                   </td>
                 </tr>
               )}

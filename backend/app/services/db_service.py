@@ -903,6 +903,32 @@ def get_recently_discovered_endpoints(hours: int = 48):
             return []
 
 
+def get_stale_discovered_endpoints(days: int = 30):
+    """Endpoints whose last_seen is at least `days` days ago — shadow/zombie
+    API candidates (deprecated-but-still-reachable, forgotten debug routes,
+    etc). A empty result is the normal/healthy case, unlike the other two
+    lookups above."""
+    if clickhouse_service.is_available():
+        res = clickhouse_service.get_stale_discovered_endpoints(days)
+        if res:
+            return res
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM discovered_endpoints
+                WHERE datetime(last_seen) < datetime('now', ?)
+                ORDER BY last_seen ASC
+            """,
+                (f"-{days} days",),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Error fetching stale discovered endpoints: {e}")
+        return []
+
+
 def bulk_upsert_discovered_endpoints(endpoints_data: dict):
     if not endpoints_data:
         return

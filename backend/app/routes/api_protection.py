@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.services import db_service, clickhouse_service
 from app.services.auth import require_admin, require_any_role, TokenData
-from app.services.api_discovery import run_api_discovery
 
 router = APIRouter()
 
@@ -117,13 +116,22 @@ def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
     ep_copy["score"] = score
     ep_copy["grade"] = grade
     ep_copy["traffic_source"] = traffic_source
+    # p95/p99 are only computed by the ClickHouse read path (see
+    # clickhouse_service.get_all_discovered_endpoints) — the SQLite fallback
+    # only ever keeps one merged-in-place row per endpoint, so there's no
+    # history of per-batch averages left to take a percentile over. Default
+    # to 0.0 there rather than omitting the field, so the API's shape is
+    # consistent regardless of which store answered the query.
+    ep_copy.setdefault("p95_response_time_ms", 0.0)
+    ep_copy.setdefault("p99_response_time_ms", 0.0)
     return ep_copy
 
 
 @router.get("/api-protection/endpoints", response_model=List[Dict[str, Any]])
 def get_discovered_endpoints(current_user: TokenData = Depends(require_any_role)):
-    """Runs a discovery pass on the access log, and returns all discovered endpoints with scores."""
-    run_api_discovery()  # Scan for any new lines in access.log
+    """Returns all discovered endpoints with scores. Discovery itself runs as
+    a background task (see api_discovery.start_api_discovery_service) rather
+    than inline here, so this is a plain read."""
     endpoints = _overlay_real_threat_counts(db_service.get_all_discovered_endpoints())
     return [calculate_endpoint_score(ep) for ep in endpoints]
 
@@ -131,15 +139,27 @@ def get_discovered_endpoints(current_user: TokenData = Depends(require_any_role)
 @router.get("/api-protection/recently-discovered", response_model=List[Dict[str, Any]])
 def get_recently_discovered(current_user: TokenData = Depends(require_any_role)):
     """Returns endpoints discovered in the last 48 hours."""
-    run_api_discovery()
     endpoints = _overlay_real_threat_counts(db_service.get_recently_discovered_endpoints(hours=48))
+    return [calculate_endpoint_score(ep) for ep in endpoints]
+
+
+@router.get("/api-protection/stale-endpoints", response_model=List[Dict[str, Any]])
+def get_stale_endpoints(days: int = 30, current_user: TokenData = Depends(require_any_role)):
+    """
+    Returns endpoints not seen in at least `days` days — shadow/zombie API
+    candidates: things that used to receive traffic (so they were real,
+    reachable endpoints) but have gone quiet. Could mean deprecated-but-
+    still-live, forgotten debug/admin routes, or just a seasonal consumer —
+    worth a human look either way, which is why this is a separate view
+    rather than an automatic action.
+    """
+    endpoints = _overlay_real_threat_counts(db_service.get_stale_discovered_endpoints(days=days))
     return [calculate_endpoint_score(ep) for ep in endpoints]
 
 
 @router.get("/api-protection/analytics", response_model=Dict[str, Any])
 def get_api_protection_analytics(current_user: TokenData = Depends(require_any_role)):
     """Computes API analytics such as most consumed, slowest, and traffic band breakdown."""
-    run_api_discovery()
     endpoints = _overlay_real_threat_counts(db_service.get_all_discovered_endpoints())
     scored_endpoints = [calculate_endpoint_score(ep) for ep in endpoints]
 

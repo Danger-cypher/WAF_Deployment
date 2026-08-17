@@ -93,6 +93,12 @@ async def lifespan(app: FastAPI):
     # Start the log retention enforcement background task
     retention_task = asyncio.create_task(start_log_retention_service())
 
+    # Start the API discovery background task — was previously run inline
+    # on every API Protection GET request, adding a full log-tail scan to
+    # each dashboard poll's latency.
+    from app.services.api_discovery import start_api_discovery_service
+    api_discovery_task = asyncio.create_task(start_api_discovery_service())
+
     # Start the SSL renewal directory watcher background task
     from app.services.ssl_monitor import start_ssl_monitor
     ssl_monitor_task = asyncio.create_task(start_ssl_monitor())
@@ -123,6 +129,13 @@ async def lifespan(app: FastAPI):
     ssl_monitor_task.cancel()
     try:
         await ssl_monitor_task
+    except asyncio.CancelledError:
+        pass
+
+    # Cancel the API discovery task
+    api_discovery_task.cancel()
+    try:
+        await api_discovery_task
     except asyncio.CancelledError:
         pass
 

@@ -864,6 +864,20 @@ export async function getRecentlyDiscoveredEndpoints() {
 }
 
 /**
+ * Fetch API endpoints not seen in at least `days` days — shadow/zombie
+ * API candidates (default 30 days, matches the backend default).
+ */
+export async function getStaleEndpoints(days = 30) {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/stale-endpoints?days=${days}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch stale endpoints:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch API Protection analytics, top lists, and traffic band volumes
  */
 export async function getApiProtectionAnalytics() {

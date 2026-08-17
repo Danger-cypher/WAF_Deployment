@@ -2,6 +2,7 @@ import os
 import re
 import logging
 import ipaddress
+import asyncio
 from datetime import datetime
 import threading
 from app.services import db_service
@@ -343,3 +344,29 @@ def run_api_discovery():
 
         except Exception as e:
             logger.error(f"Error executing API discovery: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Background task — moves discovery off the request path
+# ---------------------------------------------------------------------------
+# api_protection.py's 3 GET routes used to call run_api_discovery() inline on
+# every request, so under real log volume a dashboard poll's latency included
+# a full synchronous log-tail scan. The frontend polls every 10s regardless,
+# so there's no freshness benefit to re-scanning per-request — a background
+# loop at the same cadence keeps data just as current while routes become
+# simple reads.
+DISCOVERY_INTERVAL_SECONDS = 10
+
+
+async def start_api_discovery_service():
+    """Background async loop that runs API discovery on a fixed interval.
+    Call with asyncio.create_task() during application startup."""
+    logger.info(
+        f"[APIDiscovery] Background service started. Runs every {DISCOVERY_INTERVAL_SECONDS}s."
+    )
+    while True:
+        try:
+            await asyncio.to_thread(run_api_discovery)
+        except Exception as e:
+            logger.error(f"[APIDiscovery] Unexpected error during discovery cycle: {e}")
+        await asyncio.sleep(DISCOVERY_INTERVAL_SECONDS)
