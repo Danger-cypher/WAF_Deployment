@@ -1011,6 +1011,62 @@ def delete_api_spec() -> None:
         conn.commit()
 
 
+def reconcile_clickhouse_from_sqlite() -> dict:
+    """
+    Repairs a ClickHouse/SQLite data-store split for discovered API
+    endpoints — e.g. after a ClickHouse outage (auth failure, connection
+    drop). SQLite is written unconditionally on every discovery cycle
+    (see bulk_upsert_discovered_endpoints) regardless of ClickHouse's
+    availability, so it never loses data during an outage — but
+    get_all_discovered_endpoints() prefers ClickHouse whenever it has ANY
+    rows, so until this runs, an outage leaves the two stores showing
+    different totals (ClickHouse only sees traffic since it came back;
+    SQLite has the full history).
+
+    Only backfills (uri, method) pairs ClickHouse has never seen at all —
+    an endpoint present in both stores is left alone, because SQLite's
+    running total for it already includes whatever period ClickHouse's
+    own rows also cover (SQLite never stopped accumulating), so copying
+    SQLite's total on top would double-count that overlap. Safe to run
+    anytime, including when the two stores are already in sync (a no-op).
+    """
+    if not clickhouse_service.is_available():
+        return {"ok": False, "message": "ClickHouse is not available.", "backfilled_count": 0}
+
+    ch_known = clickhouse_service.get_known_endpoint_keys()
+
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM discovered_endpoints")
+            sqlite_rows = [_row_to_endpoint_dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Reconcile: failed to read SQLite discovered_endpoints: {e}")
+        return {"ok": False, "message": f"Failed to read SQLite: {e}", "backfilled_count": 0}
+
+    missing = [r for r in sqlite_rows if (r["uri"], r["method"]) not in ch_known]
+    if not missing:
+        return {
+            "ok": True,
+            "message": "Already in sync — no endpoints missing from ClickHouse.",
+            "backfilled_count": 0,
+            "sqlite_total": len(sqlite_rows),
+            "clickhouse_total_before": len(ch_known),
+            "clickhouse_total_after": len(ch_known),
+        }
+
+    backfilled = clickhouse_service.backfill_api_discovery_rows(missing)
+    logger.info(f"Reconcile: backfilled {backfilled} endpoint(s) from SQLite into ClickHouse.")
+    return {
+        "ok": backfilled == len(missing),
+        "message": f"Backfilled {backfilled} endpoint(s) missing from ClickHouse.",
+        "backfilled_count": backfilled,
+        "sqlite_total": len(sqlite_rows),
+        "clickhouse_total_before": len(ch_known),
+        "clickhouse_total_after": len(ch_known) + backfilled,
+    }
+
+
 def bulk_upsert_discovered_endpoints(endpoints_data: dict):
     if not endpoints_data:
         return

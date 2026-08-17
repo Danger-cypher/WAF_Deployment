@@ -940,6 +940,25 @@ export async function getApiDrift() {
 }
 
 /**
+ * Repairs a ClickHouse/SQLite data-store split for discovered endpoints
+ * (e.g. after a ClickHouse outage) by backfilling anything SQLite knows
+ * about that ClickHouse never saw. Safe to run anytime — a no-op if the
+ * two stores are already in sync.
+ */
+export async function reconcileDataStores() {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/reconcile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to reconcile data stores:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch API Protection analytics, top lists, and traffic band volumes
  */
 export async function getApiProtectionAnalytics() {

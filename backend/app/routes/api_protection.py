@@ -488,3 +488,22 @@ def get_api_drift(current_user: TokenData = Depends(require_any_role)):
     drift = api_spec.compute_drift(parsed["endpoints"], discovered)
     drift["spec_loaded"] = True
     return drift
+
+
+@router.post("/api-protection/reconcile")
+def reconcile_data_stores(current_user: TokenData = Depends(require_admin)):
+    """
+    Repairs a ClickHouse/SQLite data-store split for discovered API
+    endpoints (Admin only — writes to ClickHouse). Typically needed after
+    a ClickHouse outage: SQLite kept recording the whole time, but
+    ClickHouse only sees traffic from after it came back, so the two
+    stores' totals diverge until this runs. Safe to run anytime, including
+    when nothing is actually out of sync (a no-op in that case).
+    """
+    result = db_service.reconcile_clickhouse_from_sqlite()
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("message", "Reconcile failed."),
+        )
+    return result

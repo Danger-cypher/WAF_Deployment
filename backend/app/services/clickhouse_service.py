@@ -1242,6 +1242,84 @@ def get_stale_discovered_endpoints(days: int = 30) -> List[Dict[str, Any]]:
     return [e for e in endpoints if e["last_seen"] < cutoff_str]
 
 
+def get_known_endpoint_keys() -> set:
+    """Distinct (uri, method) pairs currently in api_discovery. Used by the
+    reconcile-from-SQLite admin action to know which endpoints NOT to
+    duplicate — see db_service.reconcile_clickhouse_from_sqlite for why
+    this matters (SQLite is written continuously regardless of ClickHouse's
+    availability, so its running totals for an already-known endpoint
+    already overlap with what ClickHouse has; only entirely-missing
+    endpoints are safe to backfill without double-counting)."""
+    client = _get_client()
+    if client is None:
+        return set()
+    try:
+        result = client.query("SELECT DISTINCT uri, method FROM api_discovery")
+        return {(row[0], row[1]) for row in result.result_rows}
+    except Exception as e:
+        logger.error(f"get_known_endpoint_keys failed: {e}")
+        return set()
+
+
+def backfill_api_discovery_rows(rows: List[Dict[str, Any]]) -> int:
+    """
+    Insert historical endpoint rows directly, preserving each row's true
+    first_seen/last_seen — unlike insert_api_discovery(), which is built
+    for normal per-cycle discovery and always collapses first_seen to the
+    same value as the fresh timestamp (correct there, since a real
+    first-ever-seen row IS "now"; wrong here, where these rows can be
+    weeks old). Only ever called by the reconcile admin action.
+    """
+    if not rows:
+        return 0
+    client = _get_client()
+    if client is None:
+        return 0
+
+    def _parse_ts(v):
+        if isinstance(v, datetime):
+            return v
+        try:
+            return datetime.strptime(v, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return datetime.utcnow()
+
+    ch_rows = []
+    for r in rows:
+        first_seen = _parse_ts(r.get("first_seen"))
+        last_seen = _parse_ts(r.get("last_seen"))
+        ch_rows.append([
+            str(r.get("uri", "")),
+            str(r.get("method", "")),
+            last_seen,  # timestamp column -> becomes max(timestamp)=last_seen on read
+            int(r.get("hit_count", 0)),
+            int(r.get("error_count", 0)),
+            int(r.get("malicious_count", 0)),
+            int(r.get("suspicious_count", 0)),
+            int(r.get("external_hit_count", 0)),
+            int(r.get("internal_hit_count", 0)),
+            int(r.get("has_https", 2)),
+            int(r.get("has_versioning", 0)),
+            str(r.get("content_encoding", "unknown")),
+            float(r.get("avg_response_time_ms", 0.0)),
+            [str(p) for p in (r.get("param_names") or [])],
+            first_seen,  # first_seen column -> preserves the true historical date
+        ])
+
+    columns = [
+        "uri", "method", "timestamp", "hit_count", "error_count",
+        "malicious_count", "suspicious_count", "external_hit_count", "internal_hit_count",
+        "has_https", "has_versioning", "content_encoding", "avg_response_time_ms",
+        "param_names", "first_seen",
+    ]
+    try:
+        client.insert("api_discovery", ch_rows, column_names=columns)
+        return len(ch_rows)
+    except Exception as e:
+        logger.error(f"backfill_api_discovery_rows failed: {e}")
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # alert_history — Write / Read / Stats
 # ---------------------------------------------------------------------------

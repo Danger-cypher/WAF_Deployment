@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, BarChart2, Clock, FileUp, Globe, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart2, Clock, FileUp, Globe, RefreshCw, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import {
   getApiProtectionAnalytics, getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getStaleEndpoints,
   getDdosBotSettings, saveDdosBotSettings,
   getBlockedEndpoints, blockEndpoint, unblockEndpoint,
-  getApiSpec, uploadApiSpec, deleteApiSpec, getApiDrift,
+  getApiSpec, uploadApiSpec, deleteApiSpec, getApiDrift, reconcileDataStores,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
@@ -72,6 +72,7 @@ export default function ApiProtection() {
   const [driftTab, setDriftTab] = useState('shadow'); // 'shadow', 'undocumented'
   const [uploadingSpec, setUploadingSpec] = useState(false);
   const specFileInputRef = useRef(null);
+  const [reconciling, setReconciling] = useState(false);
 
   const { toast, showToast } = useToast();
   const confirm = useConfirm();
@@ -262,6 +263,26 @@ export default function ApiProtection() {
       showToast('Spec removed.');
     } catch (err) {
       showToast('Failed to remove spec: ' + (err.message || 'Unknown error'), 'error');
+    }
+  };
+
+  const handleReconcile = async () => {
+    if (!(await confirm({
+      title: 'Reconcile data stores',
+      message: 'Backfill ClickHouse with any discovered endpoints SQLite knows about but ClickHouse is missing — typically needed after a ClickHouse outage. Safe to run anytime; it\'s a no-op if the two stores are already in sync.',
+      confirmLabel: 'Reconcile',
+    }))) {
+      return;
+    }
+    setReconciling(true);
+    try {
+      const result = await reconcileDataStores();
+      showToast(result.message);
+      await fetchData();
+    } catch (err) {
+      showToast('Failed to reconcile data stores: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setReconciling(false);
     }
   };
 
@@ -534,9 +555,20 @@ export default function ApiProtection() {
               Stale / Zombie (30d+){staleEndpoints.length > 0 ? ` (${staleEndpoints.length})` : ''}
             </button>
           </div>
-          <button className="refresh-btn" onClick={fetchData} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--surface-strong)', backgroundColor: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '12px' }}>
-            Scan Logs Now
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              className="refresh-btn"
+              onClick={handleReconcile}
+              disabled={reconciling}
+              title="Backfill ClickHouse with endpoints SQLite knows about but ClickHouse is missing — needed after a ClickHouse outage. Safe to run anytime."
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--surface-strong)', backgroundColor: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '12px' }}
+            >
+              <RefreshCw size={12} className={reconciling ? 'animate-spin' : ''} /> {reconciling ? 'Reconciling...' : 'Reconcile Data Stores'}
+            </button>
+            <button className="refresh-btn" onClick={fetchData} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--surface-strong)', backgroundColor: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '12px' }}>
+              Scan Logs Now
+            </button>
+          </div>
         </div>
 
         {/* Table representation */}
