@@ -4,6 +4,7 @@ import logging
 import ipaddress
 import asyncio
 from datetime import datetime
+from urllib.parse import urlparse, parse_qsl
 import threading
 from app.services import db_service
 
@@ -123,6 +124,24 @@ def parse_request_time(raw: str) -> float:
         return round(val * 1000, 2)  # convert seconds → milliseconds
     except (ValueError, TypeError):
         return 0.0
+
+
+def extract_param_names(uri: str) -> list:
+    """
+    Return the distinct query-parameter NAMES from a request URI — never
+    values. Values can be real user data (emails, tokens, session IDs);
+    storing them in our own inventory would turn a security tool into the
+    exact kind of exposure it's supposed to catch. Names alone are enough
+    to flag likely-sensitive fields (see api_protection.py's
+    flag_sensitive_params) without ever persisting what was actually sent.
+    """
+    try:
+        query = urlparse(uri).query
+        if not query:
+            return []
+        return sorted({name for name, _ in parse_qsl(query, keep_blank_values=True) if name})
+    except Exception:
+        return []
 
 
 def run_api_discovery():
@@ -276,6 +295,8 @@ def run_api_discovery():
                     else 0
                 )
 
+                param_names = extract_param_names(uri)
+
                 key = (clean_uri, method)
                 if key not in endpoints_aggregated:
                     endpoints_aggregated[key] = {
@@ -290,12 +311,18 @@ def run_api_discovery():
                         "has_versioning": has_versioning,
                         "content_encoding": ENCODING_UNKNOWN,
                         "timestamp": timestamp,
+                        "param_names": set(),
                     }
 
                 ep = endpoints_aggregated[key]
                 # Keep the latest timestamp regardless of traffic origin —
                 # an internal-only hit still means the endpoint is alive.
                 ep["timestamp"] = timestamp
+                # Param names are structural (what fields does this endpoint
+                # accept), not a traffic-volume metric — worth capturing
+                # regardless of internal/external origin, unlike hit_count
+                # and the other score-driving fields below.
+                ep["param_names"].update(param_names)
 
                 if is_internal:
                     # Registers the endpoint and its Traffic Source
@@ -331,6 +358,8 @@ def run_api_discovery():
                 )
 
             if endpoints_aggregated:
+                for ep in endpoints_aggregated.values():
+                    ep["param_names"] = sorted(ep["param_names"])
                 db_service.bulk_upsert_discovered_endpoints(endpoints_aggregated)
                 logger.info(
                     f"Bulk processed {len(lines)} access log records into {len(endpoints_aggregated)} unique API endpoints "

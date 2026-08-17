@@ -521,7 +521,17 @@ export default function ApiProtection() {
                   return (
                     <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
                       <td style={{ padding: '12px 8px', ...getMethodStyle(ep.method) }}>{ep.method}</td>
-                      <td style={{ padding: '12px 8px', fontFamily: 'monospace' }}>{ep.uri}</td>
+                      <td style={{ padding: '12px 8px', fontFamily: 'monospace' }}>
+                        <div>{ep.uri}</div>
+                        {ep.sensitive_params?.length > 0 && (
+                          <div
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '4px', padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 600, fontFamily: 'inherit', color: 'var(--sev-medium)', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)' }}
+                            title={`Query param name(s) look sensitive — values are never captured, only names. Worth a human look, not an automatic finding: ${ep.sensitive_params.join(', ')}`}
+                          >
+                            <AlertTriangle size={10} /> {ep.sensitive_params.length} sensitive param{ep.sensitive_params.length > 1 ? 's' : ''}: {ep.sensitive_params.join(', ')}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: '12px 8px' }}>
                         <div>{ep.avg_response_time_ms} ms</div>
                         {(ep.p95_response_time_ms > 0 || ep.p99_response_time_ms > 0) && (

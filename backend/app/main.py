@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
     if clickhouse_service.is_available():
         logger.info("ClickHouse is available — using as primary log store")
         clickhouse_service.reset_fabricated_api_discovery_fields()
+        clickhouse_service.ensure_api_discovery_param_names_column()
     else:
         logger.warning(
             "ClickHouse is NOT available at startup. "

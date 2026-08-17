@@ -173,6 +173,11 @@ CREATE TABLE IF NOT EXISTS cybersentinel.api_discovery
     content_encoding    LowCardinality(String) DEFAULT '',
     avg_response_time_ms Float32 DEFAULT 0.0,
 
+    -- Query-param NAMES observed this batch — never values (see
+    -- api_discovery.extract_param_names). Read path unions this across
+    -- all batches per endpoint to build the full observed set.
+    param_names          Array(String) DEFAULT [],
+
     first_seen          DateTime DEFAULT now()
 )
 ENGINE = SummingMergeTree((hit_count, error_count, malicious_count, suspicious_count, external_hit_count, internal_hit_count))

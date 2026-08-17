@@ -9,6 +9,35 @@ from app.services.auth import require_admin, require_any_role, TokenData
 
 router = APIRouter()
 
+# Name patterns (substring match, case-insensitive) that suggest a query
+# param carries sensitive data. Deliberately conservative and name-only —
+# this flags "worth a human look", not a confirmed leak: a param named
+# `email` on a public newsletter signup is normal; the point is surfacing
+# it for review, not asserting a violation. Values are never captured (see
+# api_discovery.extract_param_names), so this is the only signal available
+# short of a real schema/PII classifier.
+_SENSITIVE_PARAM_PATTERNS = (
+    "email", "e_mail", "phone", "mobile",
+    "ssn", "social_security", "tax_id", "passport", "national_id",
+    "password", "passwd", "pwd", "secret", "token", "api_key", "apikey",
+    "access_key", "private_key", "auth",
+    "credit_card", "card_number", "cardnum", "cvv", "cvc",
+    "account_number", "iban", "routing_number", "bank",
+    "dob", "date_of_birth", "birthdate",
+    "address", "zip", "postal",
+)
+
+
+def flag_sensitive_params(param_names: List[str]) -> List[str]:
+    """Returns the subset of param_names whose NAME (not value — values are
+    never stored) matches a known sensitive-data pattern."""
+    if not param_names:
+        return []
+    return [
+        p for p in param_names
+        if any(pattern in p.lower() for pattern in _SENSITIVE_PARAM_PATTERNS)
+    ]
+
 
 def _overlay_real_threat_counts(endpoints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -124,6 +153,12 @@ def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
     # consistent regardless of which store answered the query.
     ep_copy.setdefault("p95_response_time_ms", 0.0)
     ep_copy.setdefault("p99_response_time_ms", 0.0)
+    # Informational only — deliberately not a score deduction. A `email`
+    # param on a public signup form isn't a vulnerability; flagging it
+    # for a human to glance at is the right amount of confidence for a
+    # name-pattern match, not an automatic penalty.
+    ep_copy["param_names"] = ep_copy.get("param_names") or []
+    ep_copy["sensitive_params"] = flag_sensitive_params(ep_copy["param_names"])
     return ep_copy
 
 

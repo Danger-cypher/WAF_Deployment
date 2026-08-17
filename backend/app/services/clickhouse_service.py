@@ -86,6 +86,24 @@ def is_available() -> bool:
     return _get_client() is not None
 
 
+def ensure_api_discovery_param_names_column() -> None:
+    """Idempotent schema migration: adds api_discovery.param_names
+    (Array(String)) for installs whose table predates the sensitive-
+    parameter-visibility feature. Pure schema addition — ADD COLUMN IF
+    NOT EXISTS is naturally safe to run on every startup, no marker
+    column needed (unlike reset_fabricated_api_discovery_fields below,
+    which also runs a one-time data UPDATE)."""
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        client.command(
+            "ALTER TABLE api_discovery ADD COLUMN IF NOT EXISTS param_names Array(String) DEFAULT []"
+        )
+    except Exception as e:
+        logger.warning(f"ClickHouse api_discovery.param_names migration check failed: {e}")
+
+
 def reset_fabricated_api_discovery_fields() -> None:
     """
     One-time migration: api_discovery.has_https/content_encoding used to be
@@ -1060,6 +1078,7 @@ def insert_api_discovery(records: List[Dict[str, Any]]) -> int:
             int(r.get("has_versioning", 0)),
             str(r.get("content_encoding", "unknown")),
             float(r.get("avg_response_time_ms", 0.0)),
+            [str(p) for p in (r.get("param_names") or [])],
             ts,
         ])
 
@@ -1067,7 +1086,7 @@ def insert_api_discovery(records: List[Dict[str, Any]]) -> int:
         "uri", "method", "timestamp", "hit_count", "error_count",
         "malicious_count", "suspicious_count", "external_hit_count", "internal_hit_count",
         "has_https", "has_versioning", "content_encoding", "avg_response_time_ms",
-        "first_seen",
+        "param_names", "first_seen",
     ]
 
     try:
@@ -1092,7 +1111,8 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
                 error_count, malicious_count, suspicious_count,
                 external_hit_count, internal_hit_count,
                 has_https, has_versioning, content_encoding,
-                weighted_response_sum, p95_response_time_ms, p99_response_time_ms
+                weighted_response_sum, p95_response_time_ms, p99_response_time_ms,
+                param_names
             FROM (
                 SELECT uri, method,
                        min(first_seen)  AS first_seen,
@@ -1127,7 +1147,11 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
                        -- endpoint from one with one-off outliers, without
                        -- needing per-request storage.
                        quantile(0.95)(avg_response_time_ms) AS p95_response_time_ms,
-                       quantile(0.99)(avg_response_time_ms) AS p99_response_time_ms
+                       quantile(0.99)(avg_response_time_ms) AS p99_response_time_ms,
+                       -- Union of every param name seen across all batches
+                       -- for this endpoint — each row only carries what one
+                       -- ~10s batch observed.
+                       arrayDistinct(arrayFlatten(groupArray(param_names))) AS param_names
                 FROM api_discovery
                 GROUP BY uri, method
             )
@@ -1138,7 +1162,7 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
             "uri", "method", "first_seen", "last_seen", "hit_count", "error_count",
             "malicious_count", "suspicious_count", "external_hit_count", "internal_hit_count",
             "has_https", "has_versioning", "content_encoding", "weighted_response_sum",
-            "p95_response_time_ms", "p99_response_time_ms",
+            "p95_response_time_ms", "p99_response_time_ms", "param_names",
         ]
         rows = []
         for row in result.result_rows:
@@ -1152,6 +1176,7 @@ def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
             d["avg_response_time_ms"] = round(wsum / hits, 2) if hits > 0 else 0.0
             d["p95_response_time_ms"] = round(d.get("p95_response_time_ms") or 0.0, 2)
             d["p99_response_time_ms"] = round(d.get("p99_response_time_ms") or 0.0, 2)
+            d["param_names"] = sorted(d.get("param_names") or [])
             rows.append(d)
         return rows
     except Exception as e:

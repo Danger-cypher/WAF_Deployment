@@ -127,6 +127,16 @@ def init_db():
                 except Exception:
                     pass  # Column already exists — expected on re-init
 
+            # Query-param NAMES observed for this endpoint, as a JSON array
+            # string (never values — see api_discovery.extract_param_names).
+            # Powers API Protection's sensitive-parameter flagging.
+            try:
+                cursor.execute(
+                    "ALTER TABLE discovered_endpoints ADD COLUMN param_names TEXT DEFAULT '[]'"
+                )
+            except Exception:
+                pass  # Column already exists — expected on re-init
+
             # One-time migration: has_https used to be hardcoded true and
             # content_encoding was guessed from the status code — neither was
             # ever a real measurement (see api_discovery.py). Reset both to
@@ -858,6 +868,18 @@ def set_ingestion_state(key: str, value: str) -> None:
 # ========================================================
 
 
+def _row_to_endpoint_dict(row) -> dict:
+    """sqlite3.Row -> dict, with param_names parsed from its stored JSON
+    string into an actual list — matches the shape the ClickHouse read path
+    returns (Array(String) comes back as a native Python list there)."""
+    d = dict(row)
+    try:
+        d["param_names"] = json.loads(d.get("param_names") or "[]")
+    except Exception:
+        d["param_names"] = []
+    return d
+
+
 def get_all_discovered_endpoints():
     if clickhouse_service.is_available():
         res = clickhouse_service.get_all_discovered_endpoints()
@@ -867,7 +889,7 @@ def get_all_discovered_endpoints():
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM discovered_endpoints ORDER BY hit_count DESC")
-            return [dict(row) for row in cursor.fetchall()]
+            return [_row_to_endpoint_dict(row) for row in cursor.fetchall()]
     except Exception as e:
         logger.error(f"Error fetching discovered endpoints: {e}")
         return []
@@ -883,13 +905,13 @@ def get_recently_discovered_endpoints(hours: int = 48):
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT * FROM discovered_endpoints 
-                WHERE datetime(first_seen) >= datetime('now', ?) 
+                SELECT * FROM discovered_endpoints
+                WHERE datetime(first_seen) >= datetime('now', ?)
                 ORDER BY first_seen DESC
             """,
                 (f"-{hours} hours",),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            return [_row_to_endpoint_dict(row) for row in cursor.fetchall()]
     except Exception:
         try:
             with get_connection() as conn:
@@ -897,7 +919,7 @@ def get_recently_discovered_endpoints(hours: int = 48):
                 cursor.execute(
                     "SELECT * FROM discovered_endpoints ORDER BY first_seen DESC LIMIT 10"
                 )
-                return [dict(row) for row in cursor.fetchall()]
+                return [_row_to_endpoint_dict(row) for row in cursor.fetchall()]
         except Exception as ex:
             logger.error(f"Error fetching recently discovered endpoints: {ex}")
             return []
@@ -923,7 +945,7 @@ def get_stale_discovered_endpoints(days: int = 30):
             """,
                 (f"-{days} days",),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            return [_row_to_endpoint_dict(row) for row in cursor.fetchall()]
     except Exception as e:
         logger.error(f"Error fetching stale discovered endpoints: {e}")
         return []
@@ -951,6 +973,7 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                 "has_versioning": data["has_versioning"],
                 "content_encoding": data["content_encoding"],
                 "avg_response_time_ms": data["response_time_ms_sum"] / data["hit_count"] if data["hit_count"] > 0 else 0.0,
+                "param_names": data.get("param_names", []),
             })
         clickhouse_service.insert_api_discovery(records)
 
@@ -996,6 +1019,16 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                         else row_dict["content_encoding"]
                     )
 
+                    # Union with whatever param names were already seen —
+                    # each batch only carries what it observed, not the
+                    # endpoint's full lifetime history, so this must
+                    # accumulate rather than overwrite.
+                    try:
+                        existing_params = set(json.loads(row_dict.get("param_names") or "[]"))
+                    except Exception:
+                        existing_params = set()
+                    new_params = sorted(existing_params | set(data.get("param_names", [])))
+
                     cursor.execute(
                         """
                         UPDATE discovered_endpoints
@@ -1008,7 +1041,8 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                             malicious_count = ?,
                             suspicious_count = ?,
                             has_https = ?,
-                            content_encoding = ?
+                            content_encoding = ?,
+                            param_names = ?
                         WHERE uri = ? AND method = ?
                     """,
                         (
@@ -1022,6 +1056,7 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                             new_suspicious_count,
                             new_https,
                             new_encoding,
+                            json.dumps(new_params),
                             uri,
                             method,
                         ),
@@ -1031,10 +1066,10 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                     cursor.execute(
                         """
                         INSERT INTO discovered_endpoints (
-                            uri, method, first_seen, last_seen, avg_response_time_ms, hit_count, 
-                            external_hit_count, internal_hit_count, error_count, malicious_count, 
-                            suspicious_count, has_https, has_versioning, content_encoding
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            uri, method, first_seen, last_seen, avg_response_time_ms, hit_count,
+                            external_hit_count, internal_hit_count, error_count, malicious_count,
+                            suspicious_count, has_https, has_versioning, content_encoding, param_names
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                         (
                             uri,
@@ -1051,6 +1086,7 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                             data["has_https"],
                             data["has_versioning"],
                             data["content_encoding"] or "",
+                            json.dumps(sorted(data.get("param_names", []))),
                         ),
                     )
             conn.commit()
