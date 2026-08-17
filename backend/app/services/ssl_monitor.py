@@ -34,22 +34,24 @@ async def start_ssl_monitor():
     Background loop that runs periodically to detect Let's Encrypt certificate renewals.
     When a change is detected, it triggers a graceful Nginx reload.
     """
+    from app.services import heartbeat_registry
+
     global _last_check_times
     logger.info("Initializing SSL Auto-Reload Certificate Monitor...")
-    
+
     # Initial scan to establish baseline
     _last_check_times = get_cert_files_mtime()
-    
+
     # Scan intervals (check every 60 seconds)
     SCAN_INTERVAL = 60
-    
-    try:
-        while True:
-            await asyncio.sleep(SCAN_INTERVAL)
-            
+
+    while True:
+        await asyncio.sleep(SCAN_INTERVAL)
+        try:
             if not os.path.exists(LE_SSL_DIR):
+                heartbeat_registry.record_heartbeat("ssl_monitor", SCAN_INTERVAL, status="ok")
                 continue
-                
+
             current_mtimes = get_cert_files_mtime()
             changed = False
             
@@ -85,8 +87,17 @@ async def start_ssl_monitor():
             else:
                 # Update baseline in case files were deleted
                 _last_check_times = current_mtimes
-                
-    except asyncio.CancelledError:
-        logger.info("SSL Auto-Reload Certificate Monitor task cancelled.")
-    except Exception as e:
-        logger.error(f"SSL Auto-Reload Certificate Monitor encountered an error: {e}")
+
+            heartbeat_registry.record_heartbeat("ssl_monitor", SCAN_INTERVAL, status="ok")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # Per-iteration, not wrapping the whole while loop — a single
+            # bad cycle (e.g. a transient os.walk error) used to take the
+            # entire monitor down permanently, since any exception escaped
+            # the loop and the coroutine just ended silently with nothing
+            # to notice or restart it.
+            logger.error(f"SSL Auto-Reload Certificate Monitor encountered an error: {e}")
+            heartbeat_registry.record_heartbeat(
+                "ssl_monitor", SCAN_INTERVAL, status="error", detail=str(e)
+            )

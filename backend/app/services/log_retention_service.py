@@ -264,12 +264,20 @@ async def start_log_retention_service():
     )
     await asyncio.sleep(60)  # Initial delay for app to fully initialize
 
+    from app.services import heartbeat_registry
+
     while True:
         try:
             summary = run_retention_cleanup()
             await _alert_if_unhealthy(summary)
+            heartbeat_registry.record_heartbeat(
+                "log_retention", RETENTION_CHECK_INTERVAL_SECONDS, status="ok"
+            )
         except Exception as e:
             logger.error(f"[LogRetention] Unexpected error during cleanup: {e}")
+            heartbeat_registry.record_heartbeat(
+                "log_retention", RETENTION_CHECK_INTERVAL_SECONDS, status="error", detail=str(e)
+            )
             try:
                 from app.services.alert_manager import alert_manager
                 await alert_manager.trigger_event(

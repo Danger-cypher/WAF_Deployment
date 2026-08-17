@@ -361,12 +361,18 @@ DISCOVERY_INTERVAL_SECONDS = 10
 async def start_api_discovery_service():
     """Background async loop that runs API discovery on a fixed interval.
     Call with asyncio.create_task() during application startup."""
+    from app.services import heartbeat_registry
+
     logger.info(
         f"[APIDiscovery] Background service started. Runs every {DISCOVERY_INTERVAL_SECONDS}s."
     )
     while True:
         try:
             await asyncio.to_thread(run_api_discovery)
+            heartbeat_registry.record_heartbeat("api_discovery", DISCOVERY_INTERVAL_SECONDS, status="ok")
         except Exception as e:
             logger.error(f"[APIDiscovery] Unexpected error during discovery cycle: {e}")
+            heartbeat_registry.record_heartbeat(
+                "api_discovery", DISCOVERY_INTERVAL_SECONDS, status="error", detail=str(e)
+            )
         await asyncio.sleep(DISCOVERY_INTERVAL_SECONDS)

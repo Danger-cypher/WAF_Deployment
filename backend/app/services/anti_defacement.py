@@ -155,6 +155,8 @@ class AntiDefacementService:
 
 async def start_defacement_monitor():
     """Background task runner for periodic file-integrity audits."""
+    from app.services import heartbeat_registry
+
     logger.info("Initializing WAF Web Anti-Defacement integrity monitor...")
 
     # Load initial list of files
@@ -169,12 +171,16 @@ async def start_defacement_monitor():
             if settings.get("enabled", True):
                 await anti_defacement_service.check_integrity()
 
+            heartbeat_registry.record_heartbeat("anti_defacement_monitor", interval, status="ok")
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             logger.info("Stopping anti-defacement background monitor.")
             break
         except Exception as e:
             logger.error(f"Error in anti-defacement background loop: {e}")
+            heartbeat_registry.record_heartbeat(
+                "anti_defacement_monitor", 5.0, status="error", detail=str(e)
+            )
             await asyncio.sleep(5)
 
 

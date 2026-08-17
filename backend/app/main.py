@@ -103,6 +103,12 @@ async def lifespan(app: FastAPI):
     from app.services.ssl_monitor import start_ssl_monitor
     ssl_monitor_task = asyncio.create_task(start_ssl_monitor())
 
+    # Start the heartbeat watchdog — checks whether the background tasks
+    # above are actually still cycling, and alerts on the transition into
+    # "stale" instead of relying on someone noticing a silent outage.
+    from app.services.heartbeat_registry import start_heartbeat_watchdog
+    heartbeat_watchdog_task = asyncio.create_task(start_heartbeat_watchdog())
+
     yield
 
     # Shutdown event
@@ -136,6 +142,13 @@ async def lifespan(app: FastAPI):
     api_discovery_task.cancel()
     try:
         await api_discovery_task
+    except asyncio.CancelledError:
+        pass
+
+    # Cancel the heartbeat watchdog task
+    heartbeat_watchdog_task.cancel()
+    try:
+        await heartbeat_watchdog_task
     except asyncio.CancelledError:
         pass
 

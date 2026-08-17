@@ -280,3 +280,26 @@ async def log_retention_status(current_user: TokenData = Depends(require_admin))
         "oldest_stale_audit_dir": oldest_stale_dir,
         "purge_appears_healthy": stale_dirs == 0,
     }
+
+
+@router.get("/health/background-tasks")
+async def background_tasks_health(current_user: TokenData = Depends(require_admin)):
+    """
+    Reports the last-cycle status of every recurring background task in
+    this process (log retention, log ingestion flush, API discovery,
+    anti-defacement monitor, SSL monitor) — whether each is still alive
+    and cycling on schedule, not just whether the process itself is up.
+
+    Exists because three separate bugs this session shared the same root
+    shape: a loop kept running but silently stopped doing useful work,
+    and nothing surfaced it until someone manually dug through logs. This
+    is one place to check all of them at once instead of repeating that
+    investigation from scratch next time.
+    """
+    from app.services.heartbeat_registry import get_all_heartbeats
+
+    tasks = get_all_heartbeats()
+    return {
+        "all_healthy": not any(t["stale"] for t in tasks.values()),
+        "tasks": tasks,
+    }

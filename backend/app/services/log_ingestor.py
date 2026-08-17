@@ -98,6 +98,8 @@ async def _flush_loop():
     Background coroutine: collects events from the queue and batch-inserts
     them into ClickHouse every FLUSH_INTERVAL seconds or at BATCH_SIZE.
     """
+    from app.services import heartbeat_registry
+
     global _ingestor_running, _consecutive_flush_failures
     _ingestor_running = True
     logger.info("ClickHouse ingestor flush loop started")
@@ -113,6 +115,15 @@ async def _flush_loop():
                 buffer.append(entry)
         except asyncio.TimeoutError:
             pass
+
+        # Heartbeat every pass through the loop (not just on a flush) so an
+        # idle period with no traffic doesn't look indistinguishable from a
+        # stuck/dead loop — this line running at all means the loop is alive.
+        heartbeat_registry.record_heartbeat(
+            "log_ingestion_flush", FLUSH_INTERVAL,
+            status="backlogged" if _consecutive_flush_failures else "ok",
+            detail=f"{_consecutive_flush_failures} consecutive flush failures" if _consecutive_flush_failures else None,
+        )
 
         now = time.monotonic()
         if buffer and (len(buffer) >= BATCH_SIZE or now - last_flush >= FLUSH_INTERVAL):
