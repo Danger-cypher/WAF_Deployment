@@ -75,6 +75,26 @@ export async function getLogs(page = 1, size = 50, filters = {}) {
 }
 
 /**
+ * Fetch paginated, filtered logs collapsed into one row per (client_ip,
+ * rule_id) — the Events page's "Grouped" view.
+ */
+export async function getGroupedLogs(page = 1, size = 50, filters = {}) {
+  try {
+    const query = new URLSearchParams({
+      page,
+      size,
+      ...filters
+    }).toString();
+
+    const response = await fetch(`${BASE_URL}/logs/grouped?${query}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch grouped logs:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch a single WAF log entry by transaction ID
  */
 export async function getLogById(logId) {
@@ -415,19 +435,14 @@ export async function getCustomResponse() {
  */
 export async function saveCustomResponse(settings) {
   try {
-    // WAFs (like CyberSentinel Engine CRS) decode Base64 and still detect HTML tags!
-    // To safely bypass the WAF for this admin config, we use placeholder substitution.
-    const safeHtml = settings.html_content
-      .replace(/</g, '__LT__')
-      .replace(/>/g, '__GT__');
-
-    const encodedPayload = {
-      html_content: safeHtml
-    };
+    // The dashboard vhost's own SecRuleRemoveById whitelist (configs/nginx/
+    // sites-available/cybersentinel, "Allow special characters in custom
+    // HTML responses") already covers raw HTML tags in this admin payload —
+    // no placeholder-encoding workaround needed.
     const response = await fetch(`${BASE_URL}/settings/response`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(encodedPayload)
+      body: JSON.stringify(settings)
     });
     return await handleResponse(response);
   } catch (error) {
@@ -502,6 +517,59 @@ export async function saveAutoLearning(settings) {
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to save auto-learning settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch Auto-Learning's pending/approved/rejected exclusion suggestions
+ */
+export async function getAutoLearningSuggestions(status) {
+  try {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+    const response = await fetch(`${BASE_URL}/auto-learning/suggestions${qs}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch auto-learning suggestions:", error);
+    throw error;
+  }
+}
+
+/**
+ * Manually trigger an Auto-Learning scan cycle
+ */
+export async function runAutoLearningNow() {
+  try {
+    const response = await fetch(`${BASE_URL}/auto-learning/run`, { method: 'POST' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to run auto-learning cycle:", error);
+    throw error;
+  }
+}
+
+/**
+ * Approve an Auto-Learning suggestion — creates a real WAF exclusion
+ */
+export async function approveAutoLearningSuggestion(id) {
+  try {
+    const response = await fetch(`${BASE_URL}/auto-learning/suggestions/${id}/approve`, { method: 'POST' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to approve auto-learning suggestion:", error);
+    throw error;
+  }
+}
+
+/**
+ * Reject an Auto-Learning suggestion
+ */
+export async function rejectAutoLearningSuggestion(id) {
+  try {
+    const response = await fetch(`${BASE_URL}/auto-learning/suggestions/${id}/reject`, { method: 'POST' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to reject auto-learning suggestion:", error);
     throw error;
   }
 }

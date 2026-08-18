@@ -1,17 +1,20 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, CheckSquare, Database, Lock, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, Brain, CheckSquare, Database, FileCode, Lock, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, X } from 'lucide-react';
 import {
   getGeneralSettings, saveGeneralSettings, getLogSettings, saveLogSettings,
   getWafSettings, saveWafSettings,
   changeAdminPassword, restartWafEngine, reloadNginxProxy, purgeStatsCache, syncSignatures,
   getHardeningSettings, saveHardeningSettings, getAntiDefacementSettings, saveAntiDefacementSettings,
   getPositiveSecurity, savePositiveSecurity,
+  getCustomResponse, saveCustomResponse, getAutoLearning, saveAutoLearning,
+  getAutoLearningSuggestions, runAutoLearningNow, approveAutoLearningSuggestion, rejectAutoLearningSuggestion,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
 import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import Button from '../components/Button';
 
 export default function Settings({ onLogout }) {
   // General Settings
@@ -58,6 +61,21 @@ export default function Settings({ onLogout }) {
   const [posSecContentTypes, setPosSecContentTypes] = useState("");
   const [posSecExtensions, setPosSecExtensions] = useState("");
 
+  // Custom Response (WAF block page) Settings
+  const [customResponseHtml, setCustomResponseHtml] = useState("");
+
+  // Auto-Learning Settings — feeds observed "normal" traffic back into
+  // baseline tuning so it converges on real usage instead of a guessed default.
+  const [autoLearningEnabled, setAutoLearningEnabled] = useState(false);
+  const [autoLearningPeriod, setAutoLearningPeriod] = useState('7 Days');
+  const [autoLearningThreshold, setAutoLearningThreshold] = useState(90);
+  // Pending exclusion suggestions Auto-Learning has computed from Resolved
+  // false positives — never auto-applied, an admin must Approve/Reject each.
+  const [autoLearningSuggestions, setAutoLearningSuggestions] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [runningNow, setRunningNow] = useState(false);
+  const [suggestionActionId, setSuggestionActionId] = useState(null);
+
   // Notifications & State Controls
   const { toast, showToast } = useToast();
   const confirm = useConfirm();
@@ -78,13 +96,15 @@ export default function Settings({ onLogout }) {
   const fetchSettings = async () => {
     setSettingsLoadError('');
     try {
-        const [gen, logs, waf, hardening, defacement, positiveSecurity] = await Promise.all([
+        const [gen, logs, waf, hardening, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
           getGeneralSettings(),
           getLogSettings(),
           getWafSettings(),
           getHardeningSettings(),
           getAntiDefacementSettings(),
           getPositiveSecurity(),
+          getCustomResponse(),
+          getAutoLearning(),
         ]);
 
         if (gen) {
@@ -121,6 +141,14 @@ export default function Settings({ onLogout }) {
           if (positiveSecurity.allowed_methods !== undefined) setPosSecMethods(positiveSecurity.allowed_methods.join(', '));
           if (positiveSecurity.allowed_content_types !== undefined) setPosSecContentTypes(positiveSecurity.allowed_content_types.join(', '));
           if (positiveSecurity.restricted_extensions !== undefined) setPosSecExtensions(positiveSecurity.restricted_extensions.join(', '));
+        }
+        if (customResponse) {
+          if (customResponse.html_content !== undefined) setCustomResponseHtml(customResponse.html_content);
+        }
+        if (autoLearning) {
+          if (autoLearning.enabled !== undefined) setAutoLearningEnabled(autoLearning.enabled);
+          if (autoLearning.learning_period) setAutoLearningPeriod(autoLearning.learning_period);
+          if (autoLearning.confidence_threshold !== undefined) setAutoLearningThreshold(autoLearning.confidence_threshold);
         }
     } catch (err) {
       console.error("Failed to load WAF settings from API", err);
@@ -236,6 +264,110 @@ export default function Settings({ onLogout }) {
       showToast("Failed to update Positive Security settings: " + (err.message || "Unknown error"), "error");
     } finally {
       setLoadingAction(false);
+    }
+  };
+
+  const handleSaveCustomResponse = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      await saveCustomResponse({ html_content: customResponseHtml });
+      showToast("Custom block page saved and will be served on the next blocked request.");
+    } catch (err) {
+      showToast("Failed to save custom response page: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleSaveAutoLearning = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      await saveAutoLearning({
+        enabled: autoLearningEnabled,
+        learning_period: autoLearningPeriod,
+        confidence_threshold: parseInt(autoLearningThreshold) || 90,
+      });
+      showToast(
+        autoLearningEnabled
+          ? "Auto-Learning enabled — baseline tuning will use the configured window."
+          : "Auto-Learning disabled."
+      );
+    } catch (err) {
+      showToast("Failed to update Auto-Learning settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const fetchAutoLearningSuggestions = async () => {
+    setSuggestionsLoading(true);
+    try {
+      const rows = await getAutoLearningSuggestions('Pending');
+      setAutoLearningSuggestions(rows);
+    } catch (err) {
+      showToast("Failed to load Auto-Learning suggestions: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSettingTab === 'auto-learning') {
+      const timer = setTimeout(() => fetchAutoLearningSuggestions(), 0);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSettingTab]);
+
+  const handleRunAutoLearningNow = async () => {
+    setRunningNow(true);
+    try {
+      const result = await runAutoLearningNow();
+      showToast(
+        `Scan complete: ${result.scanned_false_positives ?? 0} resolved false positives reviewed, ` +
+        `${result.suggestions_stored ?? 0} suggestion(s) added or updated.`
+      );
+      await fetchAutoLearningSuggestions();
+    } catch (err) {
+      showToast("Failed to run Auto-Learning scan: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setRunningNow(false);
+    }
+  };
+
+  const handleApproveSuggestion = async (suggestion) => {
+    if (!(await confirm({
+      title: 'Approve Auto-Learning suggestion',
+      message: `This creates a real WAF exclusion for Rule ${suggestion.rule_id} ` +
+        `(${suggestion.exclusion_type}${suggestion.uri ? `, URI: ${suggestion.uri}` : ''}` +
+        `${suggestion.parameter_name ? `, Parameter: ${suggestion.parameter_name}` : ''}) ` +
+        `and reloads NGINX immediately. Continue?`,
+      confirmLabel: 'Approve & Apply',
+    }))) return;
+    setSuggestionActionId(suggestion.id);
+    try {
+      await approveAutoLearningSuggestion(suggestion.id);
+      showToast("Suggestion approved — exclusion created and applied.");
+      setAutoLearningSuggestions(prev => prev.filter(s => s.id !== suggestion.id));
+    } catch (err) {
+      showToast("Failed to approve suggestion: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setSuggestionActionId(null);
+    }
+  };
+
+  const handleRejectSuggestion = async (suggestion) => {
+    setSuggestionActionId(suggestion.id);
+    try {
+      await rejectAutoLearningSuggestion(suggestion.id);
+      showToast("Suggestion rejected.");
+      setAutoLearningSuggestions(prev => prev.filter(s => s.id !== suggestion.id));
+    } catch (err) {
+      showToast("Failed to reject suggestion: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setSuggestionActionId(null);
     }
   };
 
@@ -386,6 +518,12 @@ export default function Settings({ onLogout }) {
           </button>
           <button onClick={() => setActiveSettingTab('defacement')} className={`settings-tab-btn ${activeSettingTab === 'defacement' ? 'active' : ''}`}>
             <ShieldAlert size={20} /> Anti-Defacement
+          </button>
+          <button onClick={() => setActiveSettingTab('custom-response')} className={`settings-tab-btn ${activeSettingTab === 'custom-response' ? 'active' : ''}`}>
+            <FileCode size={20} /> Custom Response
+          </button>
+          <button onClick={() => setActiveSettingTab('auto-learning')} className={`settings-tab-btn ${activeSettingTab === 'auto-learning' ? 'active' : ''}`}>
+            <Brain size={20} /> Auto-Learning
           </button>
           <button onClick={() => setActiveSettingTab('security')} className={`settings-tab-btn ${activeSettingTab === 'security' ? 'active' : ''}`}>
             <Lock size={20} /> Security & Danger Zone
@@ -789,6 +927,173 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+              </motion.div>
+            )}
+
+            {activeSettingTab === 'custom-response' && (
+              <motion.div key="custom-response" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
+                <div className="settings-section-title">
+                  <FileCode size={20} color="var(--sev-low)" />
+                  Custom Response Page
+                </div>
+                <div className="settings-section-subtitle">
+                  The HTML page shown to a visitor when the WAF blocks their request. Use{' '}
+                  <code style={{ fontSize: '12px', background: 'var(--surface-subtle)', padding: '1px 5px', borderRadius: '4px' }}>{'{{transaction_id}}'}</code>{' '}
+                  anywhere in the page to include the block's transaction ID, useful for support requests.
+                </div>
+
+                <form onSubmit={handleSaveCustomResponse} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '700px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Page HTML</label>
+                    <textarea
+                      className="settings-input"
+                      style={{ width: '100%', minHeight: '260px', resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: '12.5px' }}
+                      value={customResponseHtml}
+                      onChange={(e) => setCustomResponseHtml(e.target.value)}
+                      placeholder="<!DOCTYPE html>..."
+                      spellCheck={false}
+                      required
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Full HTML document served with every WAF block response (HTTP 403).
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      {loadingAction ? 'Saving...' : 'Save Custom Response Page'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            )}
+
+            {activeSettingTab === 'auto-learning' && (
+              <motion.div key="auto-learning" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
+                <div className="settings-section-title">
+                  <Brain size={20} color="var(--ml-color)" />
+                  Auto-Learning
+                </div>
+                <div className="settings-section-subtitle">
+                  Observes traffic over a rolling window to tune detection baselines toward your application's
+                  real usage, reducing false positives without loosening genuine protections.
+                </div>
+
+                <form onSubmit={handleSaveAutoLearning} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Auto-Learning</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — baselines only update when enabled</span>
+                    </div>
+                    <div className={`toggle-switch ${autoLearningEnabled ? 'active' : ''}`} onClick={() => setAutoLearningEnabled(!autoLearningEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Learning Period</label>
+                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={autoLearningPeriod} onChange={(e) => setAutoLearningPeriod(e.target.value)}>
+                      <option value="3 Days">3 Days</option>
+                      <option value="7 Days">7 Days (Recommended)</option>
+                      <option value="14 Days">14 Days</option>
+                      <option value="30 Days">30 Days</option>
+                    </select>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      How far back observed traffic is considered when tuning baselines.
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Confidence Threshold ({autoLearningThreshold}%)</label>
+                    <input
+                      type="range"
+                      min="50"
+                      max="99"
+                      value={autoLearningThreshold}
+                      onChange={(e) => setAutoLearningThreshold(parseInt(e.target.value))}
+                      style={{ width: '100%' }}
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Only traffic patterns observed with at least this confidence are folded into the baseline.
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      {loadingAction ? 'Saving...' : 'Save Auto-Learning Settings'}
+                    </button>
+                  </div>
+                </form>
+
+                <div style={{ marginTop: '32px', paddingTop: '24px', borderTop: '1px solid var(--surface-hover)', maxWidth: '700px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>Pending Suggestions</div>
+                    <Button
+                      variant="secondary" size="sm" icon={RotateCw}
+                      loading={runningNow}
+                      onClick={handleRunAutoLearningNow}
+                    >
+                      Run Now
+                    </Button>
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                    Patterns learned from Resolved false positives that meet the confidence threshold above.
+                    Nothing here is applied to the WAF until you Approve it.
+                  </div>
+
+                  {suggestionsLoading ? (
+                    <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>Loading suggestions...</div>
+                  ) : autoLearningSuggestions.length === 0 ? (
+                    <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', background: 'var(--surface-subtle)', borderRadius: '8px' }}>
+                      No pending suggestions right now.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {autoLearningSuggestions.map((s) => (
+                        <div key={s.id} style={{ background: 'var(--surface-subtle)', border: '1px solid var(--surface-hover)', borderRadius: '10px', padding: '14px 16px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
+                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: 'var(--sev-high)' }}>Rule #{s.rule_id}</span>
+                                <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'var(--sev-low-bg)', color: 'var(--sev-low)', textTransform: 'uppercase' }}>
+                                  {s.exclusion_type}
+                                </span>
+                                <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(16,185,129,0.1)', color: 'var(--success-color)' }}>
+                                  {s.confidence_score}% confidence
+                                </span>
+                                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                  {s.occurrence_count} occurrence{s.occurrence_count === 1 ? '' : 's'}
+                                </span>
+                              </div>
+                              {(s.uri || s.parameter_name) && (
+                                <div style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-primary)' }}>
+                                  {s.uri && `URI: ${s.uri}`}{s.uri && s.parameter_name && '  '}{s.parameter_name && `Param: ${s.parameter_name}`}
+                                </div>
+                              )}
+                              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{s.reasoning}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                              <Button
+                                variant="danger" size="sm"
+                                loading={suggestionActionId === s.id}
+                                onClick={() => handleRejectSuggestion(s)}
+                              >
+                                Reject
+                              </Button>
+                              <Button
+                                variant="primary" size="sm"
+                                loading={suggestionActionId === s.id}
+                                onClick={() => handleApproveSuggestion(s)}
+                              >
+                                Approve
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </motion.div>
             )}
 

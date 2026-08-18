@@ -1,5 +1,4 @@
 import logging
-import asyncio
 from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel
 from typing import Dict, Any
@@ -151,18 +150,21 @@ async def update_custom_response(
     settings: CustomResponseModel, current_user: TokenData = Depends(require_admin)
 ):
     logger.info("Updating Custom Response block page.")
-    # Decode the placeholder payload to bypass WAF XSS rules
-    try:
-        decoded_html = settings.html_content.replace("__LT__", "<").replace(
-            "__GT__", ">"
-        )
-        settings.html_content = decoded_html
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid payload")
+    if not settings.html_content.strip():
+        raise HTTPException(status_code=400, detail="Block page HTML cannot be empty.")
 
-    # Simulate writing this to NGINX config dir (e.g. /etc/nginx/html/waf_block.html)
-    await asyncio.sleep(0.5)
-    return settings_manager.update_custom_response(settings.dict())
+    saved_settings = settings_manager.update_custom_response(settings.dict())
+
+    from app.services import nginx_manager
+
+    success, err_msg = nginx_manager.apply_custom_response_page(settings.html_content)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Saved, but failed to apply the block page in NGINX. {err_msg}",
+        )
+
+    return saved_settings
 
 
 class EncodedPayloadModel(BaseModel):

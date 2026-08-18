@@ -24,6 +24,7 @@ from app.routes import (
     system,
     users,
     ws,
+    auto_learning as auto_learning_route,
 )
 from app.services.log_reader import scan_log_directory
 from app.services.log_ingestor import backfill_logs, start_ingestor, start_ingestor_tasks
@@ -59,6 +60,27 @@ async def lifespan(app: FastAPI):
             "ClickHouse is NOT available at startup. "
             "Dashboard will show empty logs until ClickHouse is reachable."
         )
+
+    # Ensure the Custom Response block page file exists before any protected
+    # app's generated server{} block references it — every such block has an
+    # `error_page 403 -> internal location -> alias <this file>`
+    # unconditionally (see nginx_manager.sync_protected_apps_to_nginx()), so
+    # if the file is missing (fresh install, nobody has saved a custom page
+    # via Settings yet) nginx's own "can't open file" 404 masks ModSecurity's
+    # real 403 on every single WAF block — confirmed live: ModSecurity logged
+    # http_code 403 for a blocked request, but the client received 404.
+    # Only writes when missing so an admin's saved customization is never
+    # overwritten by a restart.
+    try:
+        import os
+        from app.services.nginx_manager import CUSTOM_RESPONSE_PAGE_PATH, apply_custom_response_page
+        if not os.path.exists(CUSTOM_RESPONSE_PAGE_PATH):
+            default_html = settings_manager.get_custom_response().get("html_content", "")
+            ok, err = apply_custom_response_page(default_html)
+            if not ok:
+                logger.error(f"Failed to seed default Custom Response block page on startup: {err}")
+    except Exception as e:
+        logger.error(f"Failed to seed default Custom Response block page on startup: {e}")
 
     # Sync protected apps to Nginx configuration on startup
     try:
@@ -104,6 +126,10 @@ async def lifespan(app: FastAPI):
     from app.services.ssl_monitor import start_ssl_monitor
     ssl_monitor_task = asyncio.create_task(start_ssl_monitor())
 
+    # Start the Auto-Learning suggestion scheduler background task
+    from app.services.auto_learning import start_auto_learning_scheduler
+    auto_learning_task = asyncio.create_task(start_auto_learning_scheduler())
+
     # Start the heartbeat watchdog — checks whether the background tasks
     # above are actually still cycling, and alerts on the transition into
     # "stale" instead of relying on someone noticing a silent outage.
@@ -136,6 +162,13 @@ async def lifespan(app: FastAPI):
     ssl_monitor_task.cancel()
     try:
         await ssl_monitor_task
+    except asyncio.CancelledError:
+        pass
+
+    # Cancel the Auto-Learning scheduler task
+    auto_learning_task.cancel()
+    try:
+        await auto_learning_task
     except asyncio.CancelledError:
         pass
 
@@ -280,6 +313,7 @@ app.include_router(alerts.router, tags=["Alerts"], dependencies=csrf_deps)
 app.include_router(alerts.trigger_router, tags=["Alerts"])
 app.include_router(system.router, tags=["System"], prefix="/system", dependencies=csrf_deps)
 app.include_router(users.router, tags=["Users"], dependencies=csrf_deps)
+app.include_router(auto_learning_route.router, tags=["Auto-Learning"], dependencies=csrf_deps)
 # No csrf_deps: the WebSocket handshake has no Request object for the
 # double-submit CSRF check to inspect. Auth is instead done inside the
 # handler itself by reading the session cookie directly (see routes/ws.py).

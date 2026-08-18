@@ -234,6 +234,34 @@ def init_db():
                 except Exception:
                     pass  # Column already exists — expected on re-init
 
+            # Auto-Learning suggestions — computed from Resolved false
+            # positives observed within Settings > Auto-Learning's rolling
+            # window. Never auto-applied: an admin must explicitly Approve
+            # (which creates a real exclusion through the normal pipeline)
+            # or Reject. One row per distinct (rule_id, exclusion_type, uri,
+            # parameter_name) pattern; re-detecting the same pattern updates
+            # the existing Pending row's counts instead of duplicating it,
+            # and never resurrects a pattern an admin already Rejected.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS auto_learning_suggestions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id TEXT NOT NULL,
+                    exclusion_type TEXT NOT NULL,
+                    uri TEXT,
+                    parameter_name TEXT,
+                    occurrence_count INTEGER NOT NULL DEFAULT 1,
+                    confidence_score INTEGER NOT NULL,
+                    reasoning TEXT NOT NULL,
+                    sample_false_positive_ids TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'Pending',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    reviewed_by TEXT,
+                    reviewed_at TEXT,
+                    UNIQUE(rule_id, exclusion_type, uri, parameter_name)
+                )
+            """)
+
             conn.commit()
             logger.info("Database schemas initialized successfully.")
     except Exception as e:
@@ -1397,3 +1425,146 @@ def delete_protected_app(app_id: int):
     except Exception as e:
         logger.error(f"Error deleting protected app {app_id}: {e}")
         return False
+
+
+# ========================================================
+# Auto-Learning suggestions (Settings > Auto-Learning)
+# ========================================================
+
+
+def _find_auto_learning_suggestion(cursor, rule_id: str, exclusion_type: str, uri, parameter_name):
+    """
+    NULL-safe lookup for the UNIQUE(rule_id, exclusion_type, uri,
+    parameter_name) key — SQLite's UNIQUE constraint treats every NULL as
+    distinct from every other NULL, so it alone can't prevent duplicate
+    rows when uri/parameter_name are both None (e.g. a global 'parameter'
+    exclusion_type). This does the real dedup check the constraint can't.
+    """
+    cursor.execute(
+        """
+        SELECT * FROM auto_learning_suggestions
+        WHERE rule_id = ? AND exclusion_type = ?
+          AND (uri IS ? OR uri = ?)
+          AND (parameter_name IS ? OR parameter_name = ?)
+        """,
+        (rule_id, exclusion_type, uri, uri, parameter_name, parameter_name),
+    )
+    return cursor.fetchone()
+
+
+def upsert_auto_learning_suggestion(
+    rule_id: str,
+    exclusion_type: str,
+    uri: Optional[str],
+    parameter_name: Optional[str],
+    confidence_score: int,
+    reasoning: str,
+    false_positive_ids: List[Any],
+    timestamp: str,
+):
+    """
+    Creates a new Pending suggestion, or refreshes an existing Pending
+    row's occurrence count/confidence/reasoning/sample IDs. Deliberately
+    does NOT touch a row that's already Approved (exclusion already
+    applied — recomputing would just be noise) or Rejected (an admin
+    already made the call on this exact pattern; don't resurrect it
+    silently on the next cycle).
+    """
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            existing = _find_auto_learning_suggestion(cursor, rule_id, exclusion_type, uri, parameter_name)
+
+            if existing and existing["status"] != "Pending":
+                return dict(existing)
+
+            if existing:
+                merged_ids = sorted(set(json.loads(existing["sample_false_positive_ids"])) | set(false_positive_ids))
+                cursor.execute(
+                    """
+                    UPDATE auto_learning_suggestions
+                    SET occurrence_count = ?, confidence_score = ?, reasoning = ?,
+                        sample_false_positive_ids = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        len(merged_ids), confidence_score, reasoning,
+                        json.dumps(merged_ids[:20]), timestamp, existing["id"],
+                    ),
+                )
+                conn.commit()
+                new_id = existing["id"]
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO auto_learning_suggestions
+                        (rule_id, exclusion_type, uri, parameter_name, occurrence_count,
+                         confidence_score, reasoning, sample_false_positive_ids,
+                         status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?)
+                    """,
+                    (
+                        rule_id, exclusion_type, uri, parameter_name, len(false_positive_ids),
+                        confidence_score, reasoning, json.dumps(false_positive_ids[:20]),
+                        timestamp, timestamp,
+                    ),
+                )
+                conn.commit()
+                new_id = cursor.lastrowid
+
+            cursor.execute("SELECT * FROM auto_learning_suggestions WHERE id = ?", (new_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error upserting auto-learning suggestion for rule {rule_id}: {e}")
+        return None
+
+
+def get_all_auto_learning_suggestions(status: Optional[str] = None):
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            query = "SELECT * FROM auto_learning_suggestions WHERE 1=1"
+            params = []
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            query += " ORDER BY confidence_score DESC, occurrence_count DESC"
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Error listing auto-learning suggestions: {e}")
+        return []
+
+
+def get_auto_learning_suggestion_by_id(suggestion_id: int):
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM auto_learning_suggestions WHERE id = ?", (suggestion_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error fetching auto-learning suggestion {suggestion_id}: {e}")
+        return None
+
+
+def update_auto_learning_suggestion_status(suggestion_id: int, status: str, reviewed_by: str, timestamp: str):
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE auto_learning_suggestions
+                SET status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, reviewed_by, timestamp, timestamp, suggestion_id),
+            )
+            conn.commit()
+            cursor.execute("SELECT * FROM auto_learning_suggestions WHERE id = ?", (suggestion_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error updating auto-learning suggestion {suggestion_id}: {e}")
+        return None

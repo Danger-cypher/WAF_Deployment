@@ -28,6 +28,13 @@ POSITIVE_SECURITY_CONF_PATH = "/etc/nginx/modsec/positive-security.conf"
 # POSITIVE_SECURITY_CONF_PATH above, just app-specific instead of shared.
 APP_AUTH_CONF_DIR = "/etc/nginx/modsec/app-auth"
 
+# Admin-configurable "WAF blocked you" page (Settings > Custom Response).
+# Referenced by an `internal` location added to every protected app's own
+# generated server{} block (see sync_protected_apps_to_nginx()) — never the
+# dashboard's own vhost, same per-server-block scoping as
+# POSITIVE_SECURITY_CONF_PATH/APP_AUTH_CONF_DIR above.
+CUSTOM_RESPONSE_PAGE_PATH = "/etc/nginx/custom_pages/waf_block.html"
+
 REDIS_SECRET_FILE = "/etc/cybersentinel/redis.secret"  # nosec B105
 
 
@@ -638,6 +645,26 @@ def apply_positive_security_settings(settings: dict) -> tuple[bool, str]:
         return False, str(e)
 
 
+def apply_custom_response_page(html_content: str) -> tuple[bool, str]:
+    """
+    Writes the admin-configured "WAF blocked you" page to
+    CUSTOM_RESPONSE_PAGE_PATH. The file itself is inert until a protected
+    app's server{} block references it via an `internal` location (added in
+    sync_protected_apps_to_nginx()) — that's what makes this actually get
+    served on a real 403 instead of just sitting on disk.
+
+    Uses write_and_apply_configs() purely for the atomic-write + validate +
+    reload guarantee every other config writer here gets, even though nginx
+    syntax validation has nothing to check in a plain HTML file — the value
+    is the same backup/rollback-on-failure behavior and cache-busting reload.
+    """
+    try:
+        return write_and_apply_configs({CUSTOM_RESPONSE_PAGE_PATH: html_content})
+    except Exception as e:
+        logger.error(f"Failed to apply custom response page: {e}")
+        return False, str(e)
+
+
 def app_auth_conf_path(app_id) -> str:
     return f"{APP_AUTH_CONF_DIR}/app_{app_id}.conf"
 
@@ -832,6 +859,20 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     # this reference is always safe to include.
                     f"    modsecurity_rules_file {POSITIVE_SECURITY_CONF_PATH};",
                     f"    modsecurity_rules_file {auth_conf_path};",
+                    "",
+                    # Admin-configurable block page (Settings > Custom Response).
+                    # Only overrides the browser-facing `/` location below —
+                    # /api keeps its own JSON error_page, which is location-
+                    # scoped and so takes precedence for requests under /api.
+                    "    error_page 403 /__waf_block_page__.html;",
+                    "    location = /__waf_block_page__.html {",
+                    "        internal;",
+                    f"        alias {CUSTOM_RESPONSE_PAGE_PATH};",
+                    "        default_type text/html;",
+                    "        sub_filter_types text/html;",
+                    "        sub_filter '{{transaction_id}}' $request_id;",
+                    "        sub_filter_once off;",
+                    "    }",
                     "",
                     "    location @json_forbidden {",
                     "        default_type application/json;",
