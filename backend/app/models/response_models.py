@@ -1,10 +1,17 @@
 from pydantic import BaseModel
 from typing import List, Optional
-from app.models.log_model import LogEntry
+from app.models.log_model import LogEntry, GroupedLogEntry
 
 
 class PaginatedLogs(BaseModel):
     data: List[LogEntry]
+    total: int
+    page: int
+    size: int
+
+
+class PaginatedGroupedLogs(BaseModel):
+    data: List[GroupedLogEntry]
     total: int
     page: int
     size: int

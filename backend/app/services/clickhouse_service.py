@@ -244,9 +244,7 @@ def _time_filter_clause(hours: Optional[int], alias: str = "timestamp") -> str:
     return f"AND {alias} >= now() - INTERVAL {int(hours)} HOUR"
 
 
-def query_waf_events(
-    page: int = 1,
-    size: int = 50,
+def _build_waf_events_where_clause(
     severity: Optional[str] = None,
     min_severity: Optional[str] = None,
     rule_id: Optional[str] = None,
@@ -257,16 +255,14 @@ def query_waf_events(
     uri_type: Optional[str] = None,
     hours: Optional[int] = None,
     blocked_only: bool = True,
-) -> Tuple[List[Dict], int]:
+) -> str:
     """
-    Paginated, filtered query returning (rows, total_count).
-    Returns ([], 0) when ClickHouse is unreachable.
+    Shared WHERE-clause builder for waf_events queries — used by both
+    query_waf_events() (raw rows) and query_waf_events_grouped() (Events
+    page's collapsed-by-IP+rule view) so the two can never drift on what
+    counts as a match for the same filter inputs.
     """
     SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-
-    client = _get_client()
-    if client is None:
-        return [], 0
 
     where = ["1=1"]
 
@@ -311,7 +307,36 @@ def query_waf_events(
     elif uri_type == "web":
         where.append("uri NOT LIKE '/api%'")
 
-    where_clause = " AND ".join(where)
+    return " AND ".join(where)
+
+
+def query_waf_events(
+    page: int = 1,
+    size: int = 50,
+    severity: Optional[str] = None,
+    min_severity: Optional[str] = None,
+    rule_id: Optional[str] = None,
+    ip: Optional[str] = None,
+    attack_type: Optional[str] = None,
+    status_code: Optional[str] = None,
+    search: Optional[str] = None,
+    uri_type: Optional[str] = None,
+    hours: Optional[int] = None,
+    blocked_only: bool = True,
+) -> Tuple[List[Dict], int]:
+    """
+    Paginated, filtered query returning (rows, total_count).
+    Returns ([], 0) when ClickHouse is unreachable.
+    """
+    client = _get_client()
+    if client is None:
+        return [], 0
+
+    where_clause = _build_waf_events_where_clause(
+        severity=severity, min_severity=min_severity, rule_id=rule_id, ip=ip,
+        attack_type=attack_type, status_code=status_code, search=search,
+        uri_type=uri_type, hours=hours, blocked_only=blocked_only,
+    )
     offset = (page - 1) * size
 
     try:
@@ -366,6 +391,101 @@ def query_waf_events(
 
     except Exception as e:
         logger.error(f"query_waf_events failed: {e}")
+        return [], 0
+
+
+def query_waf_events_grouped(
+    page: int = 1,
+    size: int = 50,
+    severity: Optional[str] = None,
+    min_severity: Optional[str] = None,
+    rule_id: Optional[str] = None,
+    ip: Optional[str] = None,
+    attack_type: Optional[str] = None,
+    status_code: Optional[str] = None,
+    search: Optional[str] = None,
+    uri_type: Optional[str] = None,
+    hours: Optional[int] = None,
+    blocked_only: bool = True,
+) -> Tuple[List[Dict], int]:
+    """
+    Same filters as query_waf_events(), but collapses matching events into
+    one row per (client_ip, rule_id) — the Events page's "Grouped" view, for
+    surfacing e.g. "this IP hit this rule 47 times" instead of 47 identical-
+    looking rows. `total` here is the count of distinct groups, not events.
+
+    Each group's severity/attack_type/message/sample_uri/country come from
+    that group's most recent event (argMax(..., timestamp)), so a group
+    reflects its latest occurrence rather than an arbitrary member.
+    """
+    client = _get_client()
+    if client is None:
+        return [], 0
+
+    where_clause = _build_waf_events_where_clause(
+        severity=severity, min_severity=min_severity, rule_id=rule_id, ip=ip,
+        attack_type=attack_type, status_code=status_code, search=search,
+        uri_type=uri_type, hours=hours, blocked_only=blocked_only,
+    )
+    offset = (page - 1) * size
+
+    try:
+        count_result = client.query(
+            f"""
+            SELECT count() FROM (
+                SELECT 1 FROM waf_events WHERE {where_clause}
+                GROUP BY client_ip, rule_id
+            )
+            """
+        )
+        total = count_result.result_rows[0][0] if count_result.result_rows else 0
+
+        rows_result = client.query(
+            f"""
+            SELECT client_ip, rule_id,
+                   count() AS event_count,
+                   min(timestamp) AS first_seen,
+                   max(timestamp) AS last_seen,
+                   -- Aliased to *_latest, not the bare column name: aliasing
+                   -- an aggregate as e.g. "severity" collides with the raw
+                   -- `severity` column referenced in the WHERE clause above
+                   -- and ClickHouse's analyzer substitutes the alias back
+                   -- into WHERE, throwing ILLEGAL_AGGREGATION on any filtered
+                   -- query (silently swallowed into an empty result by the
+                   -- except-clause below — confirmed directly against a live
+                   -- instance). The Python-side `columns` list below maps
+                   -- these positionally, so the SQL alias names themselves
+                   -- are otherwise cosmetic.
+                   argMax(severity, timestamp) AS severity_latest,
+                   argMax(attack_type, timestamp) AS attack_type_latest,
+                   argMax(message, timestamp) AS message_latest,
+                   argMax(uri, timestamp) AS sample_uri,
+                   argMax(country, timestamp) AS country_latest
+            FROM waf_events
+            WHERE {where_clause}
+            GROUP BY client_ip, rule_id
+            ORDER BY last_seen DESC
+            LIMIT {int(size)} OFFSET {int(offset)}
+            """
+        )
+
+        columns = [
+            "client_ip", "rule_id", "event_count", "first_seen", "last_seen",
+            "severity", "attack_type", "message", "sample_uri", "country",
+        ]
+
+        result = []
+        for row in rows_result.result_rows:
+            d = dict(zip(columns, row))
+            for field in ("first_seen", "last_seen"):
+                if isinstance(d[field], datetime):
+                    d[field] = d[field].strftime("%Y-%m-%d %H:%M:%S")
+            result.append(d)
+
+        return result, int(total)
+
+    except Exception as e:
+        logger.error(f"query_waf_events_grouped failed: {e}")
         return [], 0
 
 

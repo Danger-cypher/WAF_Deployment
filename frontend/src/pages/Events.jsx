@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Activity, ChevronLeft, ChevronRight, Code, FileText, Globe, Search, ShieldCheck } from 'lucide-react';
-import { getLogs, getGeneralSettings } from '../services/api';
+import { Activity, ChevronLeft, ChevronRight, Code, FileText, Globe, Layers, Search, ShieldCheck } from 'lucide-react';
+import { getLogs, getGroupedLogs, getGeneralSettings } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import LogDetailsModal from '../components/LogDetailsModal';
 import { NoLogsEmptyState, NoSearchResultsEmptyState } from '../components/EmptyStates';
@@ -39,6 +39,15 @@ export default function LiveLogs({ onMarkFalsePositive }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedLogs, setExpandedLogs] = useState(new Set());
 
+  // Grouped ("collapse repeats by IP+Rule") view — opt-in alongside the
+  // default flat timeline. See backend query_waf_events_grouped().
+  const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'grouped'
+  const [groupedLogs, setGroupedLogs] = useState([]);
+  const [groupedTotal, setGroupedTotal] = useState(0);
+  // Per-group drill-down state, keyed by `${client_ip}::${rule_id}`.
+  const [expandedGroups, setExpandedGroups] = useState({});
+  const [exporting, setExporting] = useState(false);
+
   const toggleFocusMode = () => {
     setFocusMode(prev => {
       const next = !prev;
@@ -48,46 +57,95 @@ export default function LiveLogs({ onMarkFalsePositive }) {
     });
   };
 
-  const handleExportReport = () => {
-    if (!logs || logs.length === 0) {
+  // Shared with fetchLogs() below — kept as one function so the export and
+  // the live table can never silently drift on what a given filter means.
+  const buildFilters = () => {
+    const filters = {};
+    if (search.trim()) filters.search = search;
+    if (focusMode) {
+      filters.min_severity = 'High';
+    } else if (severityFilter) {
+      filters.severity = severityFilter;
+    }
+    if (attackFilter) filters.attack_type = attackFilter;
+    if (trafficTab === 'web') filters.uri_type = 'web';
+    else if (trafficTab === 'api') filters.uri_type = 'api';
+    return filters;
+  };
+
+  // Exports the FULL filtered result set, not just the current page — a
+  // page-sized export silently under-reports on any filtered view larger
+  // than one page, which is exactly the situation an analyst pulling an
+  // incident report is usually in. Capped at 3000 rows (the backend's own
+  // per-request ceiling on `size`) since a bigger single export would need
+  // real multi-request pagination.
+  const EXPORT_ROW_CAP = 3000;
+
+  const handleExportReport = async () => {
+    const totalToExport = viewMode === 'grouped' ? groupedTotal : total;
+    if (!totalToExport) {
       showToast('No log data available to export. Please wait for data to load.', 'error');
       return;
     }
-    // Build CSV from currently displayed (filtered) logs
-    const headers = [
-      'Transaction ID', 'Timestamp', 'Client IP', 'Country',
-      'Method', 'URI', 'HTTP Code', 'Severity', 'Attack Type',
-      'Rule ID', 'Message', 'Source ASN'
-    ];
-    const rows = logs.map(log => [
-      log.id || '',
-      log.timestamp || '',
-      log.client_ip || '',
-      log.country || 'Unknown',
-      log.method || '',
-      log.uri || '',
-      log.http_code || '',
-      log.severity || '',
-      log.attack_type || '',
-      log.rule_id || '',
-      (log.message || '').replace(/"/g, '""'),  // escape quotes
-      log.source_asn_org || ''
-    ]);
-    const csv = [
-      headers.join(','),
-      ...rows.map(r => r.map(v => `"${v}"`).join(','))
-    ].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const dateStr = new Date().toISOString().split('T')[0];
-    const tabLabel = trafficTab === 'all' ? 'all' : trafficTab === 'api' ? 'api' : 'web';
-    a.download = `waf_events_${tabLabel}_${dateStr}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    setExporting(true);
+    try {
+      const filters = buildFilters();
+      const exportSize = Math.min(totalToExport, EXPORT_ROW_CAP);
+      const dateStr = new Date().toISOString().split('T')[0];
+      const tabLabel = trafficTab === 'all' ? 'all' : trafficTab === 'api' ? 'api' : 'web';
+
+      let csv;
+      let filenameSuffix;
+      if (viewMode === 'grouped') {
+        const result = await getGroupedLogs(1, exportSize, filters);
+        const headers = [
+          'Client IP', 'Rule ID', 'Event Count', 'First Seen', 'Last Seen',
+          'Severity', 'Attack Type', 'Sample URI', 'Country', 'Message'
+        ];
+        const rows = (result.data || []).map(g => [
+          g.client_ip || '', g.rule_id || '', g.event_count || 0,
+          g.first_seen || '', g.last_seen || '', g.severity || '',
+          g.attack_type || '', g.sample_uri || '', g.country || 'Unknown',
+          (g.message || '').replace(/"/g, '""'),
+        ]);
+        csv = [headers.join(','), ...rows.map(r => r.map(v => `"${v}"`).join(','))].join('\n');
+        filenameSuffix = 'grouped';
+      } else {
+        const result = await getLogs(1, exportSize, filters);
+        const headers = [
+          'Transaction ID', 'Timestamp', 'Client IP', 'Country',
+          'Method', 'URI', 'HTTP Code', 'Severity', 'Attack Type',
+          'Rule ID', 'Message', 'Source ASN'
+        ];
+        const rows = (result.data || []).map(log => [
+          log.id || '', log.timestamp || '', log.client_ip || '',
+          log.country || 'Unknown', log.method || '', log.uri || '',
+          log.http_code || '', log.severity || '', log.attack_type || '',
+          log.rule_id || '', (log.message || '').replace(/"/g, '""'),
+          log.source_asn_org || ''
+        ]);
+        csv = [headers.join(','), ...rows.map(r => r.map(v => `"${v}"`).join(','))].join('\n');
+        filenameSuffix = tabLabel;
+      }
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `waf_events_${filenameSuffix}_${dateStr}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      if (totalToExport > EXPORT_ROW_CAP) {
+        showToast(`Exported the first ${EXPORT_ROW_CAP.toLocaleString()} of ${totalToExport.toLocaleString()} matching rows — narrow the filters to capture the rest.`, 'error');
+      }
+    } catch (err) {
+      showToast('Failed to export report: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setExporting(false);
+    }
   };
 
 
@@ -101,6 +159,43 @@ export default function LiveLogs({ onMarkFalsePositive }) {
       }
       return newSet;
     });
+  };
+
+  const GROUP_DRILLDOWN_CAP = 50;
+
+  const groupKey = (g) => `${g.client_ip}::${g.rule_id}`;
+
+  // Drill-down for a collapsed group: reuses the existing GET /logs
+  // endpoint's ip/rule_id filters (no new backend endpoint needed) to fetch
+  // the individual events behind a group, on demand, capped at 50 — a
+  // group with more than that is directed to narrow filters rather than
+  // rendering a second pagination layer inside an expanded row.
+  const toggleGroupExpand = async (group) => {
+    const key = groupKey(group);
+    setExpandedGroups(prev => {
+      if (prev[key]) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return { ...prev, [key]: { loading: true, events: [], error: '' } };
+    });
+    if (expandedGroups[key]) return; // was open — the toggle above just closed it
+
+    try {
+      const result = await getLogs(1, GROUP_DRILLDOWN_CAP, {
+        ...buildFilters(),
+        ip: group.client_ip,
+        rule_id: group.rule_id,
+      });
+      setExpandedGroups(prev => (
+        prev[key] ? { ...prev, [key]: { loading: false, events: result.data, error: '' } } : prev
+      ));
+    } catch (err) {
+      setExpandedGroups(prev => (
+        prev[key] ? { ...prev, [key]: { loading: false, events: [], error: err.message || 'Failed to load events.' } } : prev
+      ));
+    }
   };
 
   const getReconstructedCommand = (log) => {
@@ -122,7 +217,17 @@ export default function LiveLogs({ onMarkFalsePositive }) {
       setPage(1);
     }, 0);
     return () => clearTimeout(timer);
-  }, [search, severityFilter, attackFilter, focusMode, trafficTab]);
+  }, [search, severityFilter, attackFilter, focusMode, trafficTab, viewMode]);
+
+  // Grouped view sorts by a different field set than the flat view (there's
+  // no per-event 'timestamp' on a group) — reset to each view's natural
+  // default whenever the mode switches, rather than carrying over a sort
+  // field the new view doesn't have.
+  useEffect(() => {
+    setSortField(viewMode === 'grouped' ? 'last_seen' : 'timestamp');
+    setSortOrder('desc');
+    setExpandedGroups({});
+  }, [viewMode]);
 
   const isFetchingLogsRef = useRef(false);
 
@@ -133,20 +238,16 @@ export default function LiveLogs({ onMarkFalsePositive }) {
     if (isFetchingLogsRef.current) return;
     isFetchingLogsRef.current = true;
     try {
-      const filters = {};
-      if (search.trim()) filters.search = search;
-      if (focusMode) {
-        filters.min_severity = 'High';
-      } else if (severityFilter) {
-        filters.severity = severityFilter;
+      const filters = buildFilters();
+      if (viewMode === 'grouped') {
+        const groupedData = await getGroupedLogs(page, size, filters);
+        setGroupedLogs(groupedData.data);
+        setGroupedTotal(groupedData.total);
+      } else {
+        const logsData = await getLogs(page, size, filters);
+        setLogs(logsData.data);
+        setTotal(logsData.total);
       }
-      if (attackFilter) filters.attack_type = attackFilter;
-      if (trafficTab === 'web') filters.uri_type = 'web';
-      else if (trafficTab === 'api') filters.uri_type = 'api';
-
-      const logsData = await getLogs(page, size, filters);
-      setLogs(logsData.data);
-      setTotal(logsData.total);
     } catch (err) {
       console.error('Error fetching logs', err);
     } finally {
@@ -168,7 +269,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
     }
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, size, search, severityFilter, attackFilter, focusMode, trafficTab, refreshInterval, liveUpdates]);
+  }, [page, size, search, severityFilter, attackFilter, focusMode, trafficTab, viewMode, refreshInterval, liveUpdates]);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -209,7 +310,34 @@ export default function LiveLogs({ onMarkFalsePositive }) {
       });
   }, [logs, trafficTab, sortField, sortOrder]);
 
-  const totalPages = Math.ceil(total / size);
+  // Sorts only the currently-fetched page of groups — matches sortedLogs'
+  // same within-page-only sort semantics above (both views are server-
+  // paginated by a fixed order; column-header sort just reorders what's
+  // already on screen, it doesn't re-page).
+  const sortedGroupedLogs = useMemo(() => {
+    return [...groupedLogs].sort((a, b) => {
+      let valA = a[sortField];
+      let valB = b[sortField];
+
+      if (sortField === 'last_seen' || sortField === 'first_seen') {
+        valA = Date.parse(valA) || 0;
+        valB = Date.parse(valB) || 0;
+      } else if (sortField === 'severity') {
+        const severityOrder = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
+        valA = severityOrder[valA] || 0;
+        valB = severityOrder[valB] || 0;
+      } else {
+        valA = valA ?? '';
+        valB = valB ?? '';
+      }
+
+      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [groupedLogs, sortField, sortOrder]);
+
+  const totalPages = Math.ceil((viewMode === 'grouped' ? groupedTotal : total) / size);
 
   const getSortIcon = (field) => {
     if (sortField !== field) return null;
@@ -283,6 +411,35 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             <option value="Unknown">Unknown</option>
           </select>
 
+          {/* Grouped view: collapses repeated events by (Client IP, Rule ID)
+              into one row with a count, so a scanner sweep or a repeat
+              offender doesn't bury the signal under dozens of identical-
+              looking rows. Flat view stays the default/raw timeline. */}
+          <button
+            onClick={() => setViewMode(prev => prev === 'grouped' ? 'flat' : 'grouped')}
+            title={viewMode === 'grouped' ? 'Switch to flat event timeline' : 'Group repeated events by IP + Rule ID'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              borderRadius: '8px',
+              border: viewMode === 'grouped'
+                ? '1px solid var(--accent-color)'
+                : '1px solid rgba(161, 161, 170, 0.3)',
+              background: viewMode === 'grouped' ? 'rgba(0,212,255,0.12)' : 'var(--border-subtle)',
+              color: viewMode === 'grouped' ? 'var(--accent-color)' : 'var(--text-secondary)',
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Layers size={14} />
+            {viewMode === 'grouped' ? 'Grouped View' : 'Flat View'}
+          </button>
+
           {/* Focus Mode: one-click Critical + High only filter for SOC incident response */}
           <button
             onClick={toggleFocusMode}
@@ -312,10 +469,12 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             {focusMode ? 'Focus: Critical + High' : 'Focus Mode'}
           </button>
 
-          {/* Export Report: downloads the currently-filtered logs as structured CSV */}
+          {/* Export Report: downloads the full filtered result set (not just
+              the visible page) as structured CSV — see EXPORT_ROW_CAP above. */}
           <button
             onClick={handleExportReport}
-            title="Export currently filtered events as a structured CSV report"
+            disabled={exporting}
+            title="Export all currently filtered events as a structured CSV report"
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -327,11 +486,13 @@ export default function LiveLogs({ onMarkFalsePositive }) {
               color: 'var(--success-color)',
               fontSize: '13px',
               fontWeight: 600,
-              cursor: 'pointer',
+              cursor: exporting ? 'default' : 'pointer',
+              opacity: exporting ? 0.6 : 1,
               transition: 'all 0.2s ease',
               whiteSpace: 'nowrap',
             }}
             onMouseEnter={e => {
+              if (exporting) return;
               e.currentTarget.style.background = 'rgba(16,185,129,0.15)';
               e.currentTarget.style.borderColor = 'rgba(16,185,129,0.6)';
             }}
@@ -341,7 +502,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             }}
           >
             <FileText size={14} />
-            Export Report
+            {exporting ? 'Exporting...' : 'Export Report'}
           </button>
 
         </div>
@@ -363,7 +524,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
           transition: 'all 0.3s ease',
         }}>
           <ShieldCheck size={13} color="var(--danger-color)" style={{ flexShrink: 0 }} />
-          <span><strong style={{ color: 'var(--danger-color)' }}>Focus Mode active</strong> · Showing Critical &amp; High severity events only · <span style={{ color: 'var(--text-secondary)' }}>{total} event{total !== 1 ? 's' : ''} matched</span></span>
+          <span><strong style={{ color: 'var(--danger-color)' }}>Focus Mode active</strong> · Showing Critical &amp; High severity events only · <span style={{ color: 'var(--text-secondary)' }}>{viewMode === 'grouped' ? `${groupedTotal} group${groupedTotal !== 1 ? 's' : ''}` : `${total} event${total !== 1 ? 's' : ''}`} matched</span></span>
         </div>
       )}
 
@@ -459,7 +620,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                   fontFamily: '"JetBrains Mono", monospace',
                   boxShadow: `inset 0 1px 2px rgba(0,0,0,0.5)`,
                 }}>
-                  {total.toLocaleString()}
+                  {(viewMode === 'grouped' ? groupedTotal : total).toLocaleString()}
                 </div>
               )}
             </button>
@@ -467,6 +628,22 @@ export default function LiveLogs({ onMarkFalsePositive }) {
         })}
       </div>
 
+      {viewMode === 'grouped' && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px',
+          padding: '8px 14px', borderRadius: '8px',
+          background: 'rgba(0,212,255,0.06)', border: '1px solid rgba(0,212,255,0.2)',
+          fontSize: '12px', color: 'var(--text-muted)',
+        }}>
+          <Layers size={13} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+          <span>
+            <strong style={{ color: 'var(--accent-color)' }}>Grouped View</strong> · Repeated events from the
+            same IP against the same rule are collapsed into one row · click a row to see the individual events
+          </span>
+        </div>
+      )}
+
+      {viewMode === 'flat' ? (
         <div className="logs-table-wrapper" style={{ marginTop: '0', borderTopLeftRadius: '0', borderTopRightRadius: '0' }}>
           <table className="logs-table">
             <thead>
@@ -606,6 +783,157 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             </tbody>
           </table>
         </div>
+      ) : (
+        <div className="logs-table-wrapper" style={{ marginTop: '0', borderTopLeftRadius: '0', borderTopRightRadius: '0' }}>
+          <table className="logs-table">
+            <thead>
+              <tr>
+                <th onClick={() => handleSort('last_seen')} style={{ cursor: 'pointer', userSelect: 'none' }}>Last Seen {getSortIcon('last_seen')}</th>
+                <th onClick={() => handleSort('client_ip')} style={{ cursor: 'pointer', userSelect: 'none' }}>Source IP {getSortIcon('client_ip')}</th>
+                <th onClick={() => handleSort('severity')} style={{ cursor: 'pointer', userSelect: 'none' }}>Severity {getSortIcon('severity')}</th>
+                <th onClick={() => handleSort('attack_type')} style={{ cursor: 'pointer', userSelect: 'none' }}>Attack Type {getSortIcon('attack_type')}</th>
+                <th onClick={() => handleSort('rule_id')} style={{ cursor: 'pointer', userSelect: 'none' }}>Rule ID {getSortIcon('rule_id')}</th>
+                <th onClick={() => handleSort('event_count')} style={{ cursor: 'pointer', userSelect: 'none' }}>Count {getSortIcon('event_count')}</th>
+                <th>Sample URI</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && sortedGroupedLogs.length === 0 ? (
+                <tr>
+                  <td colSpan="8" style={{ textAlign: 'center', padding: '60px', color: 'var(--text-secondary)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+                      <Activity className="animate-spin" size={20} /> Loading live CyberSentinel Engine logs...
+                    </div>
+                  </td>
+                </tr>
+              ) : sortedGroupedLogs.length === 0 && search.trim() === '' ? (
+                <tr>
+                  <td colSpan="8" style={{ padding: 0 }}>
+                    <NoLogsEmptyState />
+                  </td>
+                </tr>
+              ) : sortedGroupedLogs.length === 0 ? (
+                <tr>
+                  <td colSpan="8" style={{ padding: 0 }}>
+                    <NoSearchResultsEmptyState
+                      searchTerm={search || severityFilter || attackFilter}
+                      onClear={() => {
+                        setSearch('');
+                        setSeverityFilter('');
+                        setAttackFilter('');
+                      }}
+                    />
+                  </td>
+                </tr>
+              ) : (
+                sortedGroupedLogs.map((group, index) => {
+                  const key = groupKey(group);
+                  const expanded = expandedGroups[key];
+                  return (
+                    <React.Fragment key={key}>
+                      <tr style={{ background: index === 0 ? 'rgba(0, 212, 255, 0.03)' : 'transparent' }}>
+                        <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{formatLocalTime(group.last_seen)}</td>
+                        <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 600 }}>
+                          <span style={{ marginRight: '6px' }} title={group.severity}>
+                            {group.severity === 'Critical' ? '💀' : group.severity === 'High' ? '🔥' : 'ℹ️'}
+                          </span>
+                          {group.client_ip || '-'}
+                        </td>
+                        <td>
+                          <span className={`severity-badge severity-${(group.severity || 'low').toLowerCase()}`}>
+                            {group.severity || 'Low'}
+                          </span>
+                        </td>
+                        <td style={{ fontWeight: 500 }}>{group.attack_type || '-'}</td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{group.rule_id || '-'}</td>
+                        <td>
+                          <span style={{
+                            fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '13px',
+                            color: group.event_count >= 10 ? 'var(--danger-color)' : 'var(--text-primary)',
+                          }}>
+                            {group.event_count}
+                          </span>
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>
+                          {group.sample_uri || '-'}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <button
+                            className="action-btn-inspect"
+                            onClick={(e) => { e.stopPropagation(); toggleGroupExpand(group); }}
+                          >
+                            {expanded ? 'Hide Events' : 'View Events'}
+                          </button>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="expanded-log-row">
+                          <td colSpan="8" style={{ padding: '16px 24px', background: 'var(--sev-low-bg)', borderBottom: '1px solid var(--sev-low-border)' }}>
+                            {expanded.loading ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', fontSize: '12px' }}>
+                                <Activity className="animate-spin" size={14} /> Loading individual events...
+                              </div>
+                            ) : expanded.error ? (
+                              <div style={{ color: 'var(--danger-color)', fontSize: '12px' }}>{expanded.error}</div>
+                            ) : (
+                              <>
+                                {group.event_count > GROUP_DRILLDOWN_CAP && (
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                                    Showing {GROUP_DRILLDOWN_CAP} of {group.event_count} — narrow filters (e.g. add a time window) to see the rest.
+                                  </div>
+                                )}
+                                <table className="logs-table" style={{ background: 'var(--inset-bg)' }}>
+                                  <thead>
+                                    <tr>
+                                      <th>Time</th>
+                                      <th>Status</th>
+                                      <th>URI</th>
+                                      <th style={{ textAlign: 'right' }}>Actions</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {expanded.events.map(ev => (
+                                      <tr key={ev.id}>
+                                        <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{formatLocalTime(ev.timestamp)}</td>
+                                        <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{ev.http_code || '-'}</td>
+                                        <td style={{ fontFamily: 'monospace', fontSize: '12px', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.uri || '-'}</td>
+                                        <td style={{ textAlign: 'right' }}>
+                                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                            {onMarkFalsePositive && (
+                                              <button
+                                                className="action-btn-inspect"
+                                                onClick={() => onMarkFalsePositive(ev)}
+                                                style={{ borderColor: 'rgba(16, 185, 129, 0.4)', color: 'var(--success-color)' }}
+                                              >
+                                                Mark as FP
+                                              </button>
+                                            )}
+                                            <button
+                                              className="action-btn-inspect"
+                                              onClick={() => { setSelectedLog(ev); setIsModalOpen(true); }}
+                                            >
+                                              Inspect Log
+                                            </button>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
         {totalPages > 1 && (
           <div className="pagination-container">
@@ -617,7 +945,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
               <ChevronLeft size={16} /> Previous
             </button>
             <span className="pagination-info">
-              Page <strong style={{ color: 'var(--text-primary)' }}>{page}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong> ({total} total logs)
+              Page <strong style={{ color: 'var(--text-primary)' }}>{page}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong> ({viewMode === 'grouped' ? `${groupedTotal} groups` : `${total} total logs`})
             </span>
             <button
               className="pagination-btn"

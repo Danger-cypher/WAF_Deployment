@@ -13,7 +13,7 @@ import asyncio
 from fastapi import APIRouter, Query, Depends, HTTPException
 from typing import Optional
 
-from app.models.response_models import PaginatedLogs
+from app.models.response_models import PaginatedLogs, PaginatedGroupedLogs
 from app.models.log_model import LogEntry
 from app.services.auth import require_any_role, require_admin, TokenData
 from app.services import clickhouse_service
@@ -74,6 +74,44 @@ async def get_logs(
     data = [_row_to_log_entry(r) for r in rows]
 
     return PaginatedLogs(data=data, total=total, page=page, size=size)
+
+
+@router.get("/logs/grouped", response_model=PaginatedGroupedLogs)
+async def get_logs_grouped(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=3000),
+    severity: Optional[str] = None,
+    min_severity: Optional[str] = None,
+    rule_id: Optional[str] = None,
+    ip: Optional[str] = None,
+    attack_type: Optional[str] = None,
+    status_code: Optional[str] = None,
+    search: Optional[str] = None,
+    uri_type: Optional[str] = None,
+    hours: Optional[int] = None,
+    current_user: TokenData = Depends(require_any_role),
+):
+    """
+    Same filters as GET /logs, but collapses events into one row per
+    (client_ip, rule_id) — the Events page's "Grouped" view. `total` here
+    counts distinct groups, not raw events.
+    """
+    rows, total = await asyncio.to_thread(
+        clickhouse_service.query_waf_events_grouped,
+        page=page,
+        size=size,
+        severity=severity,
+        min_severity=min_severity,
+        rule_id=rule_id,
+        ip=ip,
+        attack_type=attack_type,
+        status_code=status_code,
+        search=search,
+        uri_type=uri_type,
+        hours=hours,
+        blocked_only=True,
+    )
+    return PaginatedGroupedLogs(data=rows, total=total, page=page, size=size)
 
 
 @router.get("/logs/{log_id}", response_model=LogEntry)
