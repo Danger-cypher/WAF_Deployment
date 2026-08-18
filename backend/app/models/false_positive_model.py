@@ -28,6 +28,10 @@ class FalsePositiveResponse(BaseModel):
     analyst_note: str
     raw_log: Dict[str, Any]
     created_by: str = "system"
+    # Best-effort suggestion for the Exceptions modal's exclusion_type/parameter_name
+    # fields, derived by parsing the matched-variable string CRS already puts in
+    # raw_log — never auto-applied, purely a prefill the analyst can override.
+    suggested_exclusion: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True

@@ -9,9 +9,16 @@ from app.models.false_positive_model import (
     FalsePositiveNoteUpdateRequest,
     FalsePositiveResponse,
 )
-from app.services import db_service
+from app.services import db_service, rule_manager
 from app.services.auth import require_admin, require_any_role, TokenData
 from app.services.log_reader import get_all_logs
+
+
+def _attach_suggestion(entry: dict) -> dict:
+    entry["suggested_exclusion"] = rule_manager.suggest_exclusion(
+        entry.get("raw_log"), entry.get("rule_id", ""), entry.get("uri")
+    )
+    return entry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -81,6 +88,7 @@ async def mark_log_as_false_positive(
         created["raw_log"] = json.loads(created["raw_log"])
     except Exception:
         created["raw_log"] = raw_log_dict
+    _attach_suggestion(created)
 
     logger.info(
         f"Log {request.log_id} flagged as a false positive by {current_user.username}."
@@ -106,6 +114,7 @@ async def list_false_positives(
             entry["raw_log"] = json.loads(entry["raw_log"])
         except Exception:
             entry["raw_log"] = {}
+        _attach_suggestion(entry)
     return entries
 
 

@@ -922,6 +922,104 @@ def sync_rules_and_exclusions() -> Tuple[bool, str]:
     return reload_ok, reload_msg
 
 
+# CRS's audit "match" string looks like:
+#   Matched "Operator `Rx' with parameter `...' against variable `ARGS:view' (Value: `...' )"
+# and always wraps the matched variable in backticks. This is a stable format
+# across CRS versions (it's produced by ModSecurity core's own logging, not
+# CRS rule authors), unlike rule messages themselves which vary rule-to-rule.
+_MATCHED_VAR_RE = re.compile(r"variable `([A-Za-z_]+)(?::([^`]+))?`")
+
+
+def suggest_exclusion(raw_log: Optional[Dict[str, Any]], rule_id: str, uri: Optional[str]) -> Dict[str, Any]:
+    """
+    Best-effort suggestion for which exclusion_type/parameter_name an analyst
+    should pick when turning a false positive into an exclusion. Purely a
+    prefill for the CreateExceptionModal — never applied automatically, and
+    it only ever narrows down among the SAME pass-type exclusion_type choices
+    already presented in the UI, so it has zero effect on ModSecurity's
+    blocking behavior, the CRS ruleset, or the ML model's scoring/labeling
+    pipeline (which don't consult this at all).
+
+    Returns {"exclusion_type", "parameter_name", "confidence", "reasoning"}.
+    """
+    fallback = {
+        "exclusion_type": "uri",
+        "parameter_name": None,
+        "confidence": "low",
+        "reasoning": "No matched-variable detail found in the captured log for this "
+                     "rule — defaulting to a URI-scoped exclusion. Review carefully "
+                     "before applying.",
+    }
+
+    if not raw_log or not uri:
+        return fallback
+
+    messages = (
+        raw_log.get("transaction", {}).get("messages", [])
+        if isinstance(raw_log, dict) else []
+    )
+
+    matched_var, matched_name = None, None
+    for m in messages:
+        details = m.get("details", {}) if isinstance(m, dict) else {}
+        if str(details.get("ruleId", "")) != str(rule_id):
+            continue
+        match_str = details.get("match", "") or details.get("data", "")
+        found = _MATCHED_VAR_RE.search(match_str)
+        if found:
+            matched_var, matched_name = found.group(1), found.group(2)
+            break
+
+    if matched_var is None:
+        return fallback
+
+    is_root_uri = uri.strip() in ("", "/")
+
+    if matched_var in ("ARGS", "ARGS_GET", "ARGS_POST") and matched_name:
+        if not is_root_uri:
+            return {
+                "exclusion_type": "uri_parameter",
+                "parameter_name": matched_name,
+                "confidence": "high",
+                "reasoning": f"CRS matched rule {rule_id} against parameter "
+                             f"'{matched_name}' on this specific URI — scoping the "
+                             f"exclusion to this parameter+URI pair is narrower and "
+                             f"safer than removing the rule globally.",
+            }
+        return {
+            "exclusion_type": "parameter",
+            "parameter_name": matched_name,
+            "confidence": "medium",
+            "reasoning": f"CRS matched rule {rule_id} against parameter "
+                         f"'{matched_name}', but no specific endpoint URI was "
+                         f"captured — falling back to a global parameter exclusion. "
+                         f"Confirm this parameter is safe on every endpoint.",
+        }
+
+    if matched_var == "REQUEST_URI" or (matched_var.startswith("ARGS") and not matched_name):
+        return {
+            "exclusion_type": "uri",
+            "parameter_name": None,
+            "confidence": "high",
+            "reasoning": f"CRS matched rule {rule_id} against the request URI/path "
+                         f"itself rather than a specific parameter — a URI-scoped "
+                         f"exclusion is the correct match.",
+        }
+
+    # Headers, cookies, request body, etc. have no dedicated exclusion_type in
+    # this schema — URI scoping is the closest safe option, but flagged low
+    # confidence since it's broader than the actual match.
+    return {
+        "exclusion_type": "uri",
+        "parameter_name": None,
+        "confidence": "low",
+        "reasoning": f"CRS matched rule {rule_id} against {matched_var}"
+                     f"{(':' + matched_name) if matched_name else ''}, which has no "
+                     f"dedicated exclusion scope in this system — defaulting to a "
+                     f"URI-scoped exclusion. Review carefully before applying.",
+    }
+
+
 def generate_modsec_rule(
     exclusion_type: str,
     rule_id: str,

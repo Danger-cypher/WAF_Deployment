@@ -32,9 +32,10 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
   useEffect(() => {
     if (isOpen && log) {
       const timer = setTimeout(() => {
-        setExclusionType('uri');
+        const suggestion = log.suggested_exclusion;
+        setExclusionType(suggestion?.exclusion_type || 'uri');
         setUri(log.uri || '/');
-        setParameterName('');
+        setParameterName(suggestion?.parameter_name || '');
         setHttpMethod(log.method || 'GET');
         setClientIp(log.client_ip || '');
         setNotes('');
@@ -134,6 +135,22 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
                 <div style={{ fontWeight: 600, color: 'var(--sev-medium)', marginTop: '2px' }}>{log.attack_type}</div>
               </div>
             </div>
+
+            {log.suggested_exclusion && (
+              <div style={{
+                display: 'flex', gap: '8px', alignItems: 'flex-start',
+                background: 'var(--sev-low-bg)', border: '1px solid var(--sev-low-border)',
+                borderRadius: '6px', padding: '10px 12px', fontSize: '12px',
+              }}>
+                <ShieldCheck size={16} color="var(--sev-low)" style={{ flexShrink: 0, marginTop: '1px' }} />
+                <div>
+                  <div style={{ fontWeight: 600, color: 'var(--sev-low)', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.03em', marginBottom: '2px' }}>
+                    Suggested strategy ({log.suggested_exclusion.confidence} confidence) — prefilled below, review before applying
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)' }}>{log.suggested_exclusion.reasoning}</div>
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Exception Strategy</label>
