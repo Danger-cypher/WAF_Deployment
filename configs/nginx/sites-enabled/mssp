@@ -44,6 +44,16 @@ server {
     modsecurity_rules_file /etc/nginx/modsec/positive-security.conf;
     modsecurity_rules_file /etc/nginx/modsec/app-auth/app_7.conf;
 
+    error_page 403 /__waf_block_page__.html;
+    location = /__waf_block_page__.html {
+        internal;
+        alias /etc/nginx/custom_pages/waf_block.html;
+        default_type text/html;
+        sub_filter_types text/html;
+        sub_filter '{{transaction_id}}' $request_id;
+        sub_filter_once off;
+    }
+
     location @json_forbidden {
         default_type application/json;
         add_header Content-Type 'application/json; charset=utf-8' always;
