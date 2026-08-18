@@ -3,11 +3,14 @@ import os
 import shutil
 import subprocess
 import asyncio
+import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from app.services import db_service, nginx_manager
 from app.services.auth import require_admin, require_any_role, TokenData
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -257,6 +260,30 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_admi
             detail=f"Failed to update Nginx config or reload service. Reverting database changes. {err_msg}"
         )
 
+    # Best-effort cleanup of any provisioned cert/key files — previously
+    # left behind indefinitely on disk (including the private key) after
+    # the app referencing them was gone. Never fatal: the app is already
+    # deleted and nginx already reloaded by this point, so a cleanup
+    # failure here shouldn't be reported as a failed delete.
+    ssl_option = existing_app.get("ssl_option")
+    if ssl_option in ("letsencrypt", "custom"):
+        try:
+            cert_dir = _safe_cert_dir(ssl_option, existing_app["domain"])
+            shutil.rmtree(cert_dir, ignore_errors=True)
+        except Exception as e:
+            logger.warning(f"Failed to clean up cert directory for deleted app {app_id}: {e}")
+
+    # Same gap, same fix, for the per-app require-auth conf file — it's
+    # only ever referenced by this app's own (now regenerated) server
+    # block, so once the app is gone the file is pure orphaned disk state.
+    try:
+        from app.services.nginx_manager import app_auth_conf_path
+        auth_conf_path = app_auth_conf_path(app_id)
+        if os.path.exists(auth_conf_path):
+            os.remove(auth_conf_path)
+    except Exception as e:
+        logger.warning(f"Failed to clean up app-auth conf for deleted app {app_id}: {e}")
+
     return {"message": "Protected application deleted successfully!"}
 
 
@@ -323,7 +350,6 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
 
 # Shared directory for per-domain certs (inside the container's nginx ssl dir)
 SSL_DIR = "/etc/nginx/ssl"
-ACME_WEBROOT = "/etc/nginx/acme-challenge"
 
 
 def _safe_cert_dir(subdir: str, domain: str) -> str:
@@ -349,7 +375,15 @@ async def provision_letsencrypt(
     """
     Trigger Let's Encrypt certificate provisioning for a domain-based protected app.
     Uses the HTTP-01 challenge via the shared acme-challenge webroot.
-    Requires certbot installed on the host (available via host volume or container).
+
+    Runs certbot inside the dedicated `waf-certbot` container (docker-compose's
+    `certbot` service — image certbot/certbot, only otherwise running a
+    `certbot renew` loop that does nothing for a brand-new domain) via
+    `docker exec`, the same mechanism nginx_manager.reload_nginx() already
+    uses for `docker exec waf-openresty ...` through the docker-socket-proxy.
+    The backend's own container has no certbot binary installed — a previous
+    version of this route tried to run a local `certbot` binary directly and
+    could never succeed (always hit FileNotFoundError).
     """
     app = db_service.get_protected_app_by_id(app_id)
     if not app:
@@ -362,58 +396,51 @@ async def provision_letsencrypt(
             detail="Let's Encrypt requires a real domain name, not a wildcard or catch-all."
         )
 
-    # Cert + key will be written here by certbot, then symlinked to nginx ssl dir
+    # Cert output location as seen from THIS (backend) container.
+    # `./configs/nginx/ssl/letsencrypt` on the host is bind-mounted as
+    # `/etc/letsencrypt/live` inside waf-certbot (docker-compose.yml), and
+    # separately as `/etc/nginx/ssl/letsencrypt` inside both this backend
+    # container (via the broader `./configs/nginx:/etc/nginx` mount) and
+    # waf-openresty — so whatever certbot writes to its own `live/{domain}/`
+    # is immediately visible here at the same relative path, no copying
+    # needed. SSL_DIR = "/etc/nginx/ssl", so this is that same shared host
+    # directory.
     cert_dir = _safe_cert_dir("letsencrypt", domain)
-    os.makedirs(cert_dir, exist_ok=True)
-    os.makedirs(ACME_WEBROOT, exist_ok=True)
+
+    # certbot's own container mounts the shared acme-challenge directory at
+    # `/acme-challenge` (docker-compose.yml's `certbot` service) — that's
+    # the webroot path *inside waf-certbot*. A previous version of this
+    # route used a webroot path local to the backend's own container
+    # instead, which pointed at a directory openresty/certbot never share
+    # with the backend at all — a request for /.well-known/acme-challenge/
+    # would never have found the token certbot expected to place there.
+    CERTBOT_CONTAINER_WEBROOT = "/acme-challenge"
 
     try:
-        # Try certbot inside container first, then fall back to host via docker exec
-        certbot_cmds = [
-            [
-                "certbot", "certonly",
-                "--webroot", "-w", ACME_WEBROOT,
-                "-d", domain,
-                "--non-interactive",
-                "--agree-tos",
-                "--email", "admin@" + domain,
-                "--cert-path", os.path.join(cert_dir, "cert.pem"),
-                "--key-path", os.path.join(cert_dir, "key.pem"),
-                "--fullchain-path", os.path.join(cert_dir, "fullchain.pem"),
-            ],
-            # Fallback: host certbot writing to letsencrypt default path
-            [
-                "certbot", "certonly",
-                "--webroot", "-w", ACME_WEBROOT,
-                "-d", domain,
-                "--non-interactive",
-                "--agree-tos",
-                "--email", "admin@" + domain,
-            ],
+        cmd = [
+            "docker", "exec", "waf-certbot",
+            "certbot", "certonly",
+            "--webroot", "-w", CERTBOT_CONTAINER_WEBROOT,
+            "-d", domain,
+            "--non-interactive",
+            "--agree-tos",
+            "--email", "admin@" + domain,
         ]
 
-        output = None
-        last_error = None
-        for cmd in certbot_cmds:
-            try:
-                # subprocess.run() blocks — up to 120s per attempt, up to two
-                # attempts. Running that inline on the event loop would stall
-                # every other logged-in user's request for the same duration.
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    cmd, capture_output=True, text=True, timeout=120  # nosec B603
-                )
-                if result.returncode == 0:
-                    output = result.stdout
-                    break
-                else:
-                    last_error = result.stderr.strip()
-            except FileNotFoundError:
-                last_error = "certbot binary not found in this path"
-                continue
-            except subprocess.TimeoutExpired:
-                last_error = "certbot timed out after 120s"
-                continue
+        try:
+            # subprocess.run() blocks — running it inline on the event loop
+            # would stall every other logged-in user's request for the
+            # full duration (real ACME HTTP-01 validation can take a while).
+            result = await asyncio.to_thread(
+                subprocess.run,
+                cmd, capture_output=True, text=True, timeout=120  # nosec B603 B607
+            )
+            output = result.stdout if result.returncode == 0 else None
+            last_error = None if result.returncode == 0 else result.stderr.strip()
+        except FileNotFoundError:
+            output, last_error = None, "docker CLI not available in this container"
+        except subprocess.TimeoutExpired:
+            output, last_error = None, "certbot timed out after 120s"
 
         if output is None:
             raise HTTPException(
@@ -421,17 +448,25 @@ async def provision_letsencrypt(
                 detail=f"certbot failed: {last_error}"
             )
 
-        # Resolve cert paths — prefer explicit output, fall back to /etc/letsencrypt default
+        # certbot's real output filenames are fullchain.pem + privkey.pem
+        # (not "key.pem" — a previous version of this code looked for the
+        # wrong filename here and would have saved a ssl_key_path pointing
+        # at a file that never exists, breaking the app's SSL config once
+        # NGINX was resynced). No copying needed: cert_dir already IS the
+        # shared host directory waf-certbot just wrote into (see comment
+        # on cert_dir above), so a successful certbot run means these
+        # files already exist here.
         fullchain = os.path.join(cert_dir, "fullchain.pem")
-        privkey = os.path.join(cert_dir, "key.pem")
-        if not os.path.exists(fullchain):
-            # Fallback: symlink from /etc/letsencrypt/live/{domain}/
-            le_live = f"/etc/letsencrypt/live/{domain}"
-            if os.path.exists(le_live):
-                src_chain = os.path.join(le_live, "fullchain.pem")
-                src_key = os.path.join(le_live, "privkey.pem")
-                shutil.copy2(src_chain, fullchain)
-                shutil.copy2(src_key, privkey)
+        privkey = os.path.join(cert_dir, "privkey.pem")
+        if not os.path.exists(fullchain) or not os.path.exists(privkey):
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"certbot reported success but {fullchain} was not found on the "
+                    "shared certificate volume — check the waf-certbot container's "
+                    "mounts match this backend's expectations."
+                ),
+            )
 
         # Persist paths to DB
         db_service.update_protected_app(

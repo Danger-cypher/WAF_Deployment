@@ -101,8 +101,11 @@ async def health_check():
         _health_cache["redis_ts"] = now
     redis_ok = _health_cache["redis_ok"]
 
-    # ML engine availability (env var check — instant)
-    ml_enabled = bool(os.environ.get("ML_HOST", ""))
+    # ML engine availability (env var check — instant). docker-compose sets
+    # ML_API (e.g. http://waf-ml:9000), not ML_HOST — this previously always
+    # read the wrong var and reported ml_enabled=false even when the ML
+    # engine was reachable and working (confirmed via /ml/stats).
+    ml_enabled = bool(os.environ.get("ML_API", ""))
 
     return HealthResponse(
         status="ok" if (db_ok and clickhouse_ok) else "warning",

@@ -16,6 +16,12 @@
 backend/app/config/settings.json
 /etc/cybersentinel/redis.secret
 
+# certbot's own account registration/private-key state (ACME account keys,
+# not just issued certs — *.key/*.pem above only cover the certs themselves)
+configs/certbot/config/
+configs/certbot/work/
+configs/certbot/logs/
+
 # ──────────────────────────────────────────────────────────────────────────
 # Python
 # ──────────────────────────────────────────────────────────────────────────
