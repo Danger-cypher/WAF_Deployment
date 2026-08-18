@@ -2,6 +2,41 @@
 # CyberSentinel WAF — Core Services Orchestration (Self-Contained)
 # =============================================================================
 services:
+  # Scoped proxy in front of the host's Docker socket. The backend needs to
+  # `docker exec`/`docker restart` the waf-openresty and waf-ml containers
+  # (reload config, restart the engine) — previously it did that by mounting
+  # /var/run/docker.sock directly, which hands it root-equivalent control of
+  # every container AND the host (create/delete containers, mount arbitrary
+  # host paths into a new privileged container, read any other container's
+  # env vars/secrets, etc.) if the backend is ever compromised via an authz
+  # bug. This proxy (github.com/Tecnativa/docker-socket-proxy) sits between
+  # the backend and the real socket and only allows the handful of API calls
+  # `docker exec`/`docker restart`/`docker --version` actually need —
+  # everything else (container create/delete, image pull, volume/network
+  # management, exec into arbitrary OTHER containers) is denied at the proxy,
+  # not just "not currently used."
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: waf-docker-socket-proxy
+    restart: unless-stopped
+    environment:
+      # Read-only container listing — needed for the Docker CLI to resolve
+      # a container name to an ID before exec/restart.
+      CONTAINERS: 1
+      # Needed for `docker exec waf-openresty ...` (reload/test nginx config).
+      EXEC: 1
+      # Needed for `docker restart waf-openresty` / `waf-ml`.
+      RESTART: 1
+      POST: 1
+      # Everything else stays at its default-deny (images, volumes, networks,
+      # container create/delete, swarm, secrets, etc. are all off).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    expose:
+      - "2375"
+    networks:
+      - waf-network
+
   backend:
     build: ./backend
     container_name: waf-backend
@@ -17,8 +52,6 @@ services:
       - ./logs/nginx:/var/log/nginx:ro
       # GeoIP2 Databases folder mapping
       - ./backend/app/data:/etc/nginx/geoip:ro
-      # Docker control interface (for service state discovery)
-      - /var/run/docker.sock:/var/run/docker.sock
       # Scripts directory mount for migration
       - ./scripts:/app/scripts:ro
       - /etc/localtime:/etc/localtime:ro
@@ -26,6 +59,9 @@ services:
     expose:
       - "8000"
     environment:
+      # Points the `docker` CLI (installed in backend/Dockerfile) at the
+      # scoped proxy above instead of a raw socket mount.
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
       ML_API: http://waf-ml:9000
       REDIS_HOST: waf-redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
@@ -42,6 +78,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      docker-socket-proxy:
+        condition: service_started
       ml-engine:
         condition: service_started
       redis:

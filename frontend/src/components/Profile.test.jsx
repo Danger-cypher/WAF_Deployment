@@ -105,6 +105,12 @@ describe('Profile', () => {
   });
 
   it('disabling MFA requires both password and code before submitting', async () => {
+    // The confirm button is intentionally always clickable (not disabled
+    // based on React input state) — a password-manager autofill can fill
+    // the DOM without firing React's onChange, which previously left the
+    // button silently, permanently disabled with zero feedback. Validation
+    // now happens on click instead, so an incomplete form always produces a
+    // visible error rather than doing nothing.
     api.getMyMfaStatus.mockResolvedValue({ enabled: true });
     api.disableMyMfa.mockResolvedValue({ enabled: false });
 
@@ -113,12 +119,14 @@ describe('Profile', () => {
 
     await user.click(await screen.findByRole('button', { name: /^disable$/i }));
     const confirmBtn = await screen.findByRole('button', { name: /confirm disable/i });
-    expect(confirmBtn).toBeDisabled();
+    expect(confirmBtn).not.toBeDisabled();
+
+    await user.click(confirmBtn);
+    expect(await screen.findByText(/enter your current password and the 6-digit code/i)).toBeInTheDocument();
+    expect(api.disableMyMfa).not.toHaveBeenCalled();
 
     await user.type(screen.getByPlaceholderText(/current password to confirm/i), 'MyPassword123!');
     await user.type(screen.getByPlaceholderText(/6-digit code/i), '654321');
-    expect(confirmBtn).not.toBeDisabled();
-
     await user.click(confirmBtn);
     await waitFor(() => {
       expect(api.disableMyMfa).toHaveBeenCalledWith('MyPassword123!', '654321');

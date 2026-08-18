@@ -149,6 +149,18 @@ export default function Profile({ onClose }) {
   };
 
   const handleDisableMfa = async () => {
+    // Previously the "Confirm Disable" button was disabled={!mfaDisablePassword
+    // || mfaDisableCode.length !== 6} — gated entirely on React state that only
+    // updates via onChange. Browser/password-manager autofill on a password
+    // field frequently fills the DOM without firing a synthetic onChange, so
+    // the field looks filled but the button silently stays disabled forever
+    // with zero feedback — indistinguishable from "the feature doesn't work."
+    // The button below is no longer hard-disabled; validate here instead, so
+    // a click always does SOMETHING visible.
+    if (!mfaDisablePassword || mfaDisableCode.length !== 6) {
+      showToast('Enter your current password and the 6-digit code to disable 2FA.', 'error');
+      return;
+    }
     setMfaSavingDisable(true);
     try {
       const status = await disableMyMfa(mfaDisablePassword, mfaDisableCode);
@@ -374,6 +386,7 @@ export default function Profile({ onClose }) {
                       <label htmlFor="mfa-disable-password" style={labelStyle}>Current Password</label>
                       <input
                         id="mfa-disable-password" style={inputStyle} type="password" value={mfaDisablePassword}
+                        autoComplete="current-password"
                         onChange={(e) => setMfaDisablePassword(e.target.value)} placeholder="Current password to confirm"
                       />
                     </div>
@@ -381,8 +394,9 @@ export default function Profile({ onClose }) {
                       <label htmlFor="mfa-disable-code" style={labelStyle}>Verification Code</label>
                       <input
                         id="mfa-disable-code" style={inputStyle} value={mfaDisableCode} maxLength={6}
+                        autoComplete="one-time-code" inputMode="numeric"
                         onChange={(e) => setMfaDisableCode(e.target.value)} placeholder="6-digit code"
-                        onKeyDown={(e) => { if (e.key === 'Enter' && mfaDisablePassword && mfaDisableCode.length === 6) handleDisableMfa(); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleDisableMfa(); }}
                       />
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -390,7 +404,6 @@ export default function Profile({ onClose }) {
                         variant="danger"
                         size="sm"
                         loading={mfaSavingDisable}
-                        disabled={!mfaDisablePassword || mfaDisableCode.length !== 6}
                         onClick={handleDisableMfa}
                         style={{ flex: 1 }}
                       >
