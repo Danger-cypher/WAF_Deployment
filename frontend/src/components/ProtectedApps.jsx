@@ -1,10 +1,19 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Trash2, Edit2, Server, Globe, Power, Shield, Activity, ArrowRight, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2 } from 'lucide-react';
-import { getProtectedApps, deleteProtectedApp, toggleProtectedApp } from '../services/api';
+import { Plus, Trash2, Edit2, Server, Globe, Power, Shield, Activity, ArrowRight, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2, X } from 'lucide-react';
+import { getProtectedApps, deleteProtectedApp, toggleProtectedApp, getDdosBotSettings, saveDdosBotSettings } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import { useConfirm } from '../hooks/useConfirm';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import Button from './Button';
+
+// Deterministic rule id per app — re-saving/editing an app's login
+// protection updates the SAME advanced_rule instead of creating a
+// duplicate, and lets the "already protected" badge look it up directly
+// without guessing at the configured path.
+const loginRuleId = (appId) => `login_protect_app_${appId}`;
 
 const PREREQUISITES = [
   {
@@ -228,11 +237,25 @@ export default function ProtectedApps({ onOpenWizard }) {
   const { toast, showToast } = useToast();
   const confirm = useConfirm();
 
+  // Login/brute-force protection — reuses the DDoS & Bot Shield advanced
+  // rate-limiting engine (same backend, same nginx_manager.py apply path)
+  // via a new "Host+URI" rule type scoped to $host$request_uri instead of
+  // $request_uri alone, so identical login paths on different apps don't
+  // share one rate-limit bucket.
+  const [ddosSettings, setDdosSettings] = useState(null);
+  const [loginProtectTarget, setLoginProtectTarget] = useState(null);
+  useEscapeToClose(() => setLoginProtectTarget(null), !!loginProtectTarget);
+  const [loginPath, setLoginPath] = useState('/login');
+  const [loginAttemptsPerMin, setLoginAttemptsPerMin] = useState(5);
+  const [loginBurst, setLoginBurst] = useState(3);
+  const [savingLoginRule, setSavingLoginRule] = useState(false);
+
   const fetchApps = async () => {
     setLoading(true);
     try {
-      const data = await getProtectedApps();
+      const [data, ddos] = await Promise.all([getProtectedApps(), getDdosBotSettings()]);
       setApps(data || []);
+      setDdosSettings(ddos || null);
     } catch (err) {
       console.error("Failed to load protected apps", err);
       showToast("Failed to fetch applications list.", "error");
@@ -244,6 +267,92 @@ export default function ProtectedApps({ onOpenWizard }) {
   useEffect(() => {
     fetchApps();
   }, []);
+
+  const getLoginRule = (app) =>
+    (ddosSettings?.advanced_rules || []).find((r) => r.id === loginRuleId(app.id));
+
+  const openLoginProtectModal = (app) => {
+    const existing = getLoginRule(app);
+    setLoginProtectTarget(app);
+    if (existing) {
+      const [, ...pathParts] = existing.parameter_value.split('/');
+      setLoginPath('/' + pathParts.join('/'));
+      setLoginAttemptsPerMin(existing.rate_limit_rps);
+      setLoginBurst(existing.burst_tolerance);
+    } else {
+      setLoginPath('/login');
+      setLoginAttemptsPerMin(5);
+      setLoginBurst(3);
+    }
+  };
+
+  const closeLoginProtectModal = () => setLoginProtectTarget(null);
+
+  const handleSaveLoginProtection = async (e) => {
+    e.preventDefault();
+    const app = loginProtectTarget;
+    const path = loginPath.trim();
+    if (!path.startsWith('/')) {
+      showToast("Login path must start with '/'.", "error");
+      return;
+    }
+    setSavingLoginRule(true);
+    try {
+      const current = await getDdosBotSettings();
+      const existingRules = current.advanced_rules || [];
+      const ruleId = loginRuleId(app.id);
+      const newRule = {
+        id: ruleId,
+        name: `Login Protection — ${app.name}`,
+        parameter_type: 'Host+URI',
+        parameter_value: `${app.domain}${path}`,
+        rate_limit_rps: loginAttemptsPerMin,
+        rate_limit_unit: 'r/m',
+        burst_tolerance: loginBurst,
+        enabled: true,
+      };
+      const updated = {
+        ...current,
+        advanced_rules: [...existingRules.filter((r) => r.id !== ruleId), newRule],
+      };
+      await saveDdosBotSettings(updated);
+      setDdosSettings(updated);
+      showToast(`Login protection applied for ${app.name}.`);
+      closeLoginProtectModal();
+    } catch (err) {
+      showToast("Failed to apply login protection: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setSavingLoginRule(false);
+    }
+  };
+
+  const handleRemoveLoginProtection = async (app) => {
+    if (!(await confirm({
+      title: 'Remove login protection',
+      message: `Remove the login/brute-force rate limit for ${app.name}?`,
+      confirmLabel: 'Remove',
+      danger: true,
+    }))) {
+      return;
+    }
+    setSavingLoginRule(true);
+    try {
+      const current = await getDdosBotSettings();
+      const ruleId = loginRuleId(app.id);
+      const updated = {
+        ...current,
+        advanced_rules: (current.advanced_rules || []).filter((r) => r.id !== ruleId),
+      };
+      await saveDdosBotSettings(updated);
+      setDdosSettings(updated);
+      showToast(`Login protection removed for ${app.name}.`);
+      closeLoginProtectModal();
+    } catch (err) {
+      showToast("Failed to remove login protection: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setSavingLoginRule(false);
+    }
+  };
 
   const handleDeleteApp = async (appId) => {
     if (!(await confirm({
@@ -440,6 +549,27 @@ export default function ProtectedApps({ onOpenWizard }) {
                   )}
                 </button>
                 <button
+                  onClick={() => openLoginProtectModal(app)}
+                  disabled={actionLoading || app.domain === '_'}
+                  title={app.domain === '_' ? "Login protection needs a specific domain — not available for the wildcard/catch-all app." : undefined}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: getLoginRule(app) ? '1px solid var(--success-glow)' : '1px solid var(--surface-hover)',
+                    background: getLoginRule(app) ? 'var(--success-bg)' : 'var(--surface-subtle)',
+                    color: getLoginRule(app) ? 'var(--success-color)' : 'var(--text-primary)',
+                    cursor: app.domain === '_' ? 'not-allowed' : 'pointer',
+                    opacity: app.domain === '_' ? 0.5 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '12px'
+                  }}
+                >
+                  <Key size={12} />
+                  {getLoginRule(app) ? 'Login Protected' : 'Protect Login'}
+                </button>
+                <button
                   onClick={() => onOpenWizard(app)}
                   disabled={actionLoading}
                   style={{
@@ -485,6 +615,104 @@ export default function ProtectedApps({ onOpenWizard }) {
 
       {/* Floating success/error Toast notification */}
       <Toast toast={toast} />
+
+      {loginProtectTarget && createPortal(
+        <div
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+          onClick={closeLoginProtectModal}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'rgba(20, 20, 20, 0.97)', border: '1px solid var(--border-strong)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '480px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: 'var(--text-primary)' }}>Login / Brute-Force Protection</h3>
+                <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                  {loginProtectTarget.domain}
+                </div>
+              </div>
+              <Button variant="ghost" size="md" icon={X} onClick={closeLoginProtectModal} aria-label="Close" />
+            </div>
+
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: 0, marginBottom: '18px', lineHeight: 1.5 }}>
+              Rate-limits this one path, on this one app's domain only, per client IP —
+              uses the same engine as DDoS &amp; Bot Shield's Advanced Rate Limiting Rules
+              (visible there as "{loginProtectTarget.name ? `Login Protection — ${loginProtectTarget.name}` : ''}"),
+              scoped so an identical path on a different protected app is never affected.
+            </p>
+
+            <form onSubmit={handleSaveLoginProtection} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Login Path</label>
+                <input
+                  type="text"
+                  className="search-input"
+                  style={{ fontFamily: 'monospace' }}
+                  value={loginPath}
+                  onChange={(e) => setLoginPath(e.target.value)}
+                  placeholder="/login"
+                />
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  The exact path your app's login form posts to (e.g. /login, /wp-login.php, /admin/login).
+                </span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Max Attempts</label>
+                    <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{loginAttemptsPerMin} / min</span>
+                  </div>
+                  <input
+                    type="range" min="1" max="60"
+                    value={loginAttemptsPerMin} onChange={(e) => setLoginAttemptsPerMin(parseInt(e.target.value))}
+                    style={{ width: '100%', accentColor: 'var(--accent-color)' }}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
+                    <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{loginBurst} reqs</span>
+                  </div>
+                  <input
+                    type="range" min="0" max="20"
+                    value={loginBurst} onChange={(e) => setLoginBurst(parseInt(e.target.value))}
+                    style={{ width: '100%', accentColor: 'var(--accent-color)' }}
+                  />
+                </div>
+              </div>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '-8px' }}>
+                Default (5/min) allows a real user a few mistyped-password retries while stopping
+                automated guessing — tighten for higher-value accounts.
+              </span>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: getLoginRule(loginProtectTarget) ? 'space-between' : 'flex-end', marginTop: '4px' }}>
+                {getLoginRule(loginProtectTarget) && (
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveLoginProtection(loginProtectTarget)}
+                    disabled={savingLoginRule}
+                    className="action-btn-inspect"
+                    style={{ background: 'var(--danger-bg)', color: 'var(--danger-color)', borderColor: 'var(--danger-border)' }}
+                  >
+                    Remove Protection
+                  </button>
+                )}
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <Button type="button" variant="secondary" onClick={closeLoginProtectModal}>
+                    Cancel
+                  </Button>
+                  <button type="submit" disabled={savingLoginRule} className="modal-btn primary" style={{ margin: 0 }}>
+                    {savingLoginRule ? 'Applying to NGINX...' : 'Apply Protection'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

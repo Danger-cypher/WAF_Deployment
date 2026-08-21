@@ -1,10 +1,11 @@
 import logging
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from app.services.settings_manager import settings_manager
 from app.services.auth import verify_password, require_admin, TokenData
+from app.utils.audit import log_admin_action
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -103,7 +104,9 @@ async def get_general_settings(current_user: TokenData = Depends(require_admin))
 async def update_general_settings(
     settings: GeneralSettingsModel, current_user: TokenData = Depends(require_admin)
 ):
-    return settings_manager.update_general_settings(settings.dict())
+    result = settings_manager.update_general_settings(settings.dict())
+    log_admin_action("settings", "general", "update", current_user, details=settings.dict())
+    return result
 
 
 # 2. WAF Settings Routes
@@ -120,7 +123,9 @@ async def update_waf_settings(
         raise HTTPException(
             status_code=400, detail="Paranoia level must be between 1 and 4"
         )
-    return settings_manager.update_waf_settings(settings.dict())
+    result = settings_manager.update_waf_settings(settings.dict())
+    log_admin_action("settings", "waf", "update", current_user, details=settings.dict())
+    return result
 
 
 # 3. Log Settings Routes
@@ -133,7 +138,9 @@ async def get_log_settings(current_user: TokenData = Depends(require_admin)):
 async def update_log_settings(
     settings: LogSettingsModel, current_user: TokenData = Depends(require_admin)
 ):
-    return settings_manager.update_log_settings(settings.dict())
+    result = settings_manager.update_log_settings(settings.dict())
+    log_admin_action("settings", "logs", "update", current_user, details=settings.dict())
+    return result
 
 
 # 3.5 Custom Response Settings Routes
@@ -164,6 +171,10 @@ async def update_custom_response(
             detail=f"Saved, but failed to apply the block page in NGINX. {err_msg}",
         )
 
+    log_admin_action(
+        "settings", "response", "update", current_user,
+        details={"html_length": len(settings.html_content)},
+    )
     return saved_settings
 
 
@@ -214,6 +225,7 @@ async def update_positive_security(
             detail=f"Failed to apply and reload Positive Security policy in NGINX. {err_msg}",
         )
 
+    log_admin_action("settings", "positive-security", "update", current_user, details=settings_dict)
     return saved_settings
 
 
@@ -227,7 +239,9 @@ async def get_auto_learning(current_user: TokenData = Depends(require_admin)):
 async def update_auto_learning(
     settings: AutoLearningModel, current_user: TokenData = Depends(require_admin)
 ):
-    return settings_manager.update_auto_learning(settings.dict())
+    result = settings_manager.update_auto_learning(settings.dict())
+    log_admin_action("settings", "auto-learning", "update", current_user, details=settings.dict())
+    return result
 
 
 # 3.8 Anti-DDoS & Bot Mitigation Settings Routes
@@ -281,6 +295,7 @@ async def update_ddos_bot_mitigation(
             detail=f"Failed to apply and reload DDoS settings in NGINX. {err_msg}",
         )
 
+    log_admin_action("settings", "ddos-bot", "update", current_user, details=settings.dict())
     return saved_settings
 
 
@@ -340,6 +355,7 @@ async def update_hardening_settings(
             detail=f"Failed to apply and reload settings in NGINX. {err_msg}",
         )
 
+    log_admin_action("settings", "hardening", "update", current_user, details=settings.dict())
     return saved_settings
 
 
@@ -360,7 +376,9 @@ async def update_anti_defacement_settings(
         raise HTTPException(
             status_code=400, detail="Check interval must be between 1 and 3600 seconds."
         )
-    return settings_manager.update_anti_defacement(settings.dict())
+    result = settings_manager.update_anti_defacement(settings.dict())
+    log_admin_action("settings", "anti-defacement", "update", current_user, details=settings.dict())
+    return result
 
 
 # 4. Password Change Route
@@ -387,7 +405,29 @@ async def change_password(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     user_service.set_password(user["id"], payload.newPassword)
+    log_admin_action("settings", "password", "change_own_password", current_user)
     return {"message": "Password updated successfully!"}
+
+
+@router.get("/settings/audit-log", response_model=Dict[str, Any])
+async def get_audit_log(
+    entity_type: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=500),
+    hours: Optional[int] = None,
+    current_user: TokenData = Depends(require_admin),
+):
+    """
+    Admin-action audit trail (who changed what WAF config, when) — reads
+    the ClickHouse audit_log table written by log_admin_action() across
+    settings/apps/users/false-positives/rules routes.
+    """
+    from app.services import clickhouse_service
+
+    rows, total = clickhouse_service.get_audit_log(
+        entity_type=entity_type, page=page, size=size, hours=hours
+    )
+    return {"data": rows, "total": total, "page": page, "size": size}
 
 # NOTE: System administrative actions (restart, reload-nginx, purge-cache, sync-signatures)
 # are now exclusively handled by the /system router in app/routes/system.py.

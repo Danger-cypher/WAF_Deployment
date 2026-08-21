@@ -113,3 +113,46 @@ def require_admin(current_user: TokenData = Depends(get_current_user)) -> TokenD
 
 def require_any_role(current_user: TokenData = Depends(get_current_user)) -> TokenData:
     return current_user
+
+
+def _has_app_access(current_user: TokenData, app_id: int, allow_analyst: bool) -> bool:
+    if current_user.role == "admin":
+        return True
+    if allow_analyst and current_user.role == "analyst":
+        return True
+    if current_user.role == "app_admin":
+        from app.services import db_service
+
+        return db_service.user_has_app_access(current_user.username, app_id)
+    return False
+
+
+def require_app_view_access(app_id: int, current_user: TokenData = Depends(get_current_user)) -> TokenData:
+    """
+    Gate for routes/apps.py's per-app_id READ route (GET /apps/{app_id}),
+    RBAC item 7. FastAPI resolves `app_id` from the route's own {app_id}
+    path segment by name, same as the route handler's own parameter.
+    'admin' and 'analyst' behave exactly as before this feature existed
+    (unrestricted view); only the new 'app_admin' role is actually scoped.
+    """
+    if _has_app_access(current_user, app_id, allow_analyst=True):
+        return current_user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied: you are not scoped to this protected application.",
+    )
+
+
+def require_app_write_access(app_id: int, current_user: TokenData = Depends(get_current_user)) -> TokenData:
+    """
+    Gate for routes/apps.py's per-app_id WRITE routes (update/delete/toggle/
+    ssl), RBAC item 7. 'analyst' is rejected here exactly as it always has
+    been (these routes were require_admin-only before this feature
+    existed) — only 'admin' (full access) or a scoped 'app_admin' pass.
+    """
+    if _has_app_access(current_user, app_id, allow_analyst=False):
+        return current_user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied: you are not scoped to this protected application.",
+    )

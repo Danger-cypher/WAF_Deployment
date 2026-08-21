@@ -1,8 +1,9 @@
-package.path = "/opt/ml-waf/lualib/?.lua;" .. package.path
+package.path = "/opt/ml-waf/lualib/?.lua;/opt/ml-waf/?.lua;" .. package.path
 local http = require("resty.http")
 local json = require("cjson")
 local redis = require("resty.redis")
 local bit = require("bit")
+local bot_challenge = require("bot_challenge")
 
 -- Skip ML evaluation ONLY for:
 --   1. Read-only dashboard telemetry endpoints (would cause feedback loops / DB locks)
@@ -180,6 +181,13 @@ if ok then
             ngx.say("<h1>403 Forbidden</h1><p>Blocked by WAF (IP Access Denied)</p>")
             ngx.exit(ngx.HTTP_FORBIDDEN)
         end
+
+        -- Opt-in JS Challenge bot mitigation (DDoS & Bot Shield settings).
+        -- No-ops immediately unless both the feature is enabled AND this
+        -- request's UA matched the existing bad-bot signal — reuses the
+        -- same connected Redis client, releasing it itself if it serves
+        -- the interstitial and exits.
+        bot_challenge.check(red, client_ip)
     end
     red:set_keepalive(10000, 100)
 end

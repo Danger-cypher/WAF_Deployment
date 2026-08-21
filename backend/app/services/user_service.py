@@ -51,7 +51,7 @@ class UserService:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL CHECK(role IN ('admin', 'analyst')),
+                    role TEXT NOT NULL CHECK(role IN ('admin', 'analyst', 'app_admin')),
                     display_name TEXT,
                     email TEXT,
                     enabled INTEGER NOT NULL DEFAULT 1,
@@ -88,11 +88,84 @@ class UserService:
                 except sqlite3.OperationalError:
                     pass
 
+            self._migrate_role_check_constraint(conn, cursor)
+
             cursor.execute("SELECT COUNT(*) AS c FROM users")
             if cursor.fetchone()["c"] == 0:
                 self._seed_legacy_accounts(conn)
         finally:
             conn.close()
+
+    def _migrate_role_check_constraint(self, conn: sqlite3.Connection, cursor: sqlite3.Cursor):
+        """
+        Widens the 'role' CHECK constraint to allow 'app_admin' (per-app
+        scoped admin, RBAC item 7) alongside the existing 'admin'/'analyst'.
+
+        SQLite has no ALTER TABLE ... ADD/DROP/MODIFY CONSTRAINT — the only
+        way to change a CHECK constraint on an existing table is the
+        documented rebuild procedure: create a new table with the desired
+        DDL, copy every row across by explicit column list (never `SELECT
+        *` — column order drifting between old/new would silently shuffle
+        data into the wrong columns), drop the old table, rename the new
+        one into place. This is real production data (password hashes, MFA
+        secrets) — everything below runs inside the caller's existing
+        connection/transaction so a failure partway through leaves the
+        original table completely untouched rather than half-migrated.
+        """
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
+        row = cursor.fetchone()
+        current_ddl = row["sql"] if row else ""
+        if not current_ddl or "app_admin" in current_ddl:
+            return  # already migrated (or table doesn't exist yet — CREATE above already ran with it missing, nothing to widen)
+
+        cursor.execute("ALTER TABLE users RENAME TO users_role_migration_old")
+        cursor.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('admin', 'analyst', 'app_admin')),
+                display_name TEXT,
+                email TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_login_at DATETIME,
+                notification_prefs TEXT,
+                mfa_secret TEXT,
+                mfa_enabled INTEGER NOT NULL DEFAULT 0,
+                session_version INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        cursor.execute(
+            """
+            INSERT INTO users (
+                id, username, password_hash, role, display_name, email,
+                enabled, created_at, updated_at, last_login_at,
+                notification_prefs, mfa_secret, mfa_enabled, session_version
+            )
+            SELECT
+                id, username, password_hash, role, display_name, email,
+                enabled, created_at, updated_at, last_login_at,
+                notification_prefs, mfa_secret, mfa_enabled, session_version
+            FROM users_role_migration_old
+            """
+        )
+        cursor.execute("DROP TABLE users_role_migration_old")
+
+        # Explicit rows were inserted with their original ids, which does
+        # NOT advance sqlite_sequence (only inserts that let SQLite
+        # auto-generate the id do that) — without this fixup, the next
+        # auto-generated id could collide with an existing one.
+        cursor.execute("SELECT MAX(id) AS m FROM users")
+        max_id = cursor.fetchone()["m"] or 0
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'users'")
+        cursor.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('users', ?)", (max_id,))
+
+        conn.commit()
+        logger.info("Migrated users.role CHECK constraint to allow 'app_admin'.")
 
     def _seed_legacy_accounts(self, conn: sqlite3.Connection):
         """First-run migration: carry over the legacy hardcoded admin/analyst

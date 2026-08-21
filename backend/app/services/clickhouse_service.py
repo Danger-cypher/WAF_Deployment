@@ -1342,10 +1342,10 @@ def get_endpoint_threat_counts(hours: Optional[int] = None) -> Dict[Tuple[str, s
             SELECT
                 splitByChar('?', uri)[1] AS clean_uri,
                 method,
-                countIf(http_code IN ('401', '403', '406', '429')) AS malicious_count,
+                countIf(http_code IN {_BLOCKED_HTTP_CODES_SQL}) AS malicious_count,
                 countIf(
                     lower(severity) IN ('medium', 'med', 'low', 'info', 'notice')
-                    AND http_code NOT IN ('401', '403', '406', '429')
+                    AND http_code NOT IN {_BLOCKED_HTTP_CODES_SQL}
                 ) AS suspicious_count
             FROM waf_events
             WHERE uri != '' AND method != '' {time_filter}
@@ -1733,3 +1733,53 @@ def insert_audit_log(
     except Exception as e:
         logger.error(f"insert_audit_log failed: {e}")
         return False
+
+
+def get_audit_log(
+    entity_type: Optional[str] = None,
+    page: int = 1,
+    size: int = 50,
+    hours: Optional[int] = None,
+) -> Tuple[List[Dict], int]:
+    """
+    Paginated, filtered read of audit_log — (rows, total_count). Returns
+    ([], 0) when ClickHouse is unreachable, matching query_waf_events()'s
+    convention (a dashboard panel reading this should degrade to empty
+    rather than 500).
+    """
+    client = _get_client()
+    if client is None:
+        return [], 0
+
+    where = ["1=1"]
+    if entity_type:
+        where.append(f"entity_type = '{entity_type.replace(chr(39), '')}'")
+    if hours:
+        where.append(f"timestamp >= now() - INTERVAL {int(hours)} HOUR")
+    where_clause = " AND ".join(where)
+    offset = (page - 1) * size
+
+    try:
+        count_result = client.query(f"SELECT count() FROM audit_log WHERE {where_clause}")
+        total = count_result.result_rows[0][0] if count_result.result_rows else 0
+
+        rows_result = client.query(f"""
+            SELECT id, timestamp, entity_type, entity_id, action, username, details, ip_address
+            FROM audit_log
+            WHERE {where_clause}
+            ORDER BY timestamp DESC
+            LIMIT {int(size)} OFFSET {int(offset)}
+        """)
+
+        columns = ["id", "timestamp", "entity_type", "entity_id", "action", "username", "details", "ip_address"]
+        result = []
+        for row in rows_result.result_rows:
+            d = dict(zip(columns, row))
+            if isinstance(d["timestamp"], datetime):
+                d["timestamp"] = d["timestamp"].isoformat()
+            result.append(d)
+
+        return result, total
+    except Exception as e:
+        logger.error(f"get_audit_log failed: {e}")
+        return [], 0

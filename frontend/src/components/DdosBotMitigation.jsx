@@ -225,11 +225,20 @@ export default function DdosBotMitigation() {
             >
               <option value="Silent Drop">Silent Drop (Connection Reset / 444)</option>
               <option value="Block">Standard Block (429 Too Many Requests)</option>
+              <option value="JS Challenge">JS Challenge (interstitial page — real browsers pass automatically, scripts never do)</option>
               {/* FIX 7: CAPTCHA is not integrated — disable to avoid misleading operators */}
               <option value="CAPTCHA Challenge" disabled>
                 CAPTCHA Challenge (Coming Soon — requires provider integration)
               </option>
             </select>
+            {botMitigationAction === 'JS Challenge' && (
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                Matching traffic gets a page that silently redirects itself via JavaScript — a real
+                browser clears it in under a second and is remembered for 1 hour; scripted clients
+                (curl, sqlmap, etc.) never execute the redirect and stay stuck on it. No 403/429 is
+                ever returned, so a scanner can't tell which control caught it.
+              </div>
+            )}
           </div>
 
           <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ marginTop: '4px', alignSelf: 'flex-start' }}>
@@ -354,6 +363,7 @@ export default function DdosBotMitigation() {
                     onChange={(e) => setNewRuleType(e.target.value)}
                   >
                     <option value="URI">Request URI</option>
+                    <option value="Host+URI">Domain + URI (scoped to one protected app)</option>
                     <option value="Method">HTTP Method</option>
                     <option value="Header">Custom Header (Header-Name: Pattern)</option>
                     <option value="Session">Session Cookie (Cookie-Name)</option>
@@ -375,6 +385,7 @@ export default function DdosBotMitigation() {
                   onChange={(e) => setNewRuleValue(e.target.value)}
                   placeholder={
                     newRuleType === 'URI' ? 'e.g., ^/api/login' :
+                      newRuleType === 'Host+URI' ? 'e.g., app.example.com/login (no scheme, no anchors)' :
                       newRuleType === 'Method' ? 'e.g., POST' :
                         newRuleType === 'Header' ? 'e.g., X-API-Key (limits per key) OR X-API-Key: ^temp-.*' :
                           newRuleType === 'Session' ? 'e.g., session (limits per session cookie value)' :
@@ -459,7 +470,7 @@ export default function DdosBotMitigation() {
                     <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{rule.name}</td>
                     <td style={{ color: 'var(--sev-low)', fontWeight: 600 }}>{rule.parameter_type}</td>
                     <td style={{ fontFamily: 'monospace', color: 'var(--text-secondary)', fontSize: '12px' }}>{rule.parameter_value}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 500, color: 'var(--success-color)' }}>{rule.rate_limit_rps} req/s</td>
+                    <td style={{ textAlign: 'right', fontWeight: 500, color: 'var(--success-color)' }}>{rule.rate_limit_rps} req/{rule.rate_limit_unit === 'r/m' ? 'min' : 's'}</td>
                     <td style={{ textAlign: 'right', fontWeight: 500, color: 'var(--sev-high)' }}>{rule.burst_tolerance} reqs</td>
                     <td style={{ textAlign: 'center' }}>
                       <button

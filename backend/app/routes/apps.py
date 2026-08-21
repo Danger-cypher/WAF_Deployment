@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from app.services import db_service, nginx_manager
-from app.services.auth import require_admin, require_any_role, TokenData
+from app.services.auth import require_admin, require_any_role, require_app_view_access, require_app_write_access, TokenData
+from app.utils.audit import log_admin_action
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +84,17 @@ class ProtectedAppResponse(ProtectedAppBase):
 
 @router.get("/apps", response_model=List[ProtectedAppResponse])
 async def list_apps(current_user: TokenData = Depends(require_any_role)):
-    """List all registered protected applications."""
-    return db_service.get_all_protected_apps()
+    """List all registered protected applications — 'admin'/'analyst' see
+    everything (unchanged); a scoped 'app_admin' sees only their own apps."""
+    apps = db_service.get_all_protected_apps()
+    if current_user.role == "app_admin":
+        allowed_ids = set(db_service.get_app_ids_for_user(current_user.username))
+        apps = [a for a in apps if a.get("id") in allowed_ids]
+    return apps
 
 
 @router.get("/apps/{app_id}", response_model=ProtectedAppResponse)
-async def get_app(app_id: int, current_user: TokenData = Depends(require_any_role)):
+async def get_app(app_id: int, current_user: TokenData = Depends(require_app_view_access)):
     """Get details of a specific protected application."""
     app = db_service.get_protected_app_by_id(app_id)
     if not app:
@@ -141,11 +147,12 @@ async def add_app(app_data: ProtectedAppCreate, current_user: TokenData = Depend
             detail=f"Failed to generate Nginx config or reload service. Reverting database registration. {err_msg}"
         )
 
+    log_admin_action("app", str(app["id"]), "create", current_user, details={"name": app_data.name, "domain": domain_lower})
     return app
 
 
 @router.put("/apps/{app_id}", response_model=ProtectedAppResponse)
-async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: TokenData = Depends(require_admin)):
+async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: TokenData = Depends(require_app_write_access)):
     """Update details of an existing application and sync configuration."""
     existing_app = db_service.get_protected_app_by_id(app_id)
     if not existing_app:
@@ -210,11 +217,12 @@ async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: To
             detail=f"Failed to generate Nginx config or reload service. Reverting database changes. {err_msg}"
         )
 
+    log_admin_action("app", str(app_id), "update", current_user, details={"name": app_data.name, "domain": domain_lower})
     return app
 
 
 @router.delete("/apps/{app_id}")
-async def remove_app(app_id: int, current_user: TokenData = Depends(require_admin)):
+async def remove_app(app_id: int, current_user: TokenData = Depends(require_app_write_access)):
     """Delete a protected application and sync configuration."""
     existing_app = db_service.get_protected_app_by_id(app_id)
     if not existing_app:
@@ -284,11 +292,12 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_admi
     except Exception as e:
         logger.warning(f"Failed to clean up app-auth conf for deleted app {app_id}: {e}")
 
+    log_admin_action("app", str(app_id), "delete", current_user, details={"name": existing_app["name"], "domain": existing_app["domain"]})
     return {"message": "Protected application deleted successfully!"}
 
 
 @router.post("/apps/{app_id}/toggle", response_model=ProtectedAppResponse)
-async def toggle_app_active(app_id: int, current_user: TokenData = Depends(require_admin)):
+async def toggle_app_active(app_id: int, current_user: TokenData = Depends(require_app_write_access)):
     """Toggle the enabled status of a protected application."""
     app = db_service.get_protected_app_by_id(app_id)
     if not app:
@@ -341,6 +350,7 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
             detail=f"Failed to generate Nginx config or reload service. Reverting status change. {err_msg}"
         )
 
+    log_admin_action("app", str(app_id), "toggle", current_user, details={"is_active": new_status})
     return updated_app
 
 
@@ -370,7 +380,7 @@ def _safe_cert_dir(subdir: str, domain: str) -> str:
 @router.post("/apps/{app_id}/provision-ssl")
 async def provision_letsencrypt(
     app_id: int,
-    current_user: TokenData = Depends(require_admin),
+    current_user: TokenData = Depends(require_app_write_access),
 ):
     """
     Trigger Let's Encrypt certificate provisioning for a domain-based protected app.
@@ -489,6 +499,7 @@ async def provision_letsencrypt(
         if not nginx_synced:
             # The cert was issued and persisted, but nginx isn't serving it
             # yet — surface that clearly instead of a bare "success".
+            log_admin_action("app", str(app_id), "provision_ssl", current_user, details={"domain": domain, "status": "partial"})
             return {
                 "status": "partial",
                 "message": (
@@ -499,6 +510,7 @@ async def provision_letsencrypt(
                 "cert_path": fullchain,
             }
 
+        log_admin_action("app", str(app_id), "provision_ssl", current_user, details={"domain": domain, "status": "success"})
         return {
             "status": "success",
             "message": f"Let's Encrypt certificate issued for {domain}",
@@ -516,7 +528,7 @@ async def upload_custom_cert(
     app_id: int,
     cert_file: UploadFile = File(..., description="TLS certificate file (.crt / .pem)"),
     key_file: UploadFile = File(..., description="Private key file (.key / .pem)"),
-    current_user: TokenData = Depends(require_admin),
+    current_user: TokenData = Depends(require_app_write_access),
 ):
     """
     Upload a custom TLS certificate and private key for a protected app.
@@ -591,6 +603,7 @@ async def upload_custom_cert(
     # Regenerate Nginx config
     nginx_synced, nginx_err = nginx_manager.sync_protected_apps_to_nginx()
     if not nginx_synced:
+        log_admin_action("app", str(app_id), "upload_cert", current_user, details={"domain": domain, "status": "partial"})
         return {
             "status": "partial",
             "message": (
@@ -601,6 +614,7 @@ async def upload_custom_cert(
             "cert_path": cert_path,
         }
 
+    log_admin_action("app", str(app_id), "upload_cert", current_user, details={"domain": domain, "status": "success"})
     return {
         "status": "success",
         "message": f"Custom certificate uploaded and applied for {domain}",

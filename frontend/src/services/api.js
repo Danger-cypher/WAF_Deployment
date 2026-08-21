@@ -1803,3 +1803,19 @@ export function getLiveStreamWsUrl() {
 // getSecurityStatistics is also available in ./security-api.js (canonical version).
 // Exported here for components that import from api.js directly.
 export { getSecurityStatistics } from './security-api.js';
+
+/**
+ * Admin-action audit trail (who changed what WAF config, when).
+ */
+export async function getAuditLog(page = 1, size = 50, entityType = null, hours = null) {
+  try {
+    const params = new URLSearchParams({ page, size });
+    if (entityType) params.set('entity_type', entityType);
+    if (hours) params.set('hours', hours);
+    const response = await fetch(`${BASE_URL}/settings/audit-log?${params}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch audit log:", error);
+    throw error;
+  }
+}

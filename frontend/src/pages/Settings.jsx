@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Brain, CheckSquare, Database, FileCode, Lock, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, Brain, CheckSquare, Database, FileCode, History, Lock, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, X } from 'lucide-react';
 import {
   getGeneralSettings, saveGeneralSettings, getLogSettings, saveLogSettings,
   getWafSettings, saveWafSettings,
@@ -9,12 +9,14 @@ import {
   getPositiveSecurity, savePositiveSecurity,
   getCustomResponse, saveCustomResponse, getAutoLearning, saveAutoLearning,
   getAutoLearningSuggestions, runAutoLearningNow, approveAutoLearningSuggestion, rejectAutoLearningSuggestion,
+  getAuditLog,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
 import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import Button from '../components/Button';
+import { formatLocalTime } from '../utils/helpers';
 
 export default function Settings({ onLogout }) {
   // General Settings
@@ -89,10 +91,6 @@ export default function Settings({ onLogout }) {
   // settings without ever knowing the load failed.
   const [settingsLoadError, setSettingsLoadError] = useState('');
 
-  useEffect(() => {
-    fetchSettings();
-  }, []);
-
   const fetchSettings = async () => {
     setSettingsLoadError('');
     try {
@@ -155,6 +153,10 @@ export default function Settings({ onLogout }) {
       setSettingsLoadError(err.message || 'Could not reach the backend API.');
     }
   };
+
+  useEffect(() => {
+    fetchSettings();
+  }, []);
 
   const handleSaveGeneral = async (e) => {
     e.preventDefault();
@@ -316,6 +318,35 @@ export default function Settings({ onLogout }) {
   useEffect(() => {
     if (activeSettingTab === 'auto-learning') {
       const timer = setTimeout(() => fetchAutoLearningSuggestions(), 0);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSettingTab]);
+
+  // Activity Log (admin-action audit trail)
+  const [auditEntries, setAuditEntries] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditTotal, setAuditTotal] = useState(0);
+  const AUDIT_PAGE_SIZE = 25;
+
+  const fetchAuditLog = async (page = 1) => {
+    setAuditLoading(true);
+    try {
+      const res = await getAuditLog(page, AUDIT_PAGE_SIZE);
+      setAuditEntries(res.data || []);
+      setAuditTotal(res.total || 0);
+      setAuditPage(page);
+    } catch (err) {
+      showToast("Failed to load activity log: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSettingTab === 'activity-log') {
+      const timer = setTimeout(() => fetchAuditLog(1), 0);
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -527,6 +558,9 @@ export default function Settings({ onLogout }) {
           </button>
           <button onClick={() => setActiveSettingTab('security')} className={`settings-tab-btn ${activeSettingTab === 'security' ? 'active' : ''}`}>
             <Lock size={20} /> Security & Danger Zone
+          </button>
+          <button onClick={() => setActiveSettingTab('activity-log')} className={`settings-tab-btn ${activeSettingTab === 'activity-log' ? 'active' : ''}`}>
+            <History size={20} /> Activity Log
           </button>
         </div>
 
@@ -1190,6 +1224,60 @@ export default function Settings({ onLogout }) {
                     </div>
                   </div>
                 </div>
+              </motion.div>
+            )}
+
+            {activeSettingTab === 'activity-log' && (
+              <motion.div key="activity-log" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
+                <div className="settings-section-title">
+                  <History size={20} color="var(--accent-color)" />
+                  Activity Log
+                </div>
+                <div className="settings-section-subtitle">Who changed what WAF configuration, and when — settings, protected apps, users, false positives, and rules.</div>
+
+                {auditLoading ? (
+                  <div style={{ padding: '24px', color: 'var(--text-secondary)' }}>Loading...</div>
+                ) : auditEntries.length === 0 ? (
+                  <div style={{ padding: '24px', color: 'var(--text-secondary)' }}>No activity recorded yet.</div>
+                ) : (
+                  <>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Time</th>
+                            <th>User</th>
+                            <th>Entity</th>
+                            <th>Action</th>
+                            <th>Details</th>
+                            <th>IP</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {auditEntries.map((entry) => (
+                            <tr key={entry.id}>
+                              <td>{formatLocalTime(entry.timestamp)}</td>
+                              <td>{entry.username}</td>
+                              <td>{entry.entity_type} #{entry.entity_id}</td>
+                              <td>{entry.action}</td>
+                              <td style={{ maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={entry.details}>{entry.details}</td>
+                              <td>{entry.ip_address || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        Page {auditPage} of {Math.max(1, Math.ceil(auditTotal / AUDIT_PAGE_SIZE))} — {auditTotal} total
+                      </span>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button type="button" className="action-btn-inspect" disabled={auditPage <= 1} onClick={() => fetchAuditLog(auditPage - 1)}>Previous</button>
+                        <button type="button" className="action-btn-inspect" disabled={auditPage * AUDIT_PAGE_SIZE >= auditTotal} onClick={() => fetchAuditLog(auditPage + 1)}>Next</button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </motion.div>
             )}
 

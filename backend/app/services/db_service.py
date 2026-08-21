@@ -234,6 +234,25 @@ def init_db():
                 except Exception:
                     pass  # Column already exists — expected on re-init
 
+            # Per-app RBAC scoping (item 7): which protected app(s) a
+            # non-'admin' 'app_admin' user may view/manage. Keyed by
+            # username rather than a numeric user_id — users live in a
+            # SEPARATE SQLite file (users.db, user_service.py) with no
+            # cross-file foreign key, and username is already the identity
+            # handle TokenData/JWT carries end-to-end (see auth.py), so this
+            # avoids adding a new field to the token just for this. A join
+            # table (not a single owner column on protected_apps) so more
+            # than one user can be scoped to the same app without a schema
+            # change later. 'admin' bypasses this table entirely — it only
+            # gates the 'app_admin' role. See auth.require_app_access().
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS app_user_access (
+                    username TEXT NOT NULL,
+                    app_id INTEGER NOT NULL,
+                    PRIMARY KEY (username, app_id)
+                )
+            """)
+
             # Auto-Learning suggestions — computed from Resolved false
             # positives observed within Settings > Auto-Learning's rolling
             # window. Never auto-applied: an admin must explicitly Approve
@@ -1420,10 +1439,70 @@ def delete_protected_app(app_id: int):
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM protected_apps WHERE id = ?", (app_id,))
+            # Orphaned scoping rows for a deleted app are meaningless —
+            # clean them up so a future app reusing the same id (SQLite
+            # reuses rowids once AUTOINCREMENT's high-water mark allows it
+            # only in edge cases, but stale rows here are harmless-but-
+            # confusing either way) doesn't inherit access grants nobody
+            # intended for it.
+            cursor.execute("DELETE FROM app_user_access WHERE app_id = ?", (app_id,))
             conn.commit()
             return True
     except Exception as e:
         logger.error(f"Error deleting protected app {app_id}: {e}")
+        return False
+
+
+# ========================================================
+# Per-app RBAC scoping (item 7) — which apps an 'app_admin' user may access.
+# 'admin' bypasses this entirely (see auth.require_app_access()); these
+# functions are meaningless for any other role and callers should not
+# invoke them for 'admin'/'analyst' users.
+# ========================================================
+
+
+def get_app_ids_for_user(username: str) -> List[int]:
+    """App ids a given app_admin username is scoped to."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT app_id FROM app_user_access WHERE username = ?", (username,))
+            return [row["app_id"] for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Error fetching app access for user '{username}': {e}")
+        return []
+
+
+def user_has_app_access(username: str, app_id: int) -> bool:
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM app_user_access WHERE username = ? AND app_id = ?",
+                (username, app_id),
+            )
+            return cursor.fetchone() is not None
+    except Exception as e:
+        logger.error(f"Error checking app access for user '{username}', app {app_id}: {e}")
+        return False
+
+
+def set_app_access_for_user(username: str, app_ids: List[int]) -> bool:
+    """Replaces this username's full set of app grants with exactly
+    app_ids (idempotent — safe to call with the same list twice, and an
+    empty list simply revokes everything)."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM app_user_access WHERE username = ?", (username,))
+            cursor.executemany(
+                "INSERT INTO app_user_access (username, app_id) VALUES (?, ?)",
+                [(username, app_id) for app_id in app_ids],
+            )
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Error setting app access for user '{username}': {e}")
         return False
 
 

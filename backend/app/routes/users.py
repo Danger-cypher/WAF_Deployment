@@ -19,8 +19,10 @@ from app.models.user_models import (
     MfaStatus, MfaSetupResponse, MfaConfirmRequest, MfaDisableRequest,
 )
 from app.services.user_service import user_service
+from app.services import db_service
 from app.services.auth import require_admin, require_any_role, verify_password, TokenData
 from app.routes.auth import _issue_session
+from app.utils.audit import log_admin_action
 
 MFA_ISSUER = "CyberSentinel WAF"
 
@@ -38,10 +40,21 @@ def _guard_last_admin(target: dict, will_demote: bool, will_disable: bool):
             )
 
 
+def _enrich_with_app_ids(user: dict) -> dict:
+    """UserOut.app_ids is only meaningful for role == 'app_admin' — the raw
+    dicts user_service returns don't carry it at all (separate SQLite file,
+    see db_service's app_user_access table)."""
+    user = dict(user)
+    user["app_ids"] = (
+        db_service.get_app_ids_for_user(user["username"]) if user.get("role") == "app_admin" else []
+    )
+    return user
+
+
 @router.get("/users", response_model=List[UserOut])
 async def list_users(current_user: TokenData = Depends(require_admin)):
     """List all dashboard user accounts (Admin only)"""
-    return user_service.list_users()
+    return [_enrich_with_app_ids(u) for u in user_service.list_users()]
 
 
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -65,7 +78,10 @@ async def create_user(payload: UserCreate, current_user: TokenData = Depends(req
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Username already exists."
         )
-    return user_service.get_by_id(user_id)
+    if payload.role == "app_admin" and payload.app_ids:
+        db_service.set_app_access_for_user(payload.username, payload.app_ids)
+    log_admin_action("user", str(user_id), "create", current_user, details={"username": payload.username, "role": payload.role, "app_ids": payload.app_ids})
+    return _enrich_with_app_ids(user_service.get_by_id(user_id))
 
 
 @router.patch("/users/{user_id}", response_model=UserOut)
@@ -81,13 +97,30 @@ async def update_user(
     will_disable = payload.enabled is False
     _guard_last_admin(target, will_demote, will_disable)
 
-    return user_service.update_user(
+    result = user_service.update_user(
         user_id,
         role=payload.role,
         enabled=payload.enabled,
         display_name=payload.display_name,
         email=payload.email,
     )
+
+    # Username is immutable (no rename support anywhere in this app), so
+    # target["username"] is safe to key app_user_access on regardless of
+    # what else changed here.
+    effective_role = payload.role if payload.role is not None else target["role"]
+    if effective_role != "app_admin":
+        # Demoted away from app_admin (or was never one) — orphaned scoping
+        # rows would be inert but confusing to leave lying around.
+        db_service.set_app_access_for_user(target["username"], [])
+    elif payload.app_ids is not None:
+        db_service.set_app_access_for_user(target["username"], payload.app_ids)
+
+    log_admin_action(
+        "user", str(user_id), "update", current_user,
+        details={"role": payload.role, "enabled": payload.enabled, "target_username": target["username"], "app_ids": payload.app_ids},
+    )
+    return _enrich_with_app_ids(result)
 
 
 @router.post("/users/{user_id}/reset-password")
@@ -99,6 +132,7 @@ async def reset_password(
     if not target:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     user_service.set_password(user_id, payload.new_password)
+    log_admin_action("user", str(user_id), "admin_reset_password", current_user, details={"target_username": target["username"]})
     return {"message": "Password reset successfully."}
 
 
@@ -114,6 +148,8 @@ async def delete_user(user_id: int, current_user: TokenData = Depends(require_ad
         )
     _guard_last_admin(target, will_demote=False, will_disable=True)
     user_service.delete_user(user_id)
+    db_service.set_app_access_for_user(target["username"], [])
+    log_admin_action("user", str(user_id), "delete", current_user, details={"target_username": target["username"]})
     return {"message": "User deleted successfully."}
 
 
@@ -123,7 +159,7 @@ async def get_my_profile(current_user: TokenData = Depends(require_any_role)):
     user = user_service.get_by_username(current_user.username)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    return user
+    return _enrich_with_app_ids(user)
 
 
 @router.patch("/users/me/profile", response_model=UserOut)
@@ -277,4 +313,5 @@ async def admin_disable_user_mfa(user_id: int, current_user: TokenData = Depends
         f"MFA force-disabled for user '{target['username']}' (id={user_id}) "
         f"by admin '{current_user.username}'."
     )
+    log_admin_action("user", str(user_id), "admin_disable_mfa", current_user, details={"target_username": target["username"]})
     return {"enabled": False}

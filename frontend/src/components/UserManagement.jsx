@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { Users, Plus, Trash2, KeyRound, X, ShieldCheck, ShieldAlert, Power, Smartphone } from 'lucide-react';
-import { listUsers, createUser, updateUser, resetUserPassword, deleteUser, adminDisableUserMfa } from '../services/api';
+import { Users, Plus, Trash2, KeyRound, X, ShieldCheck, ShieldAlert, Power, Smartphone, Server } from 'lucide-react';
+import { listUsers, createUser, updateUser, resetUserPassword, deleteUser, adminDisableUserMfa, getProtectedApps } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import Button from './Button';
@@ -50,6 +50,25 @@ function ModalShell({ title, onClose, children }) {
   );
 }
 
+function AppChecklist({ apps, selectedIds, onChange }) {
+  const toggle = (id) => {
+    onChange(selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]);
+  };
+  if (apps.length === 0) {
+    return <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>No protected applications exist yet.</div>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto', padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+      {apps.map((app) => (
+        <label key={app.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={selectedIds.includes(app.id)} onChange={() => toggle(app.id)} />
+          {app.name} <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>({app.domain})</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function CreateUserModal({ onClose, onCreated, showToast }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -57,6 +76,12 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [saving, setSaving] = useState(false);
+  const [apps, setApps] = useState([]);
+  const [appIds, setAppIds] = useState([]);
+
+  useEffect(() => {
+    getProtectedApps().then(setApps).catch(() => setApps([]));
+  }, []);
 
   const handleSubmit = async () => {
     if (!username.trim() || password.length < 12) {
@@ -71,6 +96,7 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
         role,
         display_name: displayName.trim() || null,
         email: email.trim() || null,
+        app_ids: role === 'app_admin' ? appIds : [],
       });
       showToast('User created successfully.');
       onCreated();
@@ -98,8 +124,15 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
           <select style={inputStyle} value={role} onChange={(e) => setRole(e.target.value)}>
             <option value="analyst">Analyst (read-only)</option>
             <option value="admin">Admin (full access)</option>
+            <option value="app_admin">App Admin (scoped to specific apps)</option>
           </select>
         </div>
+        {role === 'app_admin' && (
+          <div>
+            <label style={labelStyle}>Protected Applications</label>
+            <AppChecklist apps={apps} selectedIds={appIds} onChange={setAppIds} />
+          </div>
+        )}
         <div>
           <label style={labelStyle}>Display Name (optional)</label>
           <input style={inputStyle} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Jane Doe" />
@@ -110,6 +143,49 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
         </div>
         <Button variant="primary" loading={saving} onClick={handleSubmit} style={{ marginTop: '4px' }}>
           {saving ? 'Creating…' : 'Create User'}
+        </Button>
+      </div>
+    </ModalShell>
+  );
+}
+
+function AppAccessModal({ user, onClose, onSaved, showToast }) {
+  const [apps, setApps] = useState([]);
+  const [appIds, setAppIds] = useState(user.app_ids || []);
+  const [saving, setSaving] = useState(false);
+  const [loadingApps, setLoadingApps] = useState(true);
+
+  useEffect(() => {
+    getProtectedApps().then(setApps).catch(() => setApps([])).finally(() => setLoadingApps(false));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateUser(user.id, { app_ids: appIds });
+      showToast(`App access updated for ${user.username}.`);
+      onSaved();
+      onClose();
+    } catch (err) {
+      showToast('Failed to update app access: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell title={`App Access — ${user.username}`} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+          This user can only view and manage the protected applications checked below.
+        </div>
+        {loadingApps ? (
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Loading applications…</div>
+        ) : (
+          <AppChecklist apps={apps} selectedIds={appIds} onChange={setAppIds} />
+        )}
+        <Button variant="primary" loading={saving} onClick={handleSave} style={{ marginTop: '4px' }}>
+          {saving ? 'Saving…' : 'Save Access'}
         </Button>
       </div>
     </ModalShell>
@@ -160,6 +236,7 @@ export default function UserManagement({ currentUsername }) {
   const { page, totalPages, total, pageItems, goToPrev, goToNext } = usePagination(users, 15);
   const [showCreate, setShowCreate] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
+  const [appAccessTarget, setAppAccessTarget] = useState(null);
   const [busyId, setBusyId] = useState(null);
 
   const fetchUsers = useCallback(async () => {
@@ -295,6 +372,7 @@ export default function UserManagement({ currentUsername }) {
                       >
                         <option value="analyst">Analyst</option>
                         <option value="admin">Admin</option>
+                        <option value="app_admin">App Admin</option>
                       </select>
                     </td>
                     <td style={{ padding: '14px 16px' }}>
@@ -320,6 +398,13 @@ export default function UserManagement({ currentUsername }) {
                       {u.last_login_at ? u.last_login_at.replace('T', ' ').split('.')[0] : 'Never'}
                     </td>
                     <td style={{ padding: '14px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {u.role === 'app_admin' && (
+                        <Button
+                          variant="ghost" size="sm" icon={Server}
+                          title={`Manage app access (${(u.app_ids || []).length} app${(u.app_ids || []).length === 1 ? '' : 's'})`}
+                          onClick={() => setAppAccessTarget(u)}
+                        />
+                      )}
                       <Button
                         variant="ghost" size="sm" icon={KeyRound}
                         title="Reset password"
@@ -362,6 +447,9 @@ export default function UserManagement({ currentUsername }) {
         )}
         {resetTarget && (
           <ResetPasswordModal user={resetTarget} onClose={() => setResetTarget(null)} showToast={showToast} />
+        )}
+        {appAccessTarget && (
+          <AppAccessModal user={appAccessTarget} onClose={() => setAppAccessTarget(null)} onSaved={fetchUsers} showToast={showToast} />
         )}
       </AnimatePresence>
 

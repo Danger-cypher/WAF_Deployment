@@ -9,6 +9,7 @@ from app.models.rule_model import (
 )
 from app.services import rule_manager
 from app.services.auth import require_admin, require_any_role, TokenData
+from app.utils.audit import log_admin_action
 
 router = APIRouter()
 
@@ -161,6 +162,10 @@ async def save_custom_rules(
                     "changes yet. Try reloading NGINX manually from Settings."
                 ),
             )
+        log_admin_action(
+            "custom_rules", "virtual_patching", "replace", current_user,
+            details={"content_length": len(request.rules_content)},
+        )
         return {"message": "Custom rules saved and applied successfully."}
 
     except HTTPException:
@@ -199,6 +204,7 @@ async def enable_rule(
     ok, msg = rule_manager.toggle_rule(
         rule_id=request.id,
         enabled=True,
+        username=current_user.username,
         reason=request.reason or "Enabled from CyberSentinel SOC portal.",
     )
     if not ok:
@@ -220,7 +226,7 @@ async def disable_rule(
         )
 
     ok, msg = rule_manager.toggle_rule(
-        rule_id=request.id, enabled=False, reason=request.reason
+        rule_id=request.id, enabled=False, username=current_user.username, reason=request.reason
     )
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
@@ -234,7 +240,7 @@ async def update_paranoia_level(
     """
     Update the global OWASP CRS detection paranoia level (PL1 to PL4).
     """
-    ok, msg = rule_manager.set_paranoia_level(level=request.level)
+    ok, msg = rule_manager.set_paranoia_level(level=request.level, username=current_user.username)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"message": msg}
@@ -245,7 +251,7 @@ async def restore_defaults(current_user: TokenData = Depends(require_admin)):
     """
     Revert all custom rule overrides and restore system default states.
     """
-    ok, msg = rule_manager.reset_rules()
+    ok, msg = rule_manager.reset_rules(username=current_user.username)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"message": msg}

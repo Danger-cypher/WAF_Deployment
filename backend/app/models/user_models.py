@@ -4,7 +4,7 @@ Pydantic models for dashboard user accounts (admin/analyst) and self-service pro
 """
 import re
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import Optional, Literal
+from typing import List, Optional, Literal
 
 # Common breached/default passwords worth blocking outright even though
 # there's no live breach-list lookup here — these are the ones an attacker
@@ -46,7 +46,7 @@ def _validate_password_strength(value: str) -> str:
 class UserOut(BaseModel):
     id: int
     username: str
-    role: Literal["admin", "analyst"]
+    role: Literal["admin", "analyst", "app_admin"]
     display_name: Optional[str] = None
     email: Optional[str] = None
     enabled: bool
@@ -54,23 +54,29 @@ class UserOut(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     last_login_at: Optional[str] = None
+    # Only meaningful for role == 'app_admin' — the protected app ids this
+    # user may view/manage (see db_service.app_user_access / auth.py's
+    # require_app_access). Always [] for 'admin'/'analyst'.
+    app_ids: List[int] = []
 
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=r"^[a-zA-Z0-9_.-]+$")
     password: str = Field(min_length=12)
-    role: Literal["admin", "analyst"]
+    role: Literal["admin", "analyst", "app_admin"]
     display_name: Optional[str] = None
     email: Optional[EmailStr] = None
+    app_ids: List[int] = []
 
     _validate_password = field_validator("password")(_validate_password_strength)
 
 
 class UserUpdate(BaseModel):
-    role: Optional[Literal["admin", "analyst"]] = None
+    role: Optional[Literal["admin", "analyst", "app_admin"]] = None
     enabled: Optional[bool] = None
     display_name: Optional[str] = None
     email: Optional[EmailStr] = None
+    app_ids: Optional[List[int]] = None
 
 
 class AdminPasswordReset(BaseModel):

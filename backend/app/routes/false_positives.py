@@ -12,6 +12,7 @@ from app.models.false_positive_model import (
 from app.services import db_service, rule_manager
 from app.services.auth import require_admin, require_any_role, TokenData
 from app.services.log_reader import get_all_logs
+from app.utils.audit import log_admin_action
 
 
 def _attach_suggestion(entry: dict) -> dict:
@@ -93,6 +94,7 @@ async def mark_log_as_false_positive(
     logger.info(
         f"Log {request.log_id} flagged as a false positive by {current_user.username}."
     )
+    log_admin_action("false_positive", str(created["id"]), "create", current_user, details={"log_id": request.log_id, "rule_id": log_entry.rule_id})
     return created
 
 
@@ -150,6 +152,7 @@ async def update_status(
     logger.info(
         f"False positive {id} status updated to {request.status} by {current_user.username}."
     )
+    log_admin_action("false_positive", id, "update_status", current_user, details={"status": request.status})
     return updated
 
 
@@ -172,6 +175,7 @@ async def update_note(
     logger.info(
         f"Analyst notes for false positive {id} updated by {current_user.username}."
     )
+    log_admin_action("false_positive", id, "update_note", current_user)
     return updated
 
 
@@ -203,4 +207,5 @@ async def remove_false_positive(
         )
 
     logger.info(f"False positive {id} removed from DB by {current_user.username}.")
+    log_admin_action("false_positive", id, "delete", current_user)
     # 204 No Content — return nothing
