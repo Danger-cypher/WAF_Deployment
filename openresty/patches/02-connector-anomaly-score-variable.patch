@@ -1,5 +1,5 @@
 diff --git a/src/ngx_http_modsecurity_module.c b/src/ngx_http_modsecurity_module.c
-index d3d9624..1afa5ff 100644
+index d3d9624..8710424 100644
 --- a/src/ngx_http_modsecurity_module.c
 +++ b/src/ngx_http_modsecurity_module.c
 @@ -30,6 +30,8 @@
@@ -11,7 +11,7 @@ index d3d9624..1afa5ff 100644
  static void *ngx_http_modsecurity_create_main_conf(ngx_conf_t *cf);
  static char *ngx_http_modsecurity_init_main_conf(ngx_conf_t *cf, void *conf);
  static void *ngx_http_modsecurity_create_conf(ngx_conf_t *cf);
-@@ -564,12 +566,82 @@ ngx_module_t ngx_http_modsecurity_module = {
+@@ -564,12 +566,95 @@ ngx_module_t ngx_http_modsecurity_module = {
  };
  
  
@@ -30,6 +30,19 @@ index d3d9624..1afa5ff 100644
 + * exists. TX:BLOCKING_INBOUND_ANOMALY_SCORE is what CRS v4 actually
 + * accumulates during phase 1/2 (REQUEST-949-BLOCKING-EVALUATION.conf) and
 + * uses for its own blocking decision, so it's the correct signal here.
++ *
++ * NOTE 2: msc_get_tx_variable() calls Collection::resolveFirst() directly,
++ * which does a plain case-SENSITIVE std::multimap lookup on whatever key
++ * string a rule's setvar action stored — no case normalization. Variable
++ * parsing only uppercases the collection prefix ("TX"); the part after the
++ * colon/dot keeps the rule author's original case (src/variables/variable.cc
++ * Variable::Variable()). CRS writes this via lowercase SecLang
++ * ("setvar:'tx.blocking_inbound_anomaly_score=...'"), so the stored key is
++ * lowercase — even though CRS's own rules read it back as uppercase
++ * ("SecRule TX:BLOCKING_INBOUND_ANOMALY_SCORE...", which resolves through a
++ * different, case-insensitive code path used for normal rule evaluation).
++ * Querying uppercase here silently returns nothing. Must match the stored
++ * (lowercase) key exactly.
 + *
 + * Marked NOCACHEABLE because the value only becomes meaningful once
 + * msc_process_request_body() has run earlier in this same access phase —
@@ -61,7 +74,7 @@ index d3d9624..1afa5ff 100644
 +    }
 +
 +    score = msc_get_tx_variable(ctx->modsec_transaction,
-+        "BLOCKING_INBOUND_ANOMALY_SCORE");
++        "blocking_inbound_anomaly_score");
 +    if (score == NULL || score[0] == '\0') {
 +        v->not_found = 1;
 +        return NGX_OK;
@@ -94,7 +107,7 @@ index d3d9624..1afa5ff 100644
      int rc = 0;
  
      cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
-@@ -578,6 +650,15 @@ ngx_http_modsecurity_init(ngx_conf_t *cf)
+@@ -578,6 +663,15 @@ ngx_http_modsecurity_init(ngx_conf_t *cf)
          dd("We are not sure how this returns, NGINX doesn't seem to think it will ever be null");
          return NGX_ERROR;
      }
