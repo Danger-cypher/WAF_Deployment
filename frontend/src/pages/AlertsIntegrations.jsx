@@ -378,11 +378,13 @@ export default function AlertsIntegrations({ userRole }) {
                       let defaultCfg;
                       if (newType === 'email') defaultCfg = { smtp_host: "smtp.office365.com", smtp_port: 587, username: "alerts@yourcompany.com", password: "YOUR_PASSWORD_HERE", from_addr: "alerts@yourcompany.com", to_addrs: ["soc@yourcompany.com"], use_tls: true, use_ssl: false };
                       else if (newType === 'slack') defaultCfg = { webhook_url: "https://hooks.slack.com/services/..." };
+                      else if (newType === 'pagerduty') defaultCfg = { integration_key: "YOUR_PAGERDUTY_INTEGRATION_KEY" };
                       else defaultCfg = { url: "https://company.api/events", method: "POST", headers: {} };
                       setChannelForm({ ...channelForm, channel_type: newType, config: defaultCfg });
                     }}>
                       <option value="slack">Slack Webhook</option>
                       <option value="email">Email SMTP</option>
+                      <option value="pagerduty">PagerDuty</option>
                       <option value="webhook">Generic Webhook</option>
                     </select>
                   </div>
@@ -394,7 +396,7 @@ export default function AlertsIntegrations({ userRole }) {
                     className="settings-input" 
                     required 
                     style={{ minHeight: '140px', fontSize: '11px', fontFamily: 'monospace' }} 
-                    defaultValue={Object.keys(channelForm.config).length > 0 ? JSON.stringify(channelForm.config, null, 2) : (channelForm.channel_type === 'slack' ? '{\n  "webhook_url": "https://hooks.slack.com/services/..."\n}' : channelForm.channel_type === 'email' ? '{\n  "smtp_host": "smtp.office365.com",\n  "smtp_port": 587,\n  "username": "alerts@yourcompany.com",\n  "password": "YOUR_PASSWORD_HERE",\n  "from_addr": "alerts@yourcompany.com",\n  "to_addrs": ["soc@yourcompany.com"],\n  "use_tls": true,\n  "use_ssl": false\n}' : '{\n  "url": "https://company.api/events",\n  "method": "POST",\n  "headers": {}\n}')} 
+                    defaultValue={Object.keys(channelForm.config).length > 0 ? JSON.stringify(channelForm.config, null, 2) : (channelForm.channel_type === 'slack' ? '{\n  "webhook_url": "https://hooks.slack.com/services/..."\n}' : channelForm.channel_type === 'email' ? '{\n  "smtp_host": "smtp.office365.com",\n  "smtp_port": 587,\n  "username": "alerts@yourcompany.com",\n  "password": "YOUR_PASSWORD_HERE",\n  "from_addr": "alerts@yourcompany.com",\n  "to_addrs": ["soc@yourcompany.com"],\n  "use_tls": true,\n  "use_ssl": false\n}' : channelForm.channel_type === 'pagerduty' ? '{\n  "integration_key": "YOUR_PAGERDUTY_INTEGRATION_KEY"\n}' : '{\n  "url": "https://company.api/events",\n  "method": "POST",\n  "headers": {}\n}')}
                     onChange={(e) => {
                       try {
                         const cfg = JSON.parse(e.target.value);
@@ -493,7 +495,7 @@ export default function AlertsIntegrations({ userRole }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON (Optional)</label>
-                    <input className="settings-input" type="text" placeholder='e.g. {"threat_score_gt": 80}' value={conditionsText} onChange={(e) => {
+                    <textarea className="settings-input" style={{ minHeight: '90px', fontSize: '11px', fontFamily: 'monospace' }} placeholder='e.g. {"threat_score_gt": 80}' value={conditionsText} onChange={(e) => {
                       setConditionsText(e.target.value);
                       try {
                         const conds = e.target.value.trim() ? JSON.parse(e.target.value) : {};
@@ -502,6 +504,22 @@ export default function AlertsIntegrations({ userRole }) {
                         // ignore invalid JSON while typing
                       }
                     }} />
+                    {/* Reference for the condition keys evaluate_condition() actually
+                        supports (backend/app/services/alert_manager.py) — the field
+                        itself is free-text JSON with no other documentation, so this
+                        is the only way to discover them short of reading source.
+                        crs_score_gt deliberately isn't listed: it's fed by the
+                        ModSecurity-nginx connector's CRS score, a known separate gap
+                        where that value always reports 0 — listing it here would
+                        point analysts at a condition that can never currently match. */}
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                      <strong>Available keys:</strong>{' '}
+                      <code>threat_score_gt</code> / <code>threat_score_lt</code> (number, ML combined threat score),{' '}
+                      <code>rpm_gt</code> (number, requests/min from client),{' '}
+                      <code>isolation_score_gt</code> (number, Isolation Forest anomaly score),{' '}
+                      <code>xgb_prob_gt</code> (number, XGBoost probability),{' '}
+                      <code>blocked_countries</code> / <code>allowed_countries</code> (array of ISO country codes)
+                    </div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Throttle Cooldown (Minutes)</label>

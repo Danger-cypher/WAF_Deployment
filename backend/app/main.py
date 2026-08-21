@@ -223,6 +223,41 @@ app.add_middleware(
 )
 
 
+from fastapi.responses import JSONResponse
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """
+    Only fires for genuinely unhandled exceptions — FastAPI/Starlette
+    already routes HTTPException (404/401/403/etc, raised deliberately
+    throughout the routes) through its own default handler before this
+    one is ever considered, so a normal 404 never trips a "system_error"
+    alert here.
+
+    "system_error" was previously a real dropdown option on the Alerts &
+    Integrations rule-creation form that could never actually fire —
+    nothing in the codebase ever called trigger_event("system_error", ...).
+    An admin could build a whole rule + channel around it and it would
+    silently never notify, forever. This is the first real trigger for it.
+    """
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
+
+    from app.services.alert_manager import alert_manager
+    asyncio.create_task(alert_manager.trigger_event(
+        event_type="system_error",
+        event_data={
+            "path": request.url.path,
+            "method": request.method,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        },
+        custom_message=f"Unhandled {type(exc).__name__} on {request.method} {request.url.path}: {exc}",
+    ))
+
+    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+
+
 # Cache hardening config at module level — refreshed every 30 s.
 # This avoids a settings file read + deep merge on EVERY HTTP request.
 import time as _time_module
