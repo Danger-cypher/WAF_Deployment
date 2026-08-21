@@ -1,0 +1,87 @@
+diff --git a/headers/modsecurity/transaction.h b/headers/modsecurity/transaction.h
+index e0033e8..947121d 100644
+--- a/headers/modsecurity/transaction.h
++++ b/headers/modsecurity/transaction.h
+@@ -404,6 +404,22 @@ class Transaction : public TransactionAnchoredVariables, public TransactionSecMa
+     size_t getResponseBodyLength();
+     size_t getRequestBodyLength();
+ 
++    /**
++     * Resolves a single TX-collection variable by name (e.g. "ANOMALY_SCORE"
++     * for CRS's TX:ANOMALY_SCORE) and returns it as a C string. Returns an
++     * empty string ("", never NULL) if the variable was never set — callers
++     * that need to tell "unset" apart from "explicitly empty" should use
++     * resolveFirst() on m_collections.m_tx_collection directly instead.
++     *
++     * @note The returned pointer is backed by an internal buffer owned by
++     *       this Transaction (m_lastResolvedTxVariable) and is only valid
++     *       until the NEXT call to getTxVariable() on the same Transaction,
++     *       or until the Transaction itself is destroyed — same convention
++     *       as C's strtok()/ctime(). Existing callers (msc_get_tx_variable)
++     *       copy the value out immediately, so this is safe in practice.
++     */
++    const char *getTxVariable(const std::string &name);
++
+ #ifndef NO_LOGS
+     void debug(int level, const std::string& message) const;
+ #endif
+@@ -654,6 +670,9 @@ class Transaction : public TransactionAnchoredVariables, public TransactionSecMa
+      * the web server (connector) log.
+      */
+     void *m_logCbData;
++
++    /** Scratch buffer backing the pointer returned by getTxVariable(). */
++    std::string m_lastResolvedTxVariable;
+ };
+ 
+ 
+@@ -724,6 +743,14 @@ int msc_process_uri(Transaction *transaction, const char *uri,
+ /** @ingroup ModSecurity_C_API */
+ const char *msc_get_response_body(const Transaction *transaction);
+ 
++/**
++ * @ingroup ModSecurity_C_API
++ * C wrapper for Transaction::getTxVariable() — resolves a single
++ * TX-collection variable (e.g. "ANOMALY_SCORE") by name. Returns "" (never
++ * NULL) if transaction/name is NULL or the variable was never set.
++ */
++const char *msc_get_tx_variable(Transaction *transaction, const char *name);
++
+ /** @ingroup ModSecurity_C_API */
+ size_t msc_get_response_body_length(Transaction *transaction);
+ 
+diff --git a/src/transaction.cc b/src/transaction.cc
+index 8a83e12..daf7560 100644
+--- a/src/transaction.cc
++++ b/src/transaction.cc
+@@ -1289,6 +1289,14 @@ size_t Transaction::getRequestBodyLength() {
+ }
+ 
+ 
++const char *Transaction::getTxVariable(const std::string &name) {
++    std::unique_ptr<std::string> value =
++        m_collections.m_tx_collection->resolveFirst(name);
++    m_lastResolvedTxVariable = value ? *value : std::string();
++    return m_lastResolvedTxVariable.c_str();
++}
++
++
+ /**
+  * @name    processLogging
+  * @brief   Logging all information relative to this transaction.
+@@ -2215,6 +2223,15 @@ extern "C" const char *msc_get_response_body(const Transaction *transaction) {
+ }
+ 
+ 
++extern "C" const char *msc_get_tx_variable(Transaction *transaction,
++    const char *name) {
++    if (transaction == NULL || name == NULL) {
++        return "";
++    }
++    return transaction->getTxVariable(std::string(name));
++}
++
++
+ /**
+  * @name    msc_get_response_body_length
+  * @brief   Retrieve the length of the response body.

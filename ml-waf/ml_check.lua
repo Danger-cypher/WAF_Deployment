@@ -192,9 +192,12 @@ if ok then
     red:set_keepalive(10000, 100)
 end
 
--- 1. Read the real ModSecurity anomaly score exposed as an Nginx variable.
+-- 1. Read the real ModSecurity anomaly score, exposed by the connector's
+-- $modsecurity_anomaly_score variable (backed by TX:ANOMALY_SCORE via
+-- msc_get_tx_variable()). Populated because ModSecurity's own access-phase
+-- handler always runs before this script within the same access phase.
 local headers = ngx.req.get_headers()
-local crs_score = tonumber(ngx.var.modsec_anomaly_score) or 0.0
+local crs_score = tonumber(ngx.var.modsecurity_anomaly_score) or 0.0
 local matched_vars = ngx.var.modsec_matched_var_names or ""
 
 -- 3. Prepare telemetry payload parameters

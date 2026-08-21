@@ -35,9 +35,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
+# Local patches applied to the freshly-cloned upstream sources below — see
+# each patch file's own header comment for what it does and why.
+COPY patches/ /build/patches/
+
 # ── Compile ModSecurity v3 from source (fixes CRS v4 variable incompatibility) ─
+# 01-libmodsecurity-tx-variable-accessor.patch adds Transaction::getTxVariable()
+# / msc_get_tx_variable(), a public accessor for arbitrary TX-collection
+# variables (e.g. TX:ANOMALY_SCORE) that upstream libmodsecurity's C API has
+# no equivalent for. Required so the connector below can expose the real CRS
+# score to ml_check.lua instead of the always-zero value it had no way to
+# read before (item 8 of the WAF improvement plan).
 RUN git clone --depth=1 -b v3/master --single-branch https://github.com/SpiderLabs/ModSecurity /build/ModSecurity \
     && cd /build/ModSecurity \
+    && git apply /build/patches/01-libmodsecurity-tx-variable-accessor.patch \
     && git submodule update --init --recursive \
     && ./build.sh \
     && ./configure --with-lmdb=no \
@@ -51,8 +62,17 @@ ARG OPENRESTY_VER=1.25.3.2
 RUN wget -q "https://openresty.org/download/openresty-${OPENRESTY_VER}.tar.gz" \
     && tar -xzf "openresty-${OPENRESTY_VER}.tar.gz"
 
-# Clone ModSecurity-nginx connector
-RUN git clone --depth=1 https://github.com/SpiderLabs/ModSecurity-nginx.git /build/ModSecurity-nginx
+# Clone ModSecurity-nginx connector.
+# 02-connector-anomaly-score-variable.patch registers a real
+# $modsecurity_anomaly_score nginx variable, backed by msc_get_tx_variable()
+# above, so ml_check.lua can read ModSecurity's real anomaly score. Safe to
+# read from access_by_lua_file: verified live (MSC_PHASE_ORDER_DIAG logging)
+# that this module's NGX_HTTP_ACCESS_PHASE handler — which calls
+# msc_process_request_body() and populates TX:ANOMALY_SCORE — always runs
+# before access_by_lua_file within the same access phase.
+RUN git clone --depth=1 https://github.com/SpiderLabs/ModSecurity-nginx.git /build/ModSecurity-nginx \
+    && cd /build/ModSecurity-nginx \
+    && git apply /build/patches/02-connector-anomaly-score-variable.patch
 
 # Clone ngx_http_geoip2_module
 RUN git clone --depth=1 https://github.com/leev/ngx_http_geoip2_module.git /build/ngx_http_geoip2_module
