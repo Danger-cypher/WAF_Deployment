@@ -21,6 +21,7 @@ from app.services.user_service import UserService
 import app.services.user_service as user_service_module
 import app.routes.auth as auth_route
 import app.routes.users as users_route
+import app.routes.sso as sso_route
 from app.main import app as fastapi_app
 
 
@@ -42,6 +43,7 @@ def isolated_user_service(tmp_path, monkeypatch):
     monkeypatch.setattr(user_service_module, "user_service", fresh_service)
     monkeypatch.setattr(auth_route, "user_service", fresh_service)
     monkeypatch.setattr(users_route, "user_service", fresh_service)
+    monkeypatch.setattr(sso_route, "user_service", fresh_service)
     return fresh_service
 
 

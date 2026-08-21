@@ -49,6 +49,25 @@ class Settings(BaseSettings):
     # waf-ml container hitting POST /alerts/trigger). Not a user credential.
     INTERNAL_ALERT_TRIGGER_KEY: str = ""
 
+    # ------------------------------------------------------------------
+    # SIEM SSO (mint-and-redirect JWT exchange — see docs onboarding doc).
+    # Universal/fixed side (per the doc's §10 config split): our audience
+    # name and the SIEM's issuer are hardcoded, matching what the SIEM
+    # route hardcodes for us. Client-specific side: the HS256 shared
+    # secret is per-deployment and lives in .env.
+    # ------------------------------------------------------------------
+    SSO_ISSUER: str = "cybersentinel-siem"
+    SSO_AUDIENCE: str = "cybersentinel-waf"
+    # HS256 phase (build first, per the doc's rollout plan).
+    WAF_SSO_SECRET: str = ""
+    # RS256/JWKS phase — set once the SIEM has this deployment's audience
+    # verified against its live JWKS and flips it into SSO_RS256_TARGETS.
+    # Leaving this unset keeps the exchange endpoint on HS256-only.
+    SIEM_JWKS_URL: str = ""
+    # Replay window for the token's single-use `nonce` claim. Comfortably
+    # longer than the SIEM's ~120s token TTL + ~60s nbf back-date skew.
+    SSO_NONCE_TTL_SECONDS: int = 300
+
     # ClickHouse — Log Storage
     CLICKHOUSE_HOST: str = "waf-clickhouse"
     CLICKHOUSE_PORT: int = 8123

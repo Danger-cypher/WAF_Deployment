@@ -81,6 +81,13 @@ class UserService:
                 # before such a change is rejected instead of trusted until
                 # it naturally expires. See decode_token() in services/auth.py.
                 ("session_version", "ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0"),
+                # SIEM SSO JIT provisioning (see services/sso.py) keys users
+                # on the token's stable `sub` claim rather than username —
+                # not UNIQUE at the SQLite level (SQLite treats every NULL
+                # as distinct under UNIQUE, so that alone wouldn't stop
+                # duplicate *non-null* subjects); enforced in code instead
+                # via get_by_sso_subject() before every insert.
+                ("sso_subject_id", "ALTER TABLE users ADD COLUMN sso_subject_id TEXT"),
             ):
                 try:
                     cursor.execute(ddl)
@@ -212,6 +219,89 @@ class UserService:
                 "SELECT * FROM users WHERE id = ?", (user_id,)
             ).fetchone()
             return self._row_to_dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_by_sso_subject(self, sub: str) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT * FROM users WHERE sso_subject_id = ?", (sub,)
+            ).fetchone()
+            return self._row_to_dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_by_email_unlinked(self, email: str) -> Optional[Dict[str, Any]]:
+        """Finds a pre-existing local account by email that has never been
+        linked to an SSO subject yet — used only for the one-time adopt-on-
+        first-SSO-login migration path (see services/sso.py). Deliberately
+        excludes accounts that already have a *different* sso_subject_id so
+        a second SIEM user sharing an email can't hijack the first one's
+        account."""
+        if not email:
+            return None
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT * FROM users WHERE lower(email) = lower(?) AND sso_subject_id IS NULL",
+                (email,),
+            ).fetchone()
+            return self._row_to_dict(row) if row else None
+        finally:
+            conn.close()
+
+    def username_exists(self, username: str) -> bool:
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM users WHERE username = ?", (username,)
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+    def create_sso_user(
+        self,
+        username: str,
+        sub: str,
+        role: str,
+        display_name: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> int:
+        """JIT-provisions a brand new account for a SIEM SSO login. The
+        password hash is a random value nobody (including us) ever sees
+        again — this account is SSO-only and can never authenticate via
+        POST /auth/login."""
+        from app.services.auth import get_password_hash
+        import secrets as _secrets
+
+        unusable_password_hash = get_password_hash(_secrets.token_urlsafe(48))
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                """INSERT INTO users
+                   (username, password_hash, role, display_name, email, enabled, sso_subject_id)
+                   VALUES (?, ?, ?, ?, ?, 1, ?)""",
+                (username, unusable_password_hash, role, display_name, email, sub),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def adopt_sso_subject(self, user_id: int, sub: str) -> None:
+        """Links a pre-existing local account to a SIEM subject id on its
+        first SSO login (see get_by_email_unlinked). Does not bump
+        session_version — no security-relevant state (role/password/
+        enabled) changed, just how future logins find this account."""
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                "UPDATE users SET sso_subject_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (sub, user_id),
+            )
+            conn.commit()
         finally:
             conn.close()
 

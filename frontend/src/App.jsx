@@ -6,6 +6,7 @@ import {
 } from './services/api';
 
 import Login from './components/Login';
+import SsoCallback from './components/SsoCallback';
 import Sidebar from './components/Sidebar';
 import NotificationBell from './components/NotificationBell';
 import AccountMenu from './components/AccountMenu';
@@ -165,6 +166,12 @@ function App() {
   };
 
   useEffect(() => {
+    // SsoCallback owns auth on this route — it hasn't exchanged the token
+    // yet, so getCurrentUser() below would 401 and its handleLogout()
+    // would clobber the URL (and the token still in the hash) before the
+    // exchange gets a chance to run.
+    if (window.location.pathname === '/auth/sso') return;
+
     const handleUnauthorized = () => {
       handleLogout();
     };
@@ -208,6 +215,18 @@ function App() {
       return () => clearTimeout(timer);
     }
   }, [activeTab, userRole]);
+
+  if (window.location.pathname === '/auth/sso') {
+    return (
+      <SsoCallback
+        setAuth={setIsAuthenticated}
+        onLoginSuccess={(user) => {
+          setUserRole(user.role || 'analyst');
+          setUsername(user.username || 'user');
+        }}
+      />
+    );
+  }
 
   if (!isAuthenticated) {
     return (

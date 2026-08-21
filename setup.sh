@@ -206,6 +206,8 @@ JWT_SECRET_KEY=
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 INTERNAL_ALERT_TRIGGER_KEY=
+WAF_SSO_SECRET=
+SIEM_JWKS_URL=
 BACKEND_CORS_ORIGINS=http://localhost:3020,http://127.0.0.1:3020
 GEOIP_DATA_DIR=/etc/nginx/geoip
 CLICKHOUSE_HOST=waf-clickhouse
@@ -356,6 +358,8 @@ REDIS_PW=$(grep -E "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 JWT_KEY=$(grep -E "^JWT_SECRET_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 CH_PW=$(grep -E "^CLICKHOUSE_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 INTERNAL_KEY=$(grep -E "^INTERNAL_ALERT_TRIGGER_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
+SSO_SECRET=$(grep -E "^WAF_SSO_SECRET=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
+JWKS_URL=$(grep -E "^SIEM_JWKS_URL=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 CORS_ORIGINS=$(grep -E "^BACKEND_CORS_ORIGINS=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 
 if is_unset_or_placeholder "$REDIS_PW"; then
@@ -392,6 +396,21 @@ if is_unset_or_placeholder "$INTERNAL_KEY"; then
     fi
 fi
 
+if is_unset_or_placeholder "$SSO_SECRET"; then
+    # This is OUR half of the SIEM SSO shared secret (HS256 phase) — safe
+    # to generate ourselves since only WE need to know it until we hand
+    # it to the SIEM team (see the SSO summary printed at the end of this
+    # script). Unlike the JWKS URL below, there's nothing to ask the user
+    # for here.
+    log "Generating SIEM SSO shared secret (WAF_SSO_SECRET)..."
+    SSO_SECRET=$(openssl rand -hex 32)
+    if grep -q "^WAF_SSO_SECRET=" "$ENV_FILE"; then
+        sed -i "s|^WAF_SSO_SECRET=.*|WAF_SSO_SECRET=${SSO_SECRET}|" "$ENV_FILE"
+    else
+        echo "WAF_SSO_SECRET=${SSO_SECRET}" >> "$ENV_FILE"
+    fi
+fi
+
 
 if [ -z "$CORS_ORIGINS" ]; then
     echo ""
@@ -419,6 +438,48 @@ else
     # Update existing CORS_ORIGINS to ensure the correct dashboard port is configured
     CORS_ORIGINS=$(echo "$CORS_ORIGINS" | sed -E "s/:(3020|3001|[0-9]+)\b/:${DASHBOARD_PORT}/g")
     sed -i "s|^BACKEND_CORS_ORIGINS=.*|BACKEND_CORS_ORIGINS=${CORS_ORIGINS}|" "$ENV_FILE"
+fi
+
+# ── SIEM SSO Configuration ────────────────────────────────────────────────────
+# WAF_SSO_SECRET was auto-generated above — that's fine, it's our half of a
+# shared secret and nobody outside this deployment needs to have chosen it.
+# SIEM_JWKS_URL is different: it's issued BY the SIEM team (their RS256
+# key-publishing endpoint) and doesn't exist until they've onboarded this
+# deployment, so we deliberately ASK for it here instead of generating or
+# guessing a value — there's nothing to generate, and defaulting it to
+# something would silently disable RS256 without the operator noticing.
+# Leaving it blank is fine: the exchange endpoint stays on HS256 (using the
+# secret generated above) until this is filled in and the containers are
+# rebuilt.
+if [ -z "$JWKS_URL" ]; then
+    echo ""
+    echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    echo -e "${CYAN}                 SIEM SSO Configuration                        ${NC}"
+    echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    log "This deployment's SSO audience name is fixed: cybersentinel-waf"
+    log "A shared HS256 secret was just generated for you — it will be printed"
+    log "  at the end of this script so you can send it to your SIEM team."
+    echo ""
+    echo -e "  ${YELLOW}[?]${NC} SIEM JWKS URL enables the stronger RS256 verification phase."
+    echo -e "      This is issued by your SIEM team, not something we can generate —"
+    echo -e "      if you don't have it yet, just press ENTER and configure it later"
+    echo -e "      by setting SIEM_JWKS_URL in .env and re-running:"
+    echo -e "      ${CYAN}sudo ${COMPOSE_CMD} up -d --build backend${NC}"
+    echo -n "  Enter SIEM JWKS URL (e.g. https://siem.company.com/api/sso/jwks.json), or press ENTER to skip: "
+    read -r JWKS_URL_INPUT
+
+    if [ -n "$JWKS_URL_INPUT" ]; then
+        JWKS_URL="$JWKS_URL_INPUT"
+        if grep -q "^SIEM_JWKS_URL=" "$ENV_FILE"; then
+            sed -i "s|^SIEM_JWKS_URL=.*|SIEM_JWKS_URL=${JWKS_URL}|" "$ENV_FILE"
+        else
+            echo "SIEM_JWKS_URL=${JWKS_URL}" >> "$ENV_FILE"
+        fi
+        success "SIEM_JWKS_URL saved. RS256 verification will be active once containers start."
+    else
+        warn "SIEM_JWKS_URL skipped — SSO will run HS256-only until you add it."
+    fi
 fi
 
 success "Environment variables generated and saved in $ENV_FILE"
@@ -928,6 +989,20 @@ echo -e "  🔐 ${BLUE}Credentials:${NC}"
 echo -e "     - ${GREEN}Administrator:${NC} admin  /  (your custom password)"
 echo -e "     - ${GREEN}Security Analyst:${NC} analyst  /  (your custom password)"
 echo -e "     - ${GREEN}ClickHouse Database:${NC} Username: (custom username, default: wafuser) / Password: (check your .env file)"
+echo ""
+echo -e "  🔗 ${BLUE}SIEM SSO Setup${NC} (send this section to your SIEM team to onboard this deployment):"
+echo -e "     - ${CYAN}Audience name:${NC}      cybersentinel-waf"
+echo -e "     - ${CYAN}Exchange endpoint:${NC}  https://${SERVER_IP}/api/auth/sso/exchange  (or via the dashboard port: http://${SERVER_IP}:${DASHBOARD_PORT}/api/auth/sso/exchange)"
+echo -e "     - ${CYAN}Landing page:${NC}       https://${SERVER_IP}/auth/sso"
+echo -e "     - ${CYAN}Shared secret (WAF_SSO_SECRET, HS256 phase):${NC} ${SSO_SECRET}"
+if [ -n "${JWKS_URL:-}" ]; then
+    echo -e "     - ${CYAN}SIEM JWKS URL configured:${NC} ${JWKS_URL} — RS256 verification is active."
+else
+    echo -e "     - ${YELLOW}SIEM JWKS URL not set yet${NC} — SSO is running HS256-only. Add SIEM_JWKS_URL to"
+    echo -e "       .env once your SIEM team provides it, then: sudo ${COMPOSE_CMD} up -d --build backend"
+fi
+echo -e "     ${YELLOW}⚠  The shared secret above is a credential — send it to your SIEM contact${NC}"
+echo -e "     ${YELLOW}   over a secure channel, not plaintext email/chat, and never commit it.${NC}"
 echo ""
 echo -e "  🌐 ${BLUE}Port Mapping Structure:${NC}"
 echo -e "     - ${CYAN}Port ${DASHBOARD_PORT}${NC} : Direct Administrative Dashboard Access (WAF-Inspected)"

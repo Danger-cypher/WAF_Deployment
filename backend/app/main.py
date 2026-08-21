@@ -12,6 +12,7 @@ from app.routes import (
     health,
     rules,
     auth,
+    sso,
     settings as settings_route,
     false_positives,
     exclusions,
@@ -336,6 +337,7 @@ app.include_router(stats.router, tags=["Stats"], dependencies=csrf_deps)
 app.include_router(health.router, tags=["Health"])  # Health is usually open/GET only
 app.include_router(rules.router, tags=["Rules"], dependencies=csrf_deps)
 app.include_router(auth.router, prefix="/auth", tags=["Auth"]) # Logout is protected inside auth.py
+app.include_router(sso.router, prefix="/auth", tags=["Auth", "SSO"])  # No CSRF dep, same reasoning as /auth/login
 app.include_router(settings_route.router, tags=["Settings"], dependencies=csrf_deps)
 app.include_router(false_positives.router, tags=["False Positives"], dependencies=csrf_deps)
 app.include_router(exclusions.router, tags=["Exclusions"], dependencies=csrf_deps)
