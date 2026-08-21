@@ -1895,6 +1895,31 @@ body::before {
   overflow: hidden;
   min-height: 0;
 }
+/* Login showcase + footer bar are a fixed dark "security ops" surface
+   by design — always dark, regardless of the dashboard's Dark/Light
+   theme. Re-pinning the same custom-property names here (rather than
+   inventing --sc-* aliases) means every existing var(--text-primary)
+   etc. reference below and in Login.jsx keeps working unmodified; the
+   nearer scope just wins over :root[data-theme="light"]. Values match
+   the app's normal dark-theme defaults, so dark mode is visually
+   unchanged — only light mode stops inheriting near-black text/borders
+   onto this panel. */
+.login-showcase,
+.login-footer-bar {
+  --text-primary:   #f1f5f9;
+  --text-secondary: #64748b;
+  --border-color:   rgba(255, 255, 255, 0.06);
+  --accent-color:   #818cf8;
+  --accent-bg:      rgba(99, 102, 241, 0.1);
+  --accent-border:  rgba(99, 102, 241, 0.25);
+  --accent-glow:    rgba(99, 102, 241, 0.35);
+  --cyan-bg:        rgba(34, 211, 238, 0.08);
+  --cyan-glow:      rgba(34, 211, 238, 0.3);
+  --danger-color:   #f43f5e;
+  --ml-color:       #a78bfa;
+  --success-color:  #10b981;
+}
+
 .login-showcase {
   flex: 1;
   display: flex;
