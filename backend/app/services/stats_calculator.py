@@ -70,9 +70,16 @@ _nginx_req_cache_time: Dict[int, float] = {}
 
 def _get_total_nginx_requests(hours: Optional[int] = None) -> int:
     """
-    Counts NGINX allowed requests (status code != 403) from access logs.
-    By excluding blocked requests, we prevent double-counting when we combine
-    these counts with the ClickHouse blocked database statistics.
+    Counts NGINX allowed requests (status code not in the WAF's blocked-code
+    set — see clickhouse_service.BLOCKED_HTTP_CODES) from access logs. By
+    excluding blocked requests, we prevent double-counting when we combine
+    these counts with the ClickHouse blocked database statistics. Previously
+    only excluded literal "403", so requests blocked via require-auth (401),
+    positive-security (405/415), or rate-limiting (429/444) were counted as
+    "allowed" here even though ClickHouse's total_blocked (correctly) counts
+    them as blocked — total_requests stayed accurate in aggregate (every
+    request landed in exactly one bucket) but silently overstated "allowed"
+    at the expense of "blocked".
     """
     now = time.monotonic()
     cache_key = hours or 0
@@ -92,7 +99,7 @@ def _get_total_nginx_requests(hours: Optional[int] = None) -> int:
                             parts = line.split('"')
                             if len(parts) >= 3:
                                 status_part = parts[2].strip().split()
-                                if status_part and status_part[0] != "403":
+                                if status_part and status_part[0] not in clickhouse_service.BLOCKED_HTTP_CODES:
                                     count += 1
         except Exception:
             pass
@@ -145,7 +152,7 @@ def _get_total_nginx_requests(hours: Optional[int] = None) -> int:
                                         parts = line.split('"')
                                         if len(parts) >= 3:
                                             status_part = parts[2].strip().split()
-                                            if status_part and status_part[0] != "403":
+                                            if status_part and status_part[0] not in clickhouse_service.BLOCKED_HTTP_CODES:
                                                 count += 1
                                     else:
                                         reached_cutoff = True

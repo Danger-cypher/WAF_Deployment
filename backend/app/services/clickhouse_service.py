@@ -25,6 +25,21 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Canonical "this WAF actively blocked the request" status codes.
+# 401 = require-auth (nginx_manager._generate_app_auth_conf), 403 = CRS /
+# positive-security extension check / exclusions, 405/415 = positive-security
+# method/content-type allowlists, 429/444 = bot & DDoS rate-limiting
+# (nginx_manager: 444 for "Silent Drop", 429 otherwise). 406 has no current
+# generator but is kept for backward compatibility with already-ingested rows.
+# Was previously duplicated ad hoc per-query as ('401','403','406','429'),
+# silently missing 405/415/444 everywhere and used inconsistently (get_stats
+# checked bare '403' only) — kept here as one shared tuple so every query
+# stays in sync as enforcement features are added.
+# ---------------------------------------------------------------------------
+BLOCKED_HTTP_CODES = ("401", "403", "405", "406", "415", "429", "444")
+_BLOCKED_HTTP_CODES_SQL = "(" + ", ".join(f"'{c}'" for c in BLOCKED_HTTP_CODES) + ")"
+
+# ---------------------------------------------------------------------------
 # Client pool — one client per thread
 # ---------------------------------------------------------------------------
 # clickhouse-connect's HttpClient auto-generates a server-side session_id per
@@ -560,12 +575,12 @@ def get_stats(hours: Optional[int] = None) -> Dict[str, Any]:
     try:
         result = client.query(f"""
             SELECT
-                countIf(http_code = '403')                                           AS total_blocked,
+                countIf(http_code IN {_BLOCKED_HTTP_CODES_SQL})                                           AS total_blocked,
                 countIf(lower(attack_type) = 'sql injection' AND http_code = '403') AS sqli_count,
                 countIf(lower(attack_type) = 'xss' AND http_code = '403')           AS xss_count,
-                uniqExactIf(client_ip, http_code = '403')                           AS unique_ips,
-                countIf(http_code = '403' AND timestamp >= now() - INTERVAL 1 MINUTE) AS recent_threats,
-                argMaxIf(attack_type, 1, http_code = '403' AND attack_type != '' AND attack_type != 'Unknown') AS top_attack
+                uniqExactIf(client_ip, http_code IN {_BLOCKED_HTTP_CODES_SQL})                           AS unique_ips,
+                countIf(http_code IN {_BLOCKED_HTTP_CODES_SQL} AND timestamp >= now() - INTERVAL 1 MINUTE) AS recent_threats,
+                argMaxIf(attack_type, 1, http_code IN {_BLOCKED_HTTP_CODES_SQL} AND attack_type != '' AND attack_type != 'Unknown') AS top_attack
             FROM waf_events
             WHERE 1=1 {time_filter}
         """)
@@ -631,7 +646,7 @@ def get_attack_types(hours: Optional[int] = None) -> List[Dict]:
         result = client.query(f"""
             SELECT attack_type, count() AS count
             FROM waf_events
-            WHERE http_code IN ('401', '403', '406', '429') {time_filter}
+            WHERE http_code IN {_BLOCKED_HTTP_CODES_SQL} {time_filter}
             GROUP BY attack_type
             ORDER BY count DESC
         """)
@@ -651,7 +666,7 @@ def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
         result = client.query(f"""
             SELECT client_ip, any(country) AS country, count() AS count
             FROM waf_events
-            WHERE http_code IN ('401', '403', '406', '429') AND client_ip != '' {time_filter}
+            WHERE http_code IN {_BLOCKED_HTTP_CODES_SQL} AND client_ip != '' {time_filter}
             GROUP BY client_ip
             ORDER BY count DESC
             LIMIT {int(limit)}
@@ -684,7 +699,7 @@ def get_severity_distribution(hours: Optional[int] = None) -> List[Dict]:
                 ) AS sev_normalized,
                 count() AS count
             FROM waf_events
-            WHERE http_code IN ('401', '403', '406', '429') {time_filter}
+            WHERE http_code IN {_BLOCKED_HTTP_CODES_SQL} {time_filter}
             GROUP BY sev_normalized
         """)
         counts = {row[0]: row[1] for row in result.result_rows}
