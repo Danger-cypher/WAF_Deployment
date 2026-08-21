@@ -42,7 +42,6 @@ Here is an overview of the directory structure of the CyberSentinel WAF reposito
 ```text
 /opt/ModSecurity/WAF_GUI/
 ├── backend/                      # Python FastAPI backend server
-│   ├── main.py                   # Launcher entry point
 │   ├── requirements.txt          # Python dependencies for the backend
 │   ├── app/                      # Application core package
 │       ├── main.py               # FastAPI configuration & routing registry
@@ -93,12 +92,9 @@ Here is an overview of the directory structure of the CyberSentinel WAF reposito
 │   └── clickhouse/               # ClickHouse schema scripts
 │       └── init.sql              # Automated DB table schemas initialization
 ├── scripts/                      # System administration & deployment scripts
-│   ├── compile-nginx-lua.sh      # Compiles Nginx / OpenResty Lua modules
-│   ├── rebuild-modsecurity-nginx.sh # Dynamic compilation of WAF engine modules
 │   ├── update-crs.sh             # Core Rule Set updater script
 │   ├── deploy-frontend.sh        # Frontend distribution builder and deployment script
-│   ├── modsec-clamscan.sh        # ClamAV malware scanning script
-│   ├── setup_ddos_kernel.sh      # Kernel DDoS tuning configuration script
+│   ├── generate-secrets.sh       # Generates secure env keys/passwords for a fresh deployment
 │   ├── configure-production.sh   # Post-install SSL/CORS reconfiguration tool
 │   ├── reset-password.py         # Admin/analyst password reset utility (operates on users.db)
 │   ├── migrate_sqlite_to_clickhouse.py # One-time SQLite to ClickHouse database migrator
@@ -134,7 +130,7 @@ Quick reference mapping of important files, configuration, and log paths:
 
 1. **Active Threat Blocking:** Instantly detects and blocks common hacker attacks (such as SQL Injection, Cross-Site Scripting (XSS), and Path Traversal) before they reach your web application.
 2. **AI/ML Security Engine:** An intelligent machine-learning layer that analyzes traffic behavior and scores the "threat level" of users to catch new, sophisticated attacks that traditional rules might miss.
-3. **DDoS & Bot Mitigation:** Limits request speeds and blocks automated bots that try to overwhelm your server or scrape your website content.
+3. **DDoS & Bot Mitigation:** Limits request speeds and blocks automated bots that try to overwhelm your server or scrape your website content, with optional GeoIP2-based country rate-limiting and a JS-Challenge interstitial mode that filters out scripted bots without an outright block.
 4. **API Protection:** Automatically discovers application endpoints from live traffic, assigns a security grade (A to F) to each one (TLS, compression, auth signals), and lets an analyst turn that grade directly into enforcement — one click adds a traffic-suggested rate limit, or fully blocks a specific method+endpoint combination.
 5. **Web Anti-Defacement (File Integrity):** Monitors files on the server in real-time. If an unauthorized attacker somehow changes the website code, CyberSentinel immediately reverts the file back to its original state and sounds an alarm.
 6. **Visual Control Panel:** A clean, responsive dashboard that lets you see live logs, adjust settings, and monitor attack statistics at a glance.
@@ -146,8 +142,10 @@ Quick reference mapping of important files, configuration, and log paths:
 12. **Virtual Patching:** A live custom-rule editor for writing hand-crafted ModSecurity rules to mitigate zero-day vulnerabilities immediately, with syntax validation before any change reaches production traffic.
 13. **Positive Security Policy:** Per-protected-app allowlisting of HTTP methods, request Content-Types, and blocked file extensions — an opt-in, stricter alternative to signature-based (negative) detection.
 14. **Per-Application Authentication Requirements:** Require a configurable header or cookie to be present before a protected app's backend is reached, enforced at the WAF layer.
-15. **Real-Time Alerts & Multi-Channel Integrations:** Configurable notification channels (Email/SMTP, Slack, generic Webhook, PagerDuty) with rule-based routing by event type and severity, throttling, and a live in-dashboard notification bell.
-16. **Role-Based User Management:** Admin-managed accounts (Admin / Analyst roles) with self-service profile and password management, backed by a real user database — not shared/hardcoded credentials.
+15. **Per-Application Login Protection:** Rate-limits a protected app's own login endpoint (by URI+host) to blunt credential-stuffing/brute-force attempts, configured with one click from the Protected Apps screen.
+16. **Real-Time Alerts & Multi-Channel Integrations:** Configurable notification channels (Email/SMTP, Slack, generic Webhook, PagerDuty) with rule-based routing by event type and severity, throttling, and a live in-dashboard notification bell.
+17. **Role-Based User Management:** Admin-managed accounts across three roles — `Admin` (full control), `Analyst` (read-only), and `App Admin` (scoped to a specific set of protected apps) — with self-service profile and password management, backed by a real user database, not shared/hardcoded credentials.
+18. **Admin Activity Audit Log:** Every settings change, rule toggle, app edit, and user-management action is recorded with who did it and when, viewable from a dedicated Activity Log tab in Settings.
 
 ---
 
@@ -243,7 +241,7 @@ Dashboard accounts are real, individually managed user records — not a single 
 * **Session Revocation:** Changing a password, disabling MFA, or an admin editing another user's role/enabled status bumps that user's session version — their existing JWTs stop being accepted immediately, without needing a server-side session store.
 * **Multi-Factor Authentication (MFA):** Optional per-user TOTP (Google Authenticator-compatible) — self-service setup/disable from the Profile screen, with an admin override for account recovery.
 * **Rate-Limited Login:** Failed login attempts are throttled with exponential backoff, keyed by both source IP and the attempted username, so neither a single noisy IP nor a distributed attempt against one account can brute-force past it.
-* **Role-Based Access Control:** Users are assigned either an `Admin` role (can modify settings, reload Nginx, manage other users) or an `Analyst` role (read-only access to view logs, charts, and statistics).
+* **Role-Based Access Control:** Users are assigned one of three roles — `Admin` (can modify settings, reload Nginx, manage other users), `Analyst` (read-only access to view logs, charts, and statistics), or `App Admin` (scoped to a specific set of protected apps: can view/edit/toggle only those apps, cannot create new apps or touch anything outside their scope).
 
 ---
 
