@@ -68,8 +68,10 @@ RUN wget -q "https://openresty.org/download/openresty-${OPENRESTY_VER}.tar.gz" \
 # above, so ml_check.lua can read ModSecurity's real anomaly score. Safe to
 # read from access_by_lua_file: verified live (MSC_PHASE_ORDER_DIAG logging)
 # that this module's NGX_HTTP_ACCESS_PHASE handler — which calls
-# msc_process_request_body() and populates TX:ANOMALY_SCORE — always runs
-# before access_by_lua_file within the same access phase.
+# msc_process_request_body() and populates TX:BLOCKING_INBOUND_ANOMALY_SCORE
+# (CRS v4's real per-request score; plain TX:ANOMALY_SCORE is a CRS v3 name
+# that v4 only ever sets from the response phase) — always runs before
+# access_by_lua_file within the same access phase.
 RUN git clone --depth=1 https://github.com/SpiderLabs/ModSecurity-nginx.git /build/ModSecurity-nginx \
     && cd /build/ModSecurity-nginx \
     && git apply /build/patches/02-connector-anomaly-score-variable.patch

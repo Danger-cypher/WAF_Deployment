@@ -1,5 +1,5 @@
 diff --git a/src/ngx_http_modsecurity_module.c b/src/ngx_http_modsecurity_module.c
-index d3d9624..4a4e2b6 100644
+index d3d9624..1afa5ff 100644
 --- a/src/ngx_http_modsecurity_module.c
 +++ b/src/ngx_http_modsecurity_module.c
 @@ -30,6 +30,8 @@
@@ -11,18 +11,29 @@ index d3d9624..4a4e2b6 100644
  static void *ngx_http_modsecurity_create_main_conf(ngx_conf_t *cf);
  static char *ngx_http_modsecurity_init_main_conf(ngx_conf_t *cf, void *conf);
  static void *ngx_http_modsecurity_create_conf(ngx_conf_t *cf);
-@@ -564,12 +566,70 @@ ngx_module_t ngx_http_modsecurity_module = {
+@@ -564,12 +566,82 @@ ngx_module_t ngx_http_modsecurity_module = {
  };
  
  
 +/*
-+ * Exposes ModSecurity's TX:ANOMALY_SCORE as $modsecurity_anomaly_score so
-+ * Lua (access_by_lua_file, which our own diagnostic confirmed always runs
-+ * AFTER this module's NGX_HTTP_ACCESS_PHASE handler for the same request)
-+ * can read the real CRS score instead of the always-zero value it had no
-+ * way to obtain before. Marked NOCACHEABLE because the value only becomes
-+ * meaningful once msc_process_request_body() has run earlier in this same
-+ * access phase — nginx must not reuse a stale/empty cached copy.
++ * Exposes ModSecurity's TX:BLOCKING_INBOUND_ANOMALY_SCORE as
++ * $modsecurity_anomaly_score so Lua (access_by_lua_file, which our own
++ * diagnostic confirmed always runs AFTER this module's NGX_HTTP_ACCESS_PHASE
++ * handler for the same request) can read the real CRS request-side score
++ * instead of the always-zero value it had no way to obtain before.
++ *
++ * NOTE: CRS v3 stored this as plain TX:ANOMALY_SCORE. CRS v4 (in use here)
++ * only ever increments TX:ANOMALY_SCORE from the RESPONSE phase
++ * (RESPONSE-980-CORRELATION.conf) — it is permanently 0 for any request
++ * that doesn't also trip a response-phase rule, which is useless here since
++ * this variable must be readable during the access phase, before a response
++ * exists. TX:BLOCKING_INBOUND_ANOMALY_SCORE is what CRS v4 actually
++ * accumulates during phase 1/2 (REQUEST-949-BLOCKING-EVALUATION.conf) and
++ * uses for its own blocking decision, so it's the correct signal here.
++ *
++ * Marked NOCACHEABLE because the value only becomes meaningful once
++ * msc_process_request_body() has run earlier in this same access phase —
++ * nginx must not reuse a stale/empty cached copy.
 + */
 +static ngx_http_variable_t ngx_http_modsecurity_vars[] = {
 +
@@ -49,7 +60,8 @@ index d3d9624..4a4e2b6 100644
 +        return NGX_OK;
 +    }
 +
-+    score = msc_get_tx_variable(ctx->modsec_transaction, "ANOMALY_SCORE");
++    score = msc_get_tx_variable(ctx->modsec_transaction,
++        "BLOCKING_INBOUND_ANOMALY_SCORE");
 +    if (score == NULL || score[0] == '\0') {
 +        v->not_found = 1;
 +        return NGX_OK;
@@ -82,7 +94,7 @@ index d3d9624..4a4e2b6 100644
      int rc = 0;
  
      cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
-@@ -578,6 +638,15 @@ ngx_http_modsecurity_init(ngx_conf_t *cf)
+@@ -578,6 +650,15 @@ ngx_http_modsecurity_init(ngx_conf_t *cf)
          dd("We are not sure how this returns, NGINX doesn't seem to think it will ever be null");
          return NGX_ERROR;
      }
