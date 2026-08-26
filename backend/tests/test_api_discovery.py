@@ -285,3 +285,46 @@ def test_worst_case_confirmed_values_stack():
     scored = calculate_endpoint_score(_base_endpoint(has_https=0, content_encoding=""))
     assert scored["score"] == 75
     assert scored["grade"] == "C"
+
+
+def test_sensitive_param_over_confirmed_http_deducts_15():
+    scored = calculate_endpoint_score(
+        _base_endpoint(has_https=0, param_names=["password"])
+    )
+    # -20 (confirmed http) + -15 (sensitive param over confirmed-insecure)
+    assert scored["score"] == 65
+    assert scored["sensitive_params"] == ["password"]
+
+
+def test_sensitive_param_over_confirmed_https_deducts_nothing_extra():
+    scored = calculate_endpoint_score(
+        _base_endpoint(has_https=1, param_names=["password"])
+    )
+    assert scored["score"] == 100
+    assert scored["sensitive_params"] == ["password"]
+
+
+def test_sensitive_param_over_unknown_https_deducts_nothing():
+    # Not guilty until measured, same principle as the HTTPS deduction itself.
+    scored = calculate_endpoint_score(
+        _base_endpoint(has_https=api_discovery.HTTPS_UNKNOWN, param_names=["password"])
+    )
+    assert scored["score"] == 100
+
+
+def test_non_sensitive_param_over_confirmed_http_no_extra_deduction():
+    scored = calculate_endpoint_score(
+        _base_endpoint(has_https=0, param_names=["page", "limit"])
+    )
+    assert scored["score"] == 80  # only the flat -20 HTTPS deduction
+    assert scored["sensitive_params"] == []
+
+
+def test_grade_recomputed_after_sensitive_param_deduction():
+    # 100 - 20 (http) - 15 (sensitive) - 5 (no compression) = 60 -> grade D,
+    # not the "C" a stale pre-step-7 grade calculation would have produced.
+    scored = calculate_endpoint_score(
+        _base_endpoint(has_https=0, content_encoding="", param_names=["ssn"])
+    )
+    assert scored["score"] == 60
+    assert scored["grade"] == "D"

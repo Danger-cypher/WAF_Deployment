@@ -22,10 +22,25 @@ import Button from '../components/Button';
 // need to replicate nginx's regex engine, just catch the common case.
 const stripAnchors = (v) => (v || '').replace(/^\^/, '').replace(/\$$/, '');
 
-// Suggests a rate limit generous enough not to block real traffic (3x the
-// endpoint's own observed rate, floored at a sane minimum) rather than a
-// one-size-fits-all default — computed from what this endpoint has
-// actually seen, not guessed.
+// Headroom multiplier applied to an endpoint's own observed request rate.
+// A slow/expensive endpoint can be overwhelmed by far fewer concurrent
+// requests than a fast one (available backend capacity divided by a
+// larger per-request cost), so it gets a tighter margin — same latency
+// breakpoints calculate_endpoint_score already scores against
+// (api_protection.py), reused here for consistency rather than inventing
+// a second set of thresholds.
+function headroomForLatency(avgResponseTimeMs) {
+  const ms = avgResponseTimeMs || 0;
+  if (ms > 2000) return 1.5;
+  if (ms > 500) return 2;
+  if (ms > 200) return 2.5;
+  return 3;
+}
+
+// Suggests a rate limit generous enough not to block real traffic (headroom
+// over the endpoint's own observed rate, tightened for slower endpoints,
+// floored at a sane minimum) rather than a one-size-fits-all default —
+// computed from what this endpoint has actually seen, not guessed.
 function suggestLimits(ep) {
   const first = ep.first_seen ? new Date(ep.first_seen.replace(' ', 'T')).getTime() : null;
   const last = ep.last_seen ? new Date(ep.last_seen.replace(' ', 'T')).getTime() : null;
@@ -34,7 +49,8 @@ function suggestLimits(ep) {
     const durationSeconds = Math.max(60, (last - first) / 1000);
     observedRps = (ep.hit_count || 0) / durationSeconds;
   }
-  const rps = Math.max(5, Math.ceil(observedRps * 3));
+  const headroom = headroomForLatency(ep.avg_response_time_ms);
+  const rps = Math.max(5, Math.ceil(observedRps * headroom));
   const burst = rps * 2;
   return { rps, burst };
 }
@@ -852,6 +868,14 @@ export default function ApiProtection() {
               This creates a rate-limit rule using the same engine as DDoS &amp; Bot Shield's Advanced
               Rate Limiting Rules — it'll also show up (and stay editable) there.
             </p>
+
+            {headroomForLatency(protectTarget.avg_response_time_ms) < 3 && (
+              <p style={{ fontSize: '12px', color: 'var(--warning-color, #d97706)', marginTop: '-10px', marginBottom: '18px', lineHeight: 1.5 }}>
+                This endpoint averages {protectTarget.avg_response_time_ms}ms — the suggested limit
+                below uses a tighter headroom than usual, since a slower endpoint can be overwhelmed
+                by fewer concurrent requests.
+              </p>
+            )}
 
             <form onSubmit={handleCreateRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

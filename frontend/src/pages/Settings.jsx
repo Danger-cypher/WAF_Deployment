@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Brain, CheckSquare, Database, FileCode, History, Lock, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, Archive, Brain, CheckSquare, Database, Download, FileCode, History, Lock, RotateCcw, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, Trash2, X } from 'lucide-react';
 import {
   getGeneralSettings, saveGeneralSettings, getLogSettings, saveLogSettings,
   getWafSettings, saveWafSettings,
   changeAdminPassword, restartWafEngine, reloadNginxProxy, purgeStatsCache, syncSignatures,
-  getHardeningSettings, saveHardeningSettings, getAntiDefacementSettings, saveAntiDefacementSettings,
+  getHardeningSettings, saveHardeningSettings, getGeoBlockSettings, saveGeoBlockSettings,
+  getThreatIntelSettings, saveThreatIntelSettings, syncThreatIntelNow,
+  getAntiDefacementSettings, saveAntiDefacementSettings,
   getPositiveSecurity, savePositiveSecurity,
   getCustomResponse, saveCustomResponse, getAutoLearning, saveAutoLearning,
   getAutoLearningSuggestions, runAutoLearningNow, approveAutoLearningSuggestion, rejectAutoLearningSuggestion,
   getAuditLog,
+  getBackups, createBackup, restoreBackup, deleteBackup, downloadBackup,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
@@ -49,6 +52,21 @@ export default function Settings({ onLogout }) {
   const [serverCloaking, setServerCloaking] = useState(true);
   const [ipBlacklist, setIpBlacklist] = useState("");
   const [ipWhitelist, setIpWhitelist] = useState("");
+
+  // Geo-Block Settings — country allow/deny list, enforced in ml_check.lua
+  // via $geoip2_data_country_code (requires GeoIP2 to be enabled to have
+  // any effect; degrades to a no-op otherwise).
+  const [geoBlockEnabled, setGeoBlockEnabled] = useState(false);
+  const [geoBlockMode, setGeoBlockMode] = useState('deny');
+  const [geoBlockCountries, setGeoBlockCountries] = useState("");
+
+  // External Threat-Intel Feed (Spamhaus DROP/EDROP) — populates a
+  // separate Redis key ml_check.lua also checks, never clobbers the
+  // manually-managed IP blacklist above.
+  const [threatIntelEnabled, setThreatIntelEnabled] = useState(false);
+  const [threatIntelIntervalHours, setThreatIntelIntervalHours] = useState(24);
+  const [threatIntelStatus, setThreatIntelStatus] = useState(null);
+  const [threatIntelSyncing, setThreatIntelSyncing] = useState(false);
 
   // Anti-Defacement Settings
   const [defacementEnabled, setDefacementEnabled] = useState(true);
@@ -94,11 +112,13 @@ export default function Settings({ onLogout }) {
   const fetchSettings = async () => {
     setSettingsLoadError('');
     try {
-        const [gen, logs, waf, hardening, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
+        const [gen, logs, waf, hardening, geoBlock, threatIntel, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
           getGeneralSettings(),
           getLogSettings(),
           getWafSettings(),
           getHardeningSettings(),
+          getGeoBlockSettings(),
+          getThreatIntelSettings(),
           getAntiDefacementSettings(),
           getPositiveSecurity(),
           getCustomResponse(),
@@ -128,6 +148,16 @@ export default function Settings({ onLogout }) {
           if (hardening.server_cloaking !== undefined) setServerCloaking(hardening.server_cloaking);
           if (hardening.ip_blacklist !== undefined) setIpBlacklist(hardening.ip_blacklist.join(', '));
           if (hardening.ip_whitelist !== undefined) setIpWhitelist(hardening.ip_whitelist.join(', '));
+        }
+        if (geoBlock) {
+          if (geoBlock.enabled !== undefined) setGeoBlockEnabled(geoBlock.enabled);
+          if (geoBlock.mode) setGeoBlockMode(geoBlock.mode);
+          if (geoBlock.countries !== undefined) setGeoBlockCountries(geoBlock.countries.join(', '));
+        }
+        if (threatIntel) {
+          if (threatIntel.enabled !== undefined) setThreatIntelEnabled(threatIntel.enabled);
+          if (threatIntel.sync_interval_hours !== undefined) setThreatIntelIntervalHours(threatIntel.sync_interval_hours);
+          setThreatIntelStatus(threatIntel);
         }
         if (defacement) {
           if (defacement.enabled !== undefined) setDefacementEnabled(defacement.enabled);
@@ -212,6 +242,55 @@ export default function Settings({ onLogout }) {
       showToast("Failed to update hardening settings: " + (err.message || "Unknown error"), "error");
     } finally {
       setLoadingAction(false);
+    }
+  };
+
+  const handleSaveGeoBlock = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const countries = geoBlockCountries.split(',').map(c => c.trim().toUpperCase()).filter(c => c);
+      await saveGeoBlockSettings({
+        enabled: geoBlockEnabled,
+        mode: geoBlockMode,
+        countries,
+      });
+      showToast("Geo-Block policy updated.");
+    } catch (err) {
+      showToast("Failed to update geo-block settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleSaveThreatIntel = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const saved = await saveThreatIntelSettings({
+        enabled: threatIntelEnabled,
+        sync_interval_hours: parseInt(threatIntelIntervalHours) || 24,
+      });
+      setThreatIntelStatus(saved);
+      showToast("Threat-intel feed settings updated.");
+    } catch (err) {
+      showToast("Failed to update threat-intel settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleSyncThreatIntelNow = async () => {
+    setThreatIntelSyncing(true);
+    try {
+      const result = await syncThreatIntelNow();
+      showToast(`Threat-intel sync complete — ${result.count} CIDR ranges loaded.`);
+      const refreshed = await getThreatIntelSettings();
+      setThreatIntelStatus(refreshed);
+    } catch (err) {
+      showToast("Threat-intel sync failed: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setThreatIntelSyncing(false);
     }
   };
 
@@ -351,6 +430,97 @@ export default function Settings({ onLogout }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSettingTab]);
+
+  // Backups (full-system config/DB snapshots)
+  const [backups, setBackups] = useState([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
+  const [creatingBackup, setCreatingBackup] = useState(false);
+  const [backupActionId, setBackupActionId] = useState(null); // id currently being restored/deleted
+
+  const fetchBackups = async () => {
+    setBackupsLoading(true);
+    try {
+      const res = await getBackups();
+      setBackups(res || []);
+    } catch (err) {
+      showToast("Failed to load backups: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setBackupsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSettingTab === 'backups') {
+      const timer = setTimeout(() => fetchBackups(), 0);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSettingTab]);
+
+  const handleCreateBackup = async () => {
+    setCreatingBackup(true);
+    try {
+      await createBackup();
+      showToast("Backup created.");
+      await fetchBackups();
+    } catch (err) {
+      showToast("Backup failed: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setCreatingBackup(false);
+    }
+  };
+
+  const handleDownloadBackup = async (backup) => {
+    try {
+      await downloadBackup(backup.id, backup.filename);
+    } catch (err) {
+      showToast("Download failed: " + (err.message || "Unknown error"), "error");
+    }
+  };
+
+  const handleRestoreBackup = async (backup) => {
+    if (!(await confirm({
+      message: `Restore from "${backup.filename}"? This overwrites the live nginx configuration and every control-plane database with this backup's contents. A safety snapshot of the current state is taken automatically first, but this is still a major, immediate change — proceed?`,
+      danger: true,
+    }))) return;
+    setBackupActionId(backup.id);
+    try {
+      const res = await restoreBackup(backup.id);
+      showToast(res.message || "Restore complete.");
+      await fetchBackups();
+    } catch (err) {
+      showToast("Restore failed: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setBackupActionId(null);
+    }
+  };
+
+  const handleDeleteBackup = async (backup) => {
+    if (!(await confirm({ message: `Delete backup "${backup.filename}"? This cannot be undone.`, danger: true }))) return;
+    setBackupActionId(backup.id);
+    try {
+      await deleteBackup(backup.id);
+      showToast("Backup deleted.");
+      await fetchBackups();
+    } catch (err) {
+      showToast("Delete failed: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setBackupActionId(null);
+    }
+  };
+
+  const formatBackupSize = (bytes) => {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let size = bytes, i = 0;
+    while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+    return `${size.toFixed(1)} ${units[i]}`;
+  };
+
+  const TRIGGER_TYPE_LABELS = {
+    manual: 'Manual',
+    pre_restore_safety: 'Auto (pre-restore safety)',
+  };
 
   const handleRunAutoLearningNow = async () => {
     setRunningNow(true);
@@ -561,6 +731,9 @@ export default function Settings({ onLogout }) {
           </button>
           <button onClick={() => setActiveSettingTab('activity-log')} className={`settings-tab-btn ${activeSettingTab === 'activity-log' ? 'active' : ''}`}>
             <History size={20} /> Activity Log
+          </button>
+          <button onClick={() => setActiveSettingTab('backups')} className={`settings-tab-btn ${activeSettingTab === 'backups' ? 'active' : ''}`}>
+            <Archive size={20} /> Backups
           </button>
         </div>
 
@@ -817,6 +990,128 @@ export default function Settings({ onLogout }) {
                   <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
                       Apply Infrastructure Changes
+                    </button>
+                  </div>
+                </form>
+
+                <div className="settings-section-title" style={{ marginTop: '32px' }}>
+                  <ShieldAlert size={20} color="var(--sev-low)" />
+                  Geo-Block
+                </div>
+                <div className="settings-section-subtitle">
+                  Allow or deny traffic by country. Requires GeoIP2 to be enabled (Settings loads with it
+                  active in this deployment) — otherwise this has no effect.
+                </div>
+
+                <form onSubmit={handleSaveGeoBlock} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Geo-Block</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no country restrictions until enabled</span>
+                    </div>
+                    <div className={`toggle-switch ${geoBlockEnabled ? 'active' : ''}`} onClick={() => setGeoBlockEnabled(!geoBlockEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {geoBlockEnabled && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Mode</label>
+                          <select
+                            className="settings-input"
+                            style={{ width: '100%', fontSize: '14px' }}
+                            value={geoBlockMode}
+                            onChange={(e) => setGeoBlockMode(e.target.value)}
+                          >
+                            <option value="deny">Deny listed countries (block only these)</option>
+                            <option value="allow">Allow listed countries only (block everyone else)</option>
+                          </select>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Countries (ISO 3166-1 alpha-2 codes, comma separated)</label>
+                          <textarea
+                            className="settings-input"
+                            style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
+                            value={geoBlockCountries}
+                            onChange={(e) => setGeoBlockCountries(e.target.value)}
+                            placeholder="RU, CN, KP"
+                          />
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <div style={{ marginTop: '4px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      Apply Geo-Block Changes
+                    </button>
+                  </div>
+                </form>
+
+                <div className="settings-section-title" style={{ marginTop: '32px' }}>
+                  <ShieldAlert size={20} color="var(--sev-low)" />
+                  External Threat-Intel Feed
+                </div>
+                <div className="settings-section-subtitle">
+                  Pulls Spamhaus DROP + EDROP (free, no API key) on a schedule into a dedicated
+                  blacklist Redis key — separate from the manual IP blacklist above, so a sync
+                  can never overwrite your own entries. Your manual whitelist always overrides it.
+                </div>
+
+                <form onSubmit={handleSaveThreatIntel} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Scheduled Sync</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no external feed until enabled</span>
+                    </div>
+                    <div className={`toggle-switch ${threatIntelEnabled ? 'active' : ''}`} onClick={() => setThreatIntelEnabled(!threatIntelEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {threatIntelEnabled && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '10px' }}>
+                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Sync Interval (Hours)</label>
+                          <input
+                            type="number"
+                            min="1"
+                            className="settings-input"
+                            style={{ width: '100%', fontSize: '14px' }}
+                            value={threatIntelIntervalHours}
+                            onChange={(e) => setThreatIntelIntervalHours(e.target.value)}
+                            placeholder="24"
+                          />
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {threatIntelStatus && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span>
+                        Last sync: {threatIntelStatus.last_sync_at ? formatLocalTime(threatIntelStatus.last_sync_at) : 'never'}
+                        {threatIntelStatus.last_sync_status === 'success' && ` — ${threatIntelStatus.last_sync_count} CIDR ranges loaded`}
+                        {threatIntelStatus.last_sync_status === 'error' && ` — failed: ${threatIntelStatus.last_sync_error || 'unknown error'}`}
+                      </span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '4px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      Apply Threat-Intel Changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSyncThreatIntelNow}
+                      disabled={threatIntelSyncing}
+                      className="action-btn-inspect"
+                    >
+                      {threatIntelSyncing ? 'Syncing...' : 'Sync Now'}
                     </button>
                   </div>
                 </form>
@@ -1277,6 +1572,77 @@ export default function Settings({ onLogout }) {
                       </div>
                     </div>
                   </>
+                )}
+              </motion.div>
+            )}
+
+            {activeSettingTab === 'backups' && (
+              <motion.div key="backups" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
+                <div className="settings-section-title">
+                  <Archive size={20} color="var(--accent-color)" />
+                  Backups
+                </div>
+                <div className="settings-section-subtitle">
+                  Full-system snapshots — nginx configuration and every control-plane database.
+                  Restoring always takes a fresh safety snapshot first, and a restored nginx
+                  configuration is validated before it can go live (rolled back automatically if
+                  it fails). Not included: <code>.env</code> and other host-level secrets — safeguard
+                  those separately.
+                </div>
+
+                <Button variant="primary" size="md" icon={Archive} onClick={handleCreateBackup} disabled={creatingBackup} style={{ marginBottom: '16px' }}>
+                  {creatingBackup ? 'Creating…' : 'Create Backup Now'}
+                </Button>
+
+                {backupsLoading ? (
+                  <div style={{ padding: '24px', color: 'var(--text-secondary)' }}>Loading...</div>
+                ) : backups.length === 0 ? (
+                  <div style={{ padding: '24px', color: 'var(--text-secondary)' }}>No backups yet.</div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Created</th>
+                          <th>Size</th>
+                          <th>Triggered By</th>
+                          <th>Type</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {backups.map((backup) => (
+                          <tr key={backup.id}>
+                            <td>{formatLocalTime(backup.created_at)}</td>
+                            <td>{formatBackupSize(backup.size_bytes)}</td>
+                            <td>{backup.triggered_by}</td>
+                            <td>{TRIGGER_TYPE_LABELS[backup.trigger_type] || backup.trigger_type}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <button type="button" className="action-btn-inspect" title="Download" onClick={() => handleDownloadBackup(backup)}>
+                                  <Download size={14} />
+                                </button>
+                                <button
+                                  type="button" className="action-btn-inspect" title="Restore"
+                                  disabled={backupActionId === backup.id}
+                                  onClick={() => handleRestoreBackup(backup)}
+                                >
+                                  <RotateCcw size={14} />
+                                </button>
+                                <button
+                                  type="button" className="action-btn-inspect" title="Delete"
+                                  disabled={backupActionId === backup.id}
+                                  onClick={() => handleDeleteBackup(backup)}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </motion.div>
             )}

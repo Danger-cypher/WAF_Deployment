@@ -1,6 +1,7 @@
 import os
 import pickle
 import logging
+import re
 import sqlite3
 import json
 import threading
@@ -552,11 +553,19 @@ def get_model_backups():
 class RollbackPayload(BaseModel):
     timestamp: str
 
+# retrain.sh names backups via `date '+%Y%m%d-%H%M%S'` — anything not matching
+# that exact shape is rejected before it reaches a filename/pickle.load, since
+# an unsanitized timestamp here would otherwise be a path-traversal ->
+# arbitrary-file-deserialization primitive (behind the internal-key gate).
+BACKUP_TIMESTAMP_RE = re.compile(r"^\d{8}-\d{6}$")
+
 @app.post("/models/rollback", dependencies=[Depends(verify_internal_key)])
 def rollback_models(payload: RollbackPayload):
     """Restores pickeled models from backup and dynamically updates active references."""
     global PASSIVE_MODE
     ts = payload.timestamp
+    if not BACKUP_TIMESTAMP_RE.fullmatch(ts):
+        raise HTTPException(status_code=400, detail="Invalid backup timestamp format.")
     backup_dir = os.path.join(BASE_DIR, "models/backups")
     models_dir = os.path.join(BASE_DIR, "models")
     
@@ -790,6 +799,17 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
         # "log" or "allow" -> clean or low-risk request, slowly decay reputation
         background_tasks.add_task(redis_features.decay_reputation, ip)
         response.status_code = status.HTTP_200_OK
+        if decision == "log":
+            # "log" (score 0.40-0.70) is real signal, just not certain
+            # enough for the rate_limit/block bands — this header lets
+            # ml_check.lua optionally route it through the same JS-reload
+            # challenge already used for the bad-bot-UA signal, instead of
+            # this band having zero live consequence. Opt-in on the Lua
+            # side (waf_risk_challenge_enabled) — this header is set
+            # unconditionally so the decision of whether to act on it stays
+            # in one place (Lua), not duplicated as a second settings read
+            # here.
+            response.headers["X-WAF-Risk-Challenge"] = "1"
 
     # 7. Schedule asynchronous event logging to SQLite
     # Add UTC timestamp to event data

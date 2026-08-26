@@ -248,10 +248,9 @@ function App() {
     return (
       <Suspense fallback={<TabLoadingFallback />}>
         <SetupWizard
-          onComplete={(setupData) => {
+          onComplete={() => {
             setShowSetupWizard(false);
             setSetupComplete(true);
-            console.log('Setup completed with data:', setupData);
           }}
         />
       </Suspense>

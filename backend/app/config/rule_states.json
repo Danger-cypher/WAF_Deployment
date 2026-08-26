@@ -562,5 +562,6 @@
       "rule_name": null,
       "details": "WAF Rule Management initialized with OWASP CRS defaults."
     }
-  ]
+  ],
+  "canary_meta": {}
 }

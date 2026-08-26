@@ -100,4 +100,39 @@ function M.check(red, client_ip)
     serve_challenge_page(red)
 end
 
+-- Second, independent trigger for the same interstitial mechanics: a
+-- moderate-but-not-certain ML risk score (threat_score.py's "log" band)
+-- instead of the bad-bot UA signal M.check() above gates on. Deliberately
+-- NOT sharing M.check()'s body — this is a second, unrelated caller
+-- (ml_check.lua, after its /predict call, on its own fresh Redis
+-- connection) and duplicating the ~15 lines here keeps that addition from
+-- being able to affect the already-proven bad-bot path at all.
+--
+-- Own enabled-check (waf_risk_challenge_enabled) and own pass-tracking key
+-- namespace (waf:risk_challenge_passed:*, not waf:challenge_passed:*) — a
+-- client that already cleared the bad-bot challenge doesn't automatically
+-- skip this one, and vice versa; they're answering different questions.
+function M.check_risk_triggered(red, client_ip)
+    if ngx.var.waf_risk_challenge_enabled ~= "1" then
+        return
+    end
+
+    local passed_key = "waf:risk_challenge_passed:" .. client_ip
+
+    if ngx.var.arg_waf_challenge_ack then
+        local ok, err = red:setex(passed_key, PASSED_TTL_SECONDS, "1")
+        if not ok then
+            ngx.log(ngx.WARN, "bot_challenge (risk-triggered): failed to record pass for ", client_ip, ": ", err)
+        end
+        return
+    end
+
+    local passed, err = red:get(passed_key)
+    if passed and passed ~= ngx.null then
+        return
+    end
+
+    serve_challenge_page(red)
+end
+
 return M

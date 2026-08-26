@@ -115,12 +115,19 @@ services:
     volumes:
       - ./ml-waf/models:/app/models
       - ./backend/app/data:/opt/ModSecurity/WAF_GUI/backend/app/data
+      # Read-only: lets crs_audit_enrichment.py backfill real per-request
+      # CRS scores into ml_events from ModSecurity's own audit log (see
+      # that script's module docstring for why the live-path score needs
+      # this). Not on any request hot path.
+      - ./logs/modsecurity/audit:/var/log/modsecurity/audit:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     environment:
       REDIS_HOST: waf-redis
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       ML_DB_PATH: /opt/ModSecurity/WAF_GUI/backend/app/data/ml_events.db
+      MODSEC_AUDIT_LOG_DIR: /var/log/modsecurity/audit
+      CRS_ENRICHMENT_WATERMARK_PATH: /opt/ModSecurity/WAF_GUI/backend/app/data/crs_enrichment_watermark.txt
       CLICKHOUSE_HOST: waf-clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}

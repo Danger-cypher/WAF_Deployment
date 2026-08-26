@@ -11,6 +11,7 @@ export default function DdosBotMitigation() {
   const [burstTolerance, setBurstTolerance] = useState(100);
   const [trustedIps, setTrustedIps] = useState("");
   const [botMitigationAction, setBotMitigationAction] = useState("Silent Drop");
+  const [riskChallengeEnabled, setRiskChallengeEnabled] = useState(false);
 
   // Advanced Rate Limiting State
   const [advancedRules, setAdvancedRules] = useState([]);
@@ -39,6 +40,7 @@ export default function DdosBotMitigation() {
         if (ddos.burst_tolerance !== undefined) setBurstTolerance(ddos.burst_tolerance);
         if (ddos.trusted_ips !== undefined) setTrustedIps(ddos.trusted_ips.join(', '));
         if (ddos.bot_mitigation_action) setBotMitigationAction(ddos.bot_mitigation_action);
+        if (ddos.risk_challenge_enabled !== undefined) setRiskChallengeEnabled(ddos.risk_challenge_enabled);
         if (ddos.advanced_rules !== undefined) setAdvancedRules(ddos.advanced_rules);
       }
     } catch (err) {
@@ -83,6 +85,7 @@ export default function DdosBotMitigation() {
         burst_tolerance: burstTolerance,
         trusted_ips: ips,
         bot_mitigation_action: botMitigationAction,
+        risk_challenge_enabled: riskChallengeEnabled,
         advanced_rules: advancedRules
       });
       showToast("Anti-DDoS & Bot Mitigation settings updated successfully.");
@@ -102,6 +105,7 @@ export default function DdosBotMitigation() {
         burst_tolerance: burstTolerance,
         trusted_ips: ips,
         bot_mitigation_action: botMitigationAction,
+        risk_challenge_enabled: riskChallengeEnabled,
         advanced_rules: updatedRules
       });
       setAdvancedRules(updatedRules);
@@ -239,6 +243,22 @@ export default function DdosBotMitigation() {
                 ever returned, so a scanner can't tell which control caught it.
               </div>
             )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={riskChallengeEnabled}
+                onChange={(e) => setRiskChallengeEnabled(e.target.checked)}
+              />
+              Challenge moderate-risk traffic (ML score)
+            </label>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+              Independent of Mitigation Action above — this serves the same JS-reload interstitial,
+              but triggered by the ML risk engine's "worth a second look" band instead of a bad-bot
+              User-Agent match. Off by default.
+            </div>
           </div>
 
           <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ marginTop: '4px', alignSelf: 'flex-start' }}>

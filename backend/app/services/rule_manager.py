@@ -2,16 +2,39 @@ import os
 import re
 import glob
 import json
+import asyncio
 import logging
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from typing import List, Dict, Any, Optional, Tuple
 from app.models.rule_model import RuleEntry, AuditLogEntry, RuleStatsResponse
 from app.services.log_reader import get_all_logs
 
 logger = logging.getLogger(__name__)
+
+# Default bounded-window auto-rollout settings (see evaluate_canary_rollout).
+# Conservative on purpose: auto-rollback defaults ON (it can only ever
+# *disable* a rule that real traffic evidence says is FP-prone, using the
+# same toggle_rule() path a human would use — a safety net, not a risk).
+# auto-promote defaults OFF (it only clears bookkeeping, never touches
+# enforcement, but per the architecture review's own recommendation this
+# should stay opt-in "only once the FP-proxy metric is trusted").
+DEFAULT_CANARY_SETTINGS = {
+    "auto_promote_enabled": False,
+    "auto_rollback_enabled": True,
+    "window_hours": 72,
+    "min_sample_size": 20,
+    # sole_match_count / total_matches over the window. Low = well-
+    # corroborated by other rules on the same requests (looks like real
+    # attack traffic); high = this rule is often the SOLE reason a request
+    # got blocked, with no corroboration — the FP-proxy signal.
+    "promote_max_sole_match_rate": 0.30,
+    "rollback_min_sole_match_rate": 0.70,
+}
+
+CANARY_ROLLOUT_CHECK_INTERVAL_SECONDS = 6 * 3600
 
 # Paths
 RULES_DIR = "/etc/nginx/modsec/coreruleset/rules"
@@ -66,6 +89,7 @@ def _get_default_state() -> Dict[str, Any]:
     """Return default configuration overrides state."""
     return {
         "disabled_rule_ids": [],
+        "canary_rule_ids": [],
         "paranoia_level": 1,
         "audit_history": [
             {
@@ -535,6 +559,7 @@ def get_all_rules(
     """
     state = _load_state()
     disabled_ids = set(state.get("disabled_rule_ids", []))
+    canary_ids = set(state.get("canary_rule_ids", []))
     state.get("paranoia_level", 1)
 
     # Load logs to dynamically calculate hit counts and last_triggered timestamps
@@ -573,6 +598,7 @@ def get_all_rules(
                 file_path=r["file_path"],
                 syntax=r["syntax"],
                 tags=r["tags"],
+                is_canary=rid in canary_ids,
             )
         )
 
@@ -608,6 +634,7 @@ def get_rule_by_id(rule_id: str) -> Optional[RuleEntry]:
     """Retrieves full detail block for a specific rule."""
     state = _load_state()
     disabled_ids = set(state.get("disabled_rule_ids", []))
+    canary_ids = set(state.get("canary_rule_ids", []))
 
     # Load hits
     logs = get_all_logs()
@@ -632,7 +659,281 @@ def get_rule_by_id(rule_id: str) -> Optional[RuleEntry]:
         file_path=raw_rule["file_path"],
         syntax=raw_rule["syntax"],
         tags=raw_rule["tags"],
+        is_canary=rule_id in canary_ids,
     )
+
+
+def mark_rule_canary(rule_id: str, canary: bool, username: str = "admin") -> Tuple[bool, str]:
+    """
+    Flags/unflags a rule as under canary review. Pure bookkeeping — no
+    override-file write or NGINX reload — because it doesn't change
+    enforcement at all.
+
+    Why not a real live shadow/log-only mode per rule: this deployment runs
+    CRS in standard anomaly-scoring mode (SecDefaultAction "phase:1/2,log,
+    auditlog,pass" — see modsecurity.conf), so individual CRS rules already
+    never block by themselves; only the cumulative-score check in
+    REQUEST-949-BLOCKING-EVALUATION.conf does. There's no safe way to make
+    one rule ID "log-only" without either hacking a per-rule score-exclusion
+    into that hot-path scoring chain (exactly the kind of ModSecurity-core
+    change this project treats as highest-risk, see project memory on the
+    crs_score fix) or just fully disabling it (which is the existing
+    enable/disable feature, not this one).
+
+    So "canary" here means "flagged for review" — see get_rule_canary_report
+    for the actual measurement, built from already-collected historical
+    waf_events instead of a live experiment: for each of this rule's past
+    matches, was it the ONLY rule that fired (disabling it would have let
+    that request through unblocked) or did another rule also fire (still
+    safe if this one goes away)? That's a direct, real-traffic answer to
+    "would disabling this rule open a hole", without touching the hot path.
+
+    Flagging also starts a bounded monitoring window (canary_meta.started_at)
+    — see evaluate_canary_rollout(), which periodically re-runs this same
+    sole-match measurement over that window and can auto-promote (clear this
+    flag) or auto-rollback (toggle_rule to actually disable, real traffic
+    evidence permitting) instead of leaving the report purely human-read.
+    """
+    state = _load_state()
+    canary_ids = state.setdefault("canary_rule_ids", [])
+    canary_meta = state.setdefault("canary_meta", {})
+
+    rule = get_rule_by_id(rule_id)
+    if not rule:
+        return False, f"Rule ID {rule_id} does not exist in the active OWASP CRS dataset."
+
+    if canary:
+        if rule_id not in canary_ids:
+            canary_ids.append(rule_id)
+        # Preserve an existing window start if this rule was already
+        # flagged (e.g. re-flagging after a "needs_review" outcome) rather
+        # than resetting the clock every time.
+        if rule_id not in canary_meta:
+            canary_meta[rule_id] = {
+                "started_at": datetime.now().isoformat(),
+                "needs_review": False,
+            }
+    else:
+        if rule_id in canary_ids:
+            canary_ids.remove(rule_id)
+        canary_meta.pop(rule_id, None)
+
+    action_text = "canary_flag" if canary else "canary_unflag"
+    state.setdefault("audit_history", []).insert(
+        0,
+        {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "username": username,
+            "action": action_text,
+            "rule_id": rule_id,
+            "rule_name": rule.name,
+            "details": f"Rule {'flagged for' if canary else 'removed from'} canary review.",
+        },
+    )
+    _save_state(state)
+    return True, f"Rule {rule_id} {'flagged for' if canary else 'removed from'} canary review."
+
+
+def get_canary_status(rule_id: str) -> Optional[Dict[str, Any]]:
+    """Monitoring-window bookkeeping for a canary-flagged rule (started_at,
+    elapsed/remaining hours, needs_review). Returns None if the rule isn't
+    currently flagged."""
+    state = _load_state()
+    if rule_id not in state.get("canary_rule_ids", []):
+        return None
+    meta = state.get("canary_meta", {}).get(rule_id, {})
+    started_at = meta.get("started_at")
+    settings = get_canary_rollout_settings()
+    elapsed_hours = None
+    if started_at:
+        try:
+            elapsed_hours = (
+                datetime.now() - datetime.fromisoformat(started_at)
+            ).total_seconds() / 3600.0
+        except ValueError:
+            elapsed_hours = None
+    return {
+        "rule_id": rule_id,
+        "started_at": started_at,
+        "elapsed_hours": elapsed_hours,
+        "window_hours": settings["window_hours"],
+        "needs_review": bool(meta.get("needs_review", False)),
+    }
+
+
+def get_canary_rollout_settings() -> Dict[str, Any]:
+    state = _load_state()
+    saved = state.get("canary_rollout_settings", {})
+    # Merge over defaults rather than replace outright, so a settings file
+    # saved before a new field was added doesn't end up missing it.
+    return {**DEFAULT_CANARY_SETTINGS, **saved}
+
+
+def save_canary_rollout_settings(settings: Dict[str, Any], username: str = "admin") -> Tuple[bool, str]:
+    state = _load_state()
+    current = get_canary_rollout_settings()
+    current.update({k: v for k, v in settings.items() if k in DEFAULT_CANARY_SETTINGS})
+    state["canary_rollout_settings"] = current
+    state.setdefault("audit_history", []).insert(
+        0,
+        {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "username": username,
+            "action": "canary_settings_update",
+            "rule_id": None,
+            "rule_name": None,
+            "details": f"Canary auto-rollout settings updated: {current}",
+        },
+    )
+    _save_state(state)
+    return True, "Canary auto-rollout settings saved."
+
+
+def evaluate_canary_rollout() -> Dict[str, List[str]]:
+    """
+    The scheduled job body (see start_canary_rollout_scheduler): re-measures
+    every canary-flagged rule's sole-match rate over its bounded monitoring
+    window (get_rule_canary_report — same query the human-read "Load 7-Day
+    Impact Report" button already uses) and, per get_canary_rollout_settings,
+    either:
+      - auto-promotes it (clears the canary flag — bookkeeping only, CRS was
+        never actually running it log-only, see mark_rule_canary's docstring
+        for why there's no separate enforcement state to restore here);
+      - auto-rolls it back (toggle_rule to really disable it — the one case
+        this touches enforcement, using the exact same config-write/reload/
+        rollback-on-failure path a human clicking "Disable" already goes
+        through); or
+      - leaves it monitoring, flagging needs_review once its window has
+        fully elapsed without enough evidence either way.
+    Insufficient sample size (min_sample_size) blocks any automated action
+    regardless of settings — a handful of matches isn't enough evidence.
+    """
+    from app.services import clickhouse_service
+
+    state = _load_state()
+    canary_ids = list(state.get("canary_rule_ids", []))
+    canary_meta = state.setdefault("canary_meta", {})
+    settings = get_canary_rollout_settings()
+
+    result = {"promoted": [], "rolled_back": [], "needs_review": [], "still_monitoring": []}
+
+    for rule_id in canary_ids:
+        meta = canary_meta.setdefault(
+            rule_id, {"started_at": datetime.now().isoformat(), "needs_review": False}
+        )
+        started_at = meta.get("started_at")
+        try:
+            elapsed_hours = (
+                (datetime.now() - datetime.fromisoformat(started_at)).total_seconds() / 3600.0
+                if started_at else 0.0
+            )
+        except ValueError:
+            elapsed_hours = 0.0
+
+        report = clickhouse_service.get_rule_canary_report(rule_id, hours=settings["window_hours"])
+        total = report["total_matches"]
+        rate = (report["sole_match_count"] / total) if total else None
+
+        if total < settings["min_sample_size"]:
+            if elapsed_hours >= settings["window_hours"] and not meta.get("needs_review"):
+                meta["needs_review"] = True
+                _log_canary_audit(state, rule_id, "canary_needs_review",
+                                   f"Monitoring window elapsed with insufficient traffic "
+                                   f"({total} matches, need {settings['min_sample_size']}) to auto-decide.")
+                result["needs_review"].append(rule_id)
+            else:
+                result["still_monitoring"].append(rule_id)
+            continue
+
+        if settings["auto_promote_enabled"] and rate <= settings["promote_max_sole_match_rate"]:
+            rule = get_rule_by_id(rule_id)
+            canary_ids_live = state.setdefault("canary_rule_ids", [])
+            if rule_id in canary_ids_live:
+                canary_ids_live.remove(rule_id)
+            canary_meta.pop(rule_id, None)
+            _log_canary_audit(
+                state, rule_id, "canary_auto_promote",
+                f"Auto-promoted: sole-match rate {rate:.0%} over {total} matches "
+                f"(<= {settings['promote_max_sole_match_rate']:.0%} threshold).",
+                rule_name=rule.name if rule else None,
+            )
+            result["promoted"].append(rule_id)
+        elif settings["auto_rollback_enabled"] and rate >= settings["rollback_min_sole_match_rate"]:
+            canary_ids_live = state.setdefault("canary_rule_ids", [])
+            if rule_id in canary_ids_live:
+                canary_ids_live.remove(rule_id)
+            canary_meta.pop(rule_id, None)
+            _save_state(state)  # persist canary-tracking removal before toggle_rule's own load/save cycle
+            toggle_rule(
+                rule_id, enabled=False, username="system (canary auto-rollback)",
+                reason=f"Auto-rollback: sole-match rate {rate:.0%} over {total} matches "
+                       f"(>= {settings['rollback_min_sole_match_rate']:.0%} threshold) — "
+                       f"likely a false-positive-prone rule."
+            )
+            state = _load_state()  # toggle_rule already saved; re-read before the next loop iteration
+            canary_meta = state.setdefault("canary_meta", {})
+            result["rolled_back"].append(rule_id)
+            continue
+        elif elapsed_hours >= settings["window_hours"] and not meta.get("needs_review"):
+            meta["needs_review"] = True
+            _log_canary_audit(state, rule_id, "canary_needs_review",
+                               f"Monitoring window elapsed: sole-match rate {rate:.0%} over {total} matches "
+                               f"is in the ambiguous zone — needs human review.")
+            result["needs_review"].append(rule_id)
+        else:
+            result["still_monitoring"].append(rule_id)
+
+    _save_state(state)
+    return result
+
+
+def _log_canary_audit(state: dict, rule_id: str, action: str, details: str, rule_name: str = None) -> None:
+    state.setdefault("audit_history", []).insert(
+        0,
+        {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "username": "system",
+            "action": action,
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "details": details,
+        },
+    )
+
+
+async def start_canary_rollout_scheduler():
+    """
+    Background loop, same shape as auto_learning's scheduler: an initial
+    settle delay, then run-then-sleep every
+    CANARY_ROLLOUT_CHECK_INTERVAL_SECONDS. Runs unconditionally — per-rule
+    auto_promote/auto_rollback gating happens inside evaluate_canary_rollout
+    itself via settings, so toggling those doesn't need a restart to take
+    effect on the next cycle.
+    """
+    logger.info(
+        f"Canary auto-rollout scheduler started. Runs every "
+        f"{CANARY_ROLLOUT_CHECK_INTERVAL_SECONDS // 3600}h."
+    )
+    await asyncio.sleep(90)  # Initial delay for app to fully initialize
+
+    from app.services import heartbeat_registry
+
+    while True:
+        try:
+            result = evaluate_canary_rollout()
+            if any(result.values()):
+                logger.info(f"Canary auto-rollout cycle result: {result}")
+            heartbeat_registry.record_heartbeat(
+                "canary_rollout", CANARY_ROLLOUT_CHECK_INTERVAL_SECONDS, status="ok"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Canary auto-rollout scheduler encountered an error: {e}")
+            heartbeat_registry.record_heartbeat(
+                "canary_rollout", CANARY_ROLLOUT_CHECK_INTERVAL_SECONDS, status="error", detail=str(e)
+            )
+        await asyncio.sleep(CANARY_ROLLOUT_CHECK_INTERVAL_SECONDS)
 
 
 def toggle_rule(

@@ -62,23 +62,18 @@ server {
 
     location / {
         limit_req zone=zone_app_7 burst=100;
-        proxy_pass http://upstream_app_7;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_next_upstream error timeout http_502 http_503;
-        proxy_next_upstream_tries 3;
-        proxy_next_upstream_timeout 10s;
+        set $waf_upstream_location "@proxy_app_7";
+        content_by_lua_file /opt/ml-waf/ml_decide.lua;
     }
 
     location /api {
         error_page 403 = @json_forbidden;
         limit_req zone=zone_app_7 burst=33 nodelay;
+        set $waf_upstream_location "@proxy_app_7";
+        content_by_lua_file /opt/ml-waf/ml_decide.lua;
+    }
 
+    location @proxy_app_7 {
         proxy_pass http://upstream_app_7;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;

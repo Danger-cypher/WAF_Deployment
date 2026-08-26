@@ -1,12 +1,13 @@
 import re
 import os
+import json
 import shutil
 import subprocess
 import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from app.services import db_service, nginx_manager
 from app.services.auth import require_admin, require_any_role, require_app_view_access, require_app_write_access, TokenData
 from app.utils.audit import log_admin_action
@@ -291,6 +292,14 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_app_
             os.remove(auth_conf_path)
     except Exception as e:
         logger.warning(f"Failed to clean up app-auth conf for deleted app {app_id}: {e}")
+
+    # Same gap, same fix, for the per-domain API schema Redis key — without
+    # this, a domain that gets reused by a different app later would
+    # silently inherit the deleted app's schema.
+    try:
+        nginx_manager.apply_api_schema_settings(existing_app["domain"], None, "log")
+    except Exception as e:
+        logger.warning(f"Failed to clean up API schema for deleted app {app_id}: {e}")
 
     log_admin_action("app", str(app_id), "delete", current_user, details={"name": existing_app["name"], "domain": existing_app["domain"]})
     return {"message": "Protected application deleted successfully!"}
@@ -620,3 +629,116 @@ async def upload_custom_cert(
         "message": f"Custom certificate uploaded and applied for {domain}",
         "cert_path": cert_path,
     }
+
+
+_VALID_FIELD_TYPES = {"string", "number", "boolean", "enum"}
+
+
+class ApiFieldTypeSpec(BaseModel):
+    """Optional per-field constraint beyond simple presence/allowlisting —
+    presence-only checks let a numeric field accept a SQL fragment. All
+    fields optional and additive: an endpoint with no field_types entry for
+    a given field keeps today's presence/allowlist-only behavior."""
+    type: Optional[str] = None  # one of _VALID_FIELD_TYPES, or None (no type check)
+    max_length: Optional[int] = None  # only meaningful for type == "string"
+    enum: List[Any] = []  # only meaningful for type == "enum"
+    pattern: Optional[str] = None  # only meaningful for type == "string"; PCRE, matched via ngx.re at enforcement time
+
+
+class ApiSchemaEndpoint(BaseModel):
+    method: str
+    path: str
+    required_fields: List[str] = []
+    allowed_fields: List[str] = []
+    field_types: Dict[str, ApiFieldTypeSpec] = {}
+
+
+class ApiSchemaPayload(BaseModel):
+    mode: str = "log"  # "log" (record violations, never block) | "enforce" (reject with 400)
+    endpoints: List[ApiSchemaEndpoint] = []
+
+
+@router.get("/apps/{app_id}/schema")
+async def get_app_schema(app_id: int, current_user: TokenData = Depends(require_app_view_access)):
+    """
+    Positive-security API schema for this app — the known-good endpoint
+    list ml_check.lua's schema_validate module enforces (or just logs
+    against, in "log" mode). Empty/unset means no schema configured, which
+    is a no-op everywhere else this app's traffic is inspected — same
+    "absence never means deny-all" convention as Positive Security.
+    """
+    app = db_service.get_protected_app_by_id(app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Protected application not found")
+
+    raw = app.get("api_schema")
+    endpoints = json.loads(raw)["endpoints"] if raw else []
+    return {"mode": app.get("api_schema_mode") or "log", "endpoints": endpoints}
+
+
+@router.put("/apps/{app_id}/schema")
+async def update_app_schema(
+    app_id: int,
+    payload: ApiSchemaPayload,
+    current_user: TokenData = Depends(require_app_write_access),
+):
+    app = db_service.get_protected_app_by_id(app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Protected application not found")
+
+    if payload.mode not in ("log", "enforce"):
+        raise HTTPException(status_code=400, detail="mode must be 'log' or 'enforce'.")
+
+    valid_methods = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+    for ep in payload.endpoints:
+        if ep.method.upper() not in valid_methods:
+            raise HTTPException(status_code=400, detail=f"Invalid HTTP method: '{ep.method}'")
+        if not ep.path.startswith("/"):
+            raise HTTPException(status_code=400, detail=f"Endpoint path must start with '/': '{ep.path}'")
+        for field_name, spec in ep.field_types.items():
+            if spec.type is not None and spec.type not in _VALID_FIELD_TYPES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid type '{spec.type}' for field '{field_name}' — must be one of {sorted(_VALID_FIELD_TYPES)}.",
+                )
+            if spec.type == "enum" and not spec.enum:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Field '{field_name}' declares type 'enum' but no enum values were given.",
+                )
+            if spec.max_length is not None and spec.max_length < 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"max_length for field '{field_name}' must be a positive integer.",
+                )
+            if spec.pattern:
+                try:
+                    re.compile(spec.pattern)
+                except re.error as exc:
+                    # Best-effort syntax check only — enforcement runs the
+                    # pattern through PCRE via ngx.re at request time, not
+                    # Python's re engine. Catches typos, not every possible
+                    # engine-specific divergence.
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid regex pattern for field '{field_name}': {exc}",
+                    )
+
+    schema_json = (
+        json.dumps({"endpoints": [ep.dict() for ep in payload.endpoints]})
+        if payload.endpoints else None
+    )
+    db_service.update_app_api_schema(app_id, schema_json, payload.mode)
+
+    success, err_msg = nginx_manager.apply_api_schema_settings(app["domain"], schema_json, payload.mode)
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Saved, but failed to apply the API schema. {err_msg}",
+        )
+
+    log_admin_action(
+        "app", str(app_id), "update_api_schema", current_user,
+        details={"mode": payload.mode, "endpoint_count": len(payload.endpoints)},
+    )
+    return {"status": "success", "mode": payload.mode, "endpoints": [ep.dict() for ep in payload.endpoints]}

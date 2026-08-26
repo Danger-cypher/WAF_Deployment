@@ -54,3 +54,41 @@ def test_block_mode_still_applies_bot_rate_limit_and_clears_flag(monkeypatch):
 
     assert "limit_req zone=waf_bot_req burst=1 nodelay;" in config
     assert "    default 0;" in config
+
+
+# ---------------------------------------------------------------------------
+# Risk-triggered challenge ($waf_risk_challenge_enabled) — independent
+# toggle from bot_mitigation_action's JS Challenge mode above; off by
+# default, no interaction with waf_bot_req either way.
+# ---------------------------------------------------------------------------
+
+def test_risk_challenge_enabled_sets_flag(monkeypatch):
+    settings = {**BASE_SETTINGS, "bot_mitigation_action": "Silent Drop", "risk_challenge_enabled": True}
+    config = _capture_generated_ddos_config(monkeypatch, settings)
+
+    assert "map $host $waf_risk_challenge_enabled {" in config
+    risk_map_start = config.index("map $host $waf_risk_challenge_enabled {")
+    risk_map_section = config[risk_map_start:risk_map_start + 80]
+    assert "default 1;" in risk_map_section
+
+
+def test_risk_challenge_disabled_by_default(monkeypatch):
+    settings = {**BASE_SETTINGS, "bot_mitigation_action": "Silent Drop"}
+    config = _capture_generated_ddos_config(monkeypatch, settings)
+
+    risk_map_start = config.index("map $host $waf_risk_challenge_enabled {")
+    risk_map_section = config[risk_map_start:risk_map_start + 80]
+    assert "default 0;" in risk_map_section
+
+
+def test_risk_challenge_independent_of_bot_challenge_mode(monkeypatch):
+    # JS Challenge mode (bad-bot UA) on, risk challenge off — both flags
+    # must reflect their own independent settings, not each other's.
+    settings = {**BASE_SETTINGS, "bot_mitigation_action": "JS Challenge", "risk_challenge_enabled": False}
+    config = _capture_generated_ddos_config(monkeypatch, settings)
+
+    bot_map_start = config.index("map $host $waf_bot_challenge_enabled {")
+    assert "default 1;" in config[bot_map_start:bot_map_start + 60]
+
+    risk_map_start = config.index("map $host $waf_risk_challenge_enabled {")
+    assert "default 0;" in config[risk_map_start:risk_map_start + 80]

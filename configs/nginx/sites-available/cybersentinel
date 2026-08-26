@@ -46,9 +46,28 @@ server {
     location ~* (?:/\.\./|/\.\.$) { deny all; }
     location /admin/ { allow 192.168.2.0/24; deny all; return 403; }
     if ($bad_client) { return 403; }
+    # location / and location /api/ dispatch through ml_decide.lua (CONTENT
+    # phase) rather than proxy_pass directly — see ml_decide.lua's header
+    # comment for why (the ACCESS-phase CRS-score read in ml_check.lua
+    # can't be trusted, since nginx doesn't guarantee a dynamically-loaded
+    # module's access-phase handler — ModSecurity here — runs before a
+    # statically-linked one's — Lua here — within the same phase; it only
+    # guarantees the whole phase completes before content phase starts).
+    # ngx.exec() hands off to the named location's own proxy_pass on allow,
+    # same internal-redirect mechanism already used by `error_page 403 =
+    # @json_forbidden` elsewhere in this codebase — proxying itself is
+    # unchanged. location /api/auth/ and location /socket.io/ don't need
+    # this: /api/auth/ is exempted from ML scoring entirely (see
+    # is_admin_request in ml_check.lua/ml_decide.lua), so it never read the
+    # unreliable score either way; /socket.io/ handles the ML decision at
+    # the WebSocket handshake below, same pattern.
     location / {
         limit_except GET POST HEAD PUT PATCH DELETE { deny all; }
         limit_req zone=api_limit burst=100;
+        set $waf_upstream_location "@proxy_frontend";
+        content_by_lua_file /opt/ml-waf/ml_decide.lua;
+    }
+    location @proxy_frontend {
         set $frontend_upstream waf-frontend:80;
         proxy_pass http://$frontend_upstream;
         proxy_http_version 1.1;
@@ -74,10 +93,19 @@ server {
     }
     location /api/ {
         limit_except GET POST HEAD PUT PATCH DELETE { deny all; }
-        
+
         limit_req zone=api_limit burst=30 nodelay;
-        set $backend_upstream waf-backend:8000;
+        # set must come before rewrite ... break — break halts the whole
+        # rewrite-phase directive chain for this location (set included),
+        # so a set placed after it never executes (confirmed live: caused
+        # every /api/* dashboard request to 500 with "$waf_upstream_location
+        # not set").
+        set $waf_upstream_location "@proxy_backend";
         rewrite ^/api/(.*) /$1 break;
+        content_by_lua_file /opt/ml-waf/ml_decide.lua;
+    }
+    location @proxy_backend {
+        set $backend_upstream waf-backend:8000;
         proxy_pass http://$backend_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -89,6 +117,10 @@ server {
         limit_except GET POST HEAD { deny all; }
         limit_conn ws_conn_limit 20;
         limit_req zone=api_limit burst=20 nodelay;
+        set $waf_upstream_location "@proxy_socketio";
+        content_by_lua_file /opt/ml-waf/ml_decide.lua;
+    }
+    location @proxy_socketio {
         set $socket_upstream waf-backend:8000;
         proxy_pass http://$socket_upstream;
         proxy_http_version 1.1;

@@ -234,6 +234,26 @@ def init_db():
                 except Exception:
                     pass  # Column already exists — expected on re-init
 
+            # Per-app positive-security API schema (roadmap item: API schema
+            # validation). Declares known-good endpoints (method/path +
+            # required/allowed JSON body fields) for a protected app;
+            # enforced in ml_check.lua's schema_validate module, which reads
+            # this via Redis (nginx_manager.apply_api_schema_settings), not
+            # this column directly — this is the source of truth the sync
+            # pushes from. NULL/empty = no schema configured = no-op for
+            # that app, matching Positive Security's same "absence never
+            # means deny-all" convention.
+            for col_def in [
+                "api_schema TEXT DEFAULT NULL",
+                "api_schema_mode TEXT NOT NULL DEFAULT 'log'",
+            ]:
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE protected_apps ADD COLUMN {col_def}"
+                    )
+                except Exception:
+                    pass  # Column already exists — expected on re-init
+
             # Per-app RBAC scoping (item 7): which protected app(s) a
             # non-'admin' 'app_admin' user may view/manage. Keyed by
             # username rather than a numeric user_id — users live in a
@@ -278,6 +298,21 @@ def init_db():
                     reviewed_by TEXT,
                     reviewed_at TEXT,
                     UNIQUE(rule_id, exclusion_type, uri, parameter_name)
+                )
+            """)
+
+            # Full-system config/DB backups — see backup_service.py. One row
+            # per archive; the archive itself lives on disk (BACKUP_DIR),
+            # this table is just the admin-facing catalog (list/download/
+            # restore-by-id) so the UI doesn't have to list a directory.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS backups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    filename TEXT NOT NULL UNIQUE,
+                    size_bytes INTEGER NOT NULL,
+                    triggered_by TEXT NOT NULL,
+                    trigger_type TEXT NOT NULL DEFAULT 'manual'
                 )
             """)
 
@@ -1120,6 +1155,52 @@ def get_api_spec() -> Optional[dict]:
         return None
 
 
+def create_backup_record(
+    created_at: str, filename: str, size_bytes: int, triggered_by: str, trigger_type: str = "manual"
+) -> int:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO backups (created_at, filename, size_bytes, triggered_by, trigger_type)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (created_at, filename, size_bytes, triggered_by, trigger_type),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_all_backups() -> List[dict]:
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM backups ORDER BY created_at DESC")
+            return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Error fetching backups: {e}")
+        return []
+
+
+def get_backup_by_id(backup_id: int) -> Optional[dict]:
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM backups WHERE id = ?", (backup_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Error fetching backup {backup_id}: {e}")
+        return None
+
+
+def delete_backup_record(backup_id: int) -> None:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM backups WHERE id = ?", (backup_id,))
+        conn.commit()
+
+
 def delete_api_spec() -> None:
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -1431,6 +1512,23 @@ def update_protected_app(
             return get_protected_app_by_id(app_id)
     except Exception as e:
         logger.error(f"Error updating protected app: {e}")
+        return None
+
+
+def update_app_api_schema(app_id: int, api_schema: str, api_schema_mode: str):
+    """api_schema is a JSON string (or None to clear) — see nginx_manager.
+    apply_api_schema_settings for the expected shape."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE protected_apps SET api_schema = ?, api_schema_mode = ? WHERE id = ?",
+                (api_schema, api_schema_mode, app_id),
+            )
+            conn.commit()
+            return get_protected_app_by_id(app_id)
+    except Exception as e:
+        logger.error(f"Error updating API schema for app {app_id}: {e}")
         return None
 
 

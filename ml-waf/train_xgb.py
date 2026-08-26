@@ -85,6 +85,14 @@ def train():
     X = np.vstack([X_benign, X_attack])
     y = np.array([0] * len(X_benign) + [1] * len(X_attack))
 
+    # Analyst-reviewed rows (collect_data sets _training_weight=1.0) count
+    # fully; unreviewed, WAF-self-labeled rows (0.5) count less — bounds how
+    # much a self-labeled poisoning campaign can shift the model.
+    w = np.array(
+        [log.get("_training_weight", 1.0) for log in benign_logs] +
+        [log.get("_training_weight", 1.0) for log in attack_logs]
+    )
+
     # 4. Stratified split — safe because we guaranteed at least MIN_ATTACK_SAMPLES attack samples above.
     #    Fall back to non-stratified if any class still has < 2 members (edge case guard).
     min_class_count = min(np.sum(y == 0), np.sum(y == 1))
@@ -93,8 +101,8 @@ def train():
     if not use_stratify:
         logger.warning("Class size still too small for stratified split. Using non-stratified split.")
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y,
+    X_train, X_val, y_train, y_val, w_train, w_val = train_test_split(
+        X, y, w,
         test_size=0.2,
         random_state=42,
         stratify=y if use_stratify else None
@@ -121,7 +129,7 @@ def train():
     )
 
     # 7. Fit the classifier model
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=w_train)
 
     # 8. Evaluate classifications against the split validation set
     preds = model.predict(X_val)

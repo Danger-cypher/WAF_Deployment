@@ -56,6 +56,19 @@ DEFAULT_SETTINGS = {
         "ip_blacklist": [],
         "ip_whitelist": [],
     },
+    "geo_block": {
+        "enabled": False,
+        "mode": "deny",
+        "countries": [],
+    },
+    "threat_intel": {
+        "enabled": False,
+        "sync_interval_hours": 24,
+        "last_sync_at": None,
+        "last_sync_count": 0,
+        "last_sync_status": "never_run",
+        "last_sync_error": None,
+    },
     "anti_defacement": {
         "enabled": False,
         # Default is empty — client configures their own files via the dashboard UI.
@@ -281,6 +294,22 @@ class SettingsManager:
         self.settings["hardening"] = data
         self.save_settings(self.settings)
         return self.settings["hardening"]
+
+    def get_geo_block(self) -> Dict[str, Any]:
+        return self.settings.get("geo_block", DEFAULT_SETTINGS["geo_block"])
+
+    def update_geo_block(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["geo_block"] = data
+        self.save_settings(self.settings)
+        return self.settings["geo_block"]
+
+    def get_threat_intel(self) -> Dict[str, Any]:
+        return self.settings.get("threat_intel", DEFAULT_SETTINGS["threat_intel"])
+
+    def update_threat_intel(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["threat_intel"] = data
+        self.save_settings(self.settings)
+        return self.settings["threat_intel"]
 
     def get_anti_defacement(self) -> Dict[str, Any]:
         return self.settings.get("anti_defacement", DEFAULT_SETTINGS["anti_defacement"])

@@ -269,6 +269,92 @@ export async function disableRule(id, reason) {
 }
 
 /**
+ * Flag/unflag a rule for canary review (see rule_manager.mark_rule_canary —
+ * this never changes live enforcement, it's pure bookkeeping for the
+ * historical-impact report below).
+ */
+export async function setRuleCanary(id, canary) {
+  try {
+    const response = await fetch(`${BASE_URL}/rules/canary`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, canary })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to set canary status for rule ${id}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Historical impact report for a canary-flagged rule: of its past matches,
+ * how many were the sole violation on their request (disabling the rule
+ * would let those through) vs. co-matched by another rule (still blocked
+ * either way).
+ */
+export async function getRuleCanaryReport(id, hours = 168) {
+  try {
+    const response = await fetch(`${BASE_URL}/rules/${id}/canary-report?hours=${hours}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to fetch canary report for rule ${id}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Bounded monitoring-window bookkeeping for a canary-flagged rule
+ * (started_at, elapsed/remaining hours, needs_review) — null if the rule
+ * isn't currently flagged.
+ */
+export async function getRuleCanaryStatus(id) {
+  try {
+    const response = await fetch(`${BASE_URL}/rules/${id}/canary-status`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to fetch canary status for rule ${id}:`, error);
+    throw error;
+  }
+}
+
+/** Auto-rollout settings: window/thresholds and the auto-promote/auto-rollback toggles. */
+export async function getCanaryRolloutSettings() {
+  try {
+    const response = await fetch(`${BASE_URL}/rules/canary-settings`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error('Failed to fetch canary rollout settings:', error);
+    throw error;
+  }
+}
+
+export async function saveCanaryRolloutSettings(settings) {
+  try {
+    const response = await fetch(`${BASE_URL}/rules/canary-settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error('Failed to save canary rollout settings:', error);
+    throw error;
+  }
+}
+
+/** Manually triggers one canary auto-rollout evaluation cycle instead of waiting for the scheduler. */
+export async function runCanaryRolloutNow() {
+  try {
+    const response = await fetch(`${BASE_URL}/rules/canary/run-now`, { method: 'POST' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error('Failed to run canary rollout:', error);
+    throw error;
+  }
+}
+
+/**
  * Set the global OWASP CRS detection paranoia level (1-4)
  */
 export async function setParanoiaLevel(level) {
@@ -1117,6 +1203,81 @@ export async function saveHardeningSettings(settings) {
 }
 
 /**
+ * Fetch Geo-Block (country allow/deny list) settings
+ */
+export async function getGeoBlockSettings() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/geo-block`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch geo-block settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Save Geo-Block (country allow/deny list) settings
+ */
+export async function saveGeoBlockSettings(settings) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/geo-block`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save geo-block settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch external threat-intel feed (Spamhaus DROP/EDROP) settings
+ */
+export async function getThreatIntelSettings() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/threat-intel`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch threat-intel settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Save external threat-intel feed settings
+ */
+export async function saveThreatIntelSettings(settings) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/threat-intel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save threat-intel settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Trigger an immediate threat-intel feed sync, bypassing the enabled check
+ */
+export async function syncThreatIntelNow() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/threat-intel/sync-now`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to trigger threat-intel sync:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch Web Anti-Defacement settings
  */
 export async function getAntiDefacementSettings() {
@@ -1351,6 +1512,37 @@ export async function toggleProtectedApp(appId) {
     return await handleResponse(response);
   } catch (error) {
     console.error(`Failed to toggle active status for protected application ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch a protected app's positive-security API schema (declared
+ * known-good endpoints + required/allowed JSON body fields).
+ */
+export async function getAppSchema(appId) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}/schema`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to fetch API schema for app ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Save a protected app's positive-security API schema.
+ */
+export async function saveAppSchema(appId, payload) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}/schema`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to save API schema for app ${appId}:`, error);
     throw error;
   }
 }
@@ -1818,4 +2010,72 @@ export async function getAuditLog(page = 1, size = 50, entityType = null, hours 
     console.error("Failed to fetch audit log:", error);
     throw error;
   }
+}
+
+/**
+ * Full-system config/DB backup and restore (nginx config + control-plane
+ * SQLite DBs — see backend/app/services/backup_service.py for exact scope).
+ */
+export async function getBackups() {
+  try {
+    const response = await fetch(`${BASE_URL}/system/backups`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch backups:", error);
+    throw error;
+  }
+}
+
+export async function createBackup() {
+  try {
+    const response = await fetch(`${BASE_URL}/system/backups`, { method: 'POST' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to create backup:", error);
+    throw error;
+  }
+}
+
+export async function restoreBackup(backupId) {
+  try {
+    const response = await fetch(`${BASE_URL}/system/backups/${backupId}/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to restore backup:", error);
+    throw error;
+  }
+}
+
+export async function deleteBackup(backupId) {
+  try {
+    const response = await fetch(`${BASE_URL}/system/backups/${backupId}`, { method: 'DELETE' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to delete backup:", error);
+    throw error;
+  }
+}
+
+/**
+ * Triggers a browser download of a backup archive — separate from the JSON
+ * helpers above since the response body is the raw file, not JSON.
+ */
+export async function downloadBackup(backupId, filename) {
+  const response = await fetch(`${BASE_URL}/system/backups/${backupId}/download`);
+  if (!response.ok) {
+    throw new Error(`Failed to download backup (status ${response.status})`);
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename || `backup-${backupId}.tar.gz`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }

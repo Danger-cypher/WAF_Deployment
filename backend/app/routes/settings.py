@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel
@@ -78,6 +79,12 @@ class DdosBotMitigationModel(BaseModel):
     trusted_ips: List[str]
     bot_mitigation_action: str
     advanced_rules: List[AdvancedRuleModel] = []
+    # Independent of bot_mitigation_action's "JS Challenge" (which gates on
+    # the bad-bot User-Agent signal) — this triggers the same interstitial
+    # off the ML risk score's "log" band (0.40-0.70) instead. Off by
+    # default: a deployment that hasn't explicitly opted in sees zero
+    # behavior change.
+    risk_challenge_enabled: bool = False
 
 
 class HardeningModel(BaseModel):
@@ -86,6 +93,17 @@ class HardeningModel(BaseModel):
     server_cloaking: bool
     ip_blacklist: List[str]
     ip_whitelist: List[str]
+
+
+class GeoBlockModel(BaseModel):
+    enabled: bool
+    mode: str  # "deny" (block listed countries) | "allow" (block everyone else)
+    countries: List[str]  # ISO 3166-1 alpha-2 codes, e.g. "RU", "CN"
+
+
+class ThreatIntelModel(BaseModel):
+    enabled: bool
+    sync_interval_hours: int
 
 
 class AntiDefacementModel(BaseModel):
@@ -357,6 +375,94 @@ async def update_hardening_settings(
 
     log_admin_action("settings", "hardening", "update", current_user, details=settings.dict())
     return saved_settings
+
+
+# 3.9.1 Geo-Block Settings Routes
+@router.get("/settings/geo-block", response_model=Dict[str, Any])
+async def get_geo_block_settings(current_user: TokenData = Depends(require_admin)):
+    return settings_manager.get_geo_block()
+
+
+@router.post("/settings/geo-block", response_model=Dict[str, Any])
+async def update_geo_block_settings(
+    settings: GeoBlockModel, current_user: TokenData = Depends(require_admin)
+):
+    import re as _re
+
+    if settings.mode not in ("allow", "deny"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="mode must be 'allow' or 'deny'.",
+        )
+
+    iso_code_re = _re.compile(r"^[A-Za-z]{2}$")
+    for code in settings.countries:
+        if not iso_code_re.match(code.strip()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid ISO 3166-1 alpha-2 country code: '{code}'",
+            )
+
+    saved_settings = settings_manager.update_geo_block(settings.dict())
+
+    from app.services import nginx_manager
+
+    success, err_msg = nginx_manager.apply_geo_block_settings(saved_settings)
+    if not success:
+        logger.error(f"Failed to apply geo-block settings: {err_msg}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Saved, but failed to apply the geo-block list. {err_msg}",
+        )
+
+    log_admin_action("settings", "geo_block", "update", current_user, details=settings.dict())
+    return saved_settings
+
+
+# 3.9.2 External Threat-Intel Feed Settings Routes
+@router.get("/settings/threat-intel", response_model=Dict[str, Any])
+async def get_threat_intel_settings(current_user: TokenData = Depends(require_admin)):
+    return settings_manager.get_threat_intel()
+
+
+@router.post("/settings/threat-intel", response_model=Dict[str, Any])
+async def update_threat_intel_settings(
+    settings: ThreatIntelModel, current_user: TokenData = Depends(require_admin)
+):
+    if settings.sync_interval_hours < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="sync_interval_hours must be at least 1.",
+        )
+
+    # Merge rather than replace — last_sync_* are status fields the
+    # background service owns, not part of this admin-editable form; a full
+    # replace here would silently wipe them on every settings save.
+    current = settings_manager.get_threat_intel()
+    merged = {**current, "enabled": settings.enabled, "sync_interval_hours": settings.sync_interval_hours}
+    saved_settings = settings_manager.update_threat_intel(merged)
+
+    log_admin_action("settings", "threat_intel", "update", current_user, details=settings.dict())
+    return saved_settings
+
+
+@router.post("/settings/threat-intel/sync-now", response_model=Dict[str, Any])
+async def trigger_threat_intel_sync(current_user: TokenData = Depends(require_admin)):
+    """Runs a sync cycle immediately, bypassing the enabled check — lets an
+    admin verify the feed works, or refresh, without waiting for the
+    scheduled interval or leaving auto-sync permanently on."""
+    from app.services.threat_intel_service import run_threat_intel_sync
+
+    result = await asyncio.to_thread(run_threat_intel_sync, force=True)
+
+    log_admin_action("settings", "threat_intel", "sync_now", current_user, details=result)
+
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Threat-intel sync failed: {result.get('error', 'unknown error')}",
+        )
+    return result
 
 
 # 3.10 Web Anti-Defacement Settings Routes

@@ -290,8 +290,13 @@ async def background_tasks_health(current_user: TokenData = Depends(require_admi
     """
     Reports the last-cycle status of every recurring background task in
     this process (log retention, log ingestion flush, API discovery,
-    anti-defacement monitor, SSL monitor) — whether each is still alive
-    and cycling on schedule, not just whether the process itself is up.
+    anti-defacement monitor, SSL monitor, auto-learning, threat intel,
+    canary rollout) — whether each is still alive and cycling on
+    schedule, not just whether the process itself is up. One exception:
+    waf_redis_degraded's "error" status doesn't mean its own cycle
+    failed, it means the openresty/Lua side currently can't reach Redis
+    (see redis_degraded_monitor.py) — the one heartbeat here bridging a
+    condition from outside this process.
 
     Exists because three separate bugs this session shared the same root
     shape: a loop kept running but silently stopped doing useful work,

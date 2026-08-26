@@ -331,6 +331,16 @@ def apply_ddos_settings(settings: dict) -> tuple[bool, str]:
         config_lines.append("}")
         config_lines.append("")
 
+        # Independent toggle for the same challenge mechanism, triggered by
+        # ml_server.py's X-WAF-Risk-Challenge response header (threat_score's
+        # "log" band) instead of the bad-bot UA signal above. No interaction
+        # with waf_bot_req — this path never touches that rate-limit zone.
+        risk_challenge_enabled = settings.get("risk_challenge_enabled", False)
+        config_lines.append(f"map $host $waf_risk_challenge_enabled {{")
+        config_lines.append(f"    default {1 if risk_challenge_enabled else 0};")
+        config_lines.append("}")
+        config_lines.append("")
+
         # Connection limiting
         config_lines.append(f"limit_conn_zone {zone_key} zone=waf_ddos_conn:10m;")
         config_lines.append(f"limit_conn_status {status_code};")
@@ -611,6 +621,41 @@ def apply_hardening_settings(settings: dict) -> tuple[bool, str]:
         return False, str(e)
 
 
+def apply_geo_block_settings(settings: dict) -> tuple[bool, str]:
+    """
+    Pushes the country allow/deny list into Redis for ml_check.lua to read —
+    zero-reload, same pattern as apply_hardening_settings' IP whitelist/
+    blacklist above. Requires GeoIP2 to actually be enabled (see
+    apply_ddos_settings' geoip2 {} block generation) to have any effect;
+    enforcement degrades to a no-op in ml_check.lua if
+    $geoip2_data_country_code was never populated.
+    """
+    try:
+        r = get_redis_client()
+        enabled = settings.get("enabled", False)
+        mode = settings.get("mode", "deny")
+        countries = settings.get("countries", [])
+
+        r.delete("waf:geo:countries")
+        if enabled and mode in ("allow", "deny"):
+            r.set("waf:geo:block_mode", mode)
+            for code in countries:
+                code = code.strip().upper()
+                if code:
+                    r.sadd("waf:geo:countries", code)
+        else:
+            r.set("waf:geo:block_mode", "disabled")
+
+        logger.info(
+            f"Successfully updated geo-block settings in Redis "
+            f"(mode={mode if enabled else 'disabled'}, {len(countries)} countries)."
+        )
+        return True, ""
+    except Exception as e:
+        logger.error(f"Failed to apply geo-block settings: {e}")
+        return False, str(e)
+
+
 def apply_positive_security_settings(settings: dict) -> tuple[bool, str]:
     """
     Generates ModSecurity rules enforcing the Positive Security allowlist
@@ -678,6 +723,24 @@ def apply_positive_security_settings(settings: dict) -> tuple[bool, str]:
                 f"msg:'Restricted file extension blocked by Positive Security policy'\""
             )
             config_lines.append("")
+            # REQUEST_FILENAME above only ever matched the URL path (e.g.
+            # GET /malware.exe) — a multipart file upload to an allowed
+            # path (POST /upload with a part named shell.php) sailed
+            # straight through, since the uploaded file's own name was
+            # never checked. FILES_NAMES is ModSecurity's per-part
+            # filename collection from multipart parsing (SecRequestBody
+            # Access On, already set in modsecurity.conf) — populated
+            # regardless of SecUploadDir, which only controls whether the
+            # file's *content* gets persisted to disk (that's a separate,
+            # not-yet-built capability — AV/malware scanning — not needed
+            # just to read a filename). phase:2 because the request body
+            # (where multipart parts live) isn't parsed yet at phase:1.
+            config_lines.append(
+                f'SecRule FILES_NAMES "@rx {ext_pattern}" '
+                f'"id:5900005,phase:2,deny,status:403,log,t:lowercase,'
+                f"msg:'Restricted file extension in uploaded file blocked by Positive Security policy'\""
+            )
+            config_lines.append("")
 
         config_content = "\n".join(config_lines) + "\n"
         logger.info(
@@ -689,6 +752,40 @@ def apply_positive_security_settings(settings: dict) -> tuple[bool, str]:
         return write_and_apply_configs({POSITIVE_SECURITY_CONF_PATH: config_content})
     except Exception as e:
         logger.error(f"Failed to apply positive security settings: {e}")
+        return False, str(e)
+
+
+def apply_api_schema_settings(domain: str, api_schema_json: str, mode: str) -> tuple[bool, str]:
+    """
+    Pushes one protected app's positive-security API schema into Redis —
+    zero-reload, same pattern as apply_hardening_settings/apply_geo_block_
+    settings above. Keyed by domain (not app_id) because that's what
+    ml_check.lua's schema_validate module has cheaply available at request
+    time via $host, with no need for an app_id lookup from Lua.
+
+    api_schema_json is expected to already be validated JSON (see
+    routes/apps.py's schema endpoint) shaped like:
+        {"endpoints": [{"method": "POST", "path": "/api/users",
+                         "required_fields": [...], "allowed_fields": [...]}]}
+    A None/empty api_schema_json clears the key — enforcement in Lua is a
+    no-op whenever nothing is stored for a given host, matching Positive
+    Security's "absence never means deny-all" convention.
+    """
+    try:
+        r = get_redis_client()
+        key = f"waf:schema:{domain.strip().lower()}"
+        if not api_schema_json:
+            r.delete(key)
+            logger.info(f"Cleared API schema for domain '{domain}'.")
+            return True, ""
+
+        import json as _json
+        stored = _json.dumps({"mode": mode, **_json.loads(api_schema_json)})
+        r.set(key, stored)
+        logger.info(f"Successfully updated API schema in Redis for domain '{domain}' (mode={mode}).")
+        return True, ""
+    except Exception as e:
+        logger.error(f"Failed to apply API schema settings for domain '{domain}': {e}")
         return False, str(e)
 
 
@@ -929,25 +1026,35 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     "        return 403 '{\"error\": \"🚨 WAF caught you! This attack has been blocked 🚫 and logged 📋. CyberSentinel is watching 👀\", \"code\": 403}';",
                     "    }",
                     "",
+                    # Public locations dispatch to ml_decide.lua (CONTENT phase)
+                    # instead of proxy_pass directly. That's the fix for a real,
+                    # confirmed bug: ml_check.lua's own access_by_lua_file can't
+                    # reliably read the CRS score, because nginx doesn't
+                    # guarantee its (static) handler runs after
+                    # ngx_http_modsecurity_module's (dynamically loaded)
+                    # handler within the same access phase — but nginx DOES
+                    # guarantee the whole access phase completes before the
+                    # content phase starts. ml_decide.lua reads the score
+                    # there and, on allow, hands off via ngx.exec() (internal
+                    # redirect — same mechanism `error_page 403 =
+                    # @json_forbidden` below already uses) to the named
+                    # location's own proxy_pass, so headers/streaming/
+                    # WebSocket upgrade/body forwarding are all still native
+                    # nginx proxy behavior, unchanged.
                     "    location / {",
                     f"        limit_req zone=zone_app_{app_id} burst={burst};",
-                    f"        proxy_pass {protocol}://upstream_app_{app_id};",
-                    "        proxy_http_version 1.1;",
-                    "        proxy_set_header Upgrade $http_upgrade;",
-                    "        proxy_set_header Connection 'upgrade';",
-                    "        proxy_set_header Host $host;",
-                    "        proxy_set_header X-Real-IP $remote_addr;",
-                    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-                    "        proxy_set_header X-Forwarded-Proto $scheme;",
-                    "        proxy_next_upstream error timeout http_502 http_503;",
-                    "        proxy_next_upstream_tries 3;",
-                    "        proxy_next_upstream_timeout 10s;",
+                    f"        set $waf_upstream_location \"@proxy_app_{app_id}\";",
+                    "        content_by_lua_file /opt/ml-waf/ml_decide.lua;",
                     "    }",
                     "",
                     "    location /api {",
                     "        error_page 403 = @json_forbidden;",
                     f"        limit_req zone=zone_app_{app_id} burst={max(5, burst // 3)} nodelay;",
+                    f"        set $waf_upstream_location \"@proxy_app_{app_id}\";",
+                    "        content_by_lua_file /opt/ml-waf/ml_decide.lua;",
+                    "    }",
                     "",
+                    f"    location @proxy_app_{app_id} {{",
                     f"        proxy_pass {protocol}://upstream_app_{app_id};",
                     "        proxy_http_version 1.1;",
                     "        proxy_set_header Upgrade $http_upgrade;",

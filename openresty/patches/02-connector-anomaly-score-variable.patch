@@ -11,16 +11,28 @@ index d3d9624..8710424 100644
  static void *ngx_http_modsecurity_create_main_conf(ngx_conf_t *cf);
  static char *ngx_http_modsecurity_init_main_conf(ngx_conf_t *cf, void *conf);
  static void *ngx_http_modsecurity_create_conf(ngx_conf_t *cf);
-@@ -564,12 +566,95 @@ ngx_module_t ngx_http_modsecurity_module = {
+@@ -564,12 +566,107 @@ ngx_module_t ngx_http_modsecurity_module = {
  };
  
  
 +/*
 + * Exposes ModSecurity's TX:BLOCKING_INBOUND_ANOMALY_SCORE as
-+ * $modsecurity_anomaly_score so Lua (access_by_lua_file, which our own
-+ * diagnostic confirmed always runs AFTER this module's NGX_HTTP_ACCESS_PHASE
-+ * handler for the same request) can read the real CRS request-side score
-+ * instead of the always-zero value it had no way to obtain before.
++ * $modsecurity_anomaly_score, instead of the always-zero value there was no
++ * way to obtain before.
++ *
++ * NOTE ON READ TIMING: an earlier version of this comment claimed a live
++ * diagnostic had confirmed this module's NGX_HTTP_ACCESS_PHASE handler
++ * always runs before access_by_lua_file's, within the same access phase.
++ * That claim does not hold: a fresh live test (a request this module
++ * itself blocked, with a real computed score of 20) showed
++ * access_by_lua_file's read of this variable as 0 for that same request.
++ * nginx does not guarantee relative order between a dynamically-loaded
++ * module's (this one, via load_module) and a statically-linked module's
++ * (OpenResty's Lua engine) phase handlers within the same phase — only
++ * that the whole phase completes before the next one starts. Consumers of
++ * this variable must read it from a phase guaranteed to run after the
++ * access phase (e.g. content_by_lua*), not from access_by_lua_file. See
++ * ml-waf/ml_decide.lua in the WAF_GUI repo for the corrected read site.
 + *
 + * NOTE: CRS v3 stored this as plain TX:ANOMALY_SCORE. CRS v4 (in use here)
 + * only ever increments TX:ANOMALY_SCORE from the RESPONSE phase
@@ -107,7 +119,7 @@ index d3d9624..8710424 100644
      int rc = 0;
  
      cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
-@@ -578,6 +663,15 @@ ngx_http_modsecurity_init(ngx_conf_t *cf)
+@@ -578,6 +675,15 @@ ngx_http_modsecurity_init(ngx_conf_t *cf)
          dd("We are not sure how this returns, NGINX doesn't seem to think it will ever be null");
          return NGX_ERROR;
      }

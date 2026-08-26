@@ -1,9 +1,26 @@
 package.path = "/opt/ml-waf/lualib/?.lua;/opt/ml-waf/?.lua;" .. package.path
-local http = require("resty.http")
-local json = require("cjson")
-local redis = require("resty.redis")
 local bit = require("bit")
 local bot_challenge = require("bot_challenge")
+local schema_validate = require("schema_validate")
+local waf_redis = require("waf_redis")
+
+-- This script runs in the ACCESS phase — IP/geo/schema/bot checks only, all
+-- of which are safe to decide before ModSecurity has finished its own
+-- access-phase evaluation (none of them depend on the CRS score). The CRS
+-- score read + ML /predict call + block/challenge decision live in
+-- ml_decide.lua instead, run from the CONTENT phase via
+-- `content_by_lua_file` on each proxying location. That split exists
+-- because of a real, confirmed bug: ngx_http_modsecurity_module is loaded
+-- dynamically (`load_module`) while this access_by_lua_file handler is
+-- static, and nginx does not guarantee dynamically-loaded modules' phase
+-- handlers run before statically-linked ones' within the same phase — so a
+-- CRS score read here can see a stale/zero value (confirmed live: a request
+-- ModSecurity blocked with a real score of 20 was logged by the old
+-- single-script version with crs_score=0). nginx *does* guarantee the
+-- entire access phase (every handler in it, static or dynamic) completes
+-- before the content phase begins, regardless of order within the access
+-- phase — so reading the score in content phase is reliable without
+-- touching module load order at all. See ml_decide.lua.
 
 -- Skip ML evaluation ONLY for:
 --   1. Read-only dashboard telemetry endpoints (would cause feedback loops / DB locks)
@@ -12,6 +29,10 @@ local bot_challenge = require("bot_challenge")
 -- NOTE (Gap 3 Fix): State-changing admin API paths (settings save, exclusions write,
 --   system actions) are NO LONGER exempt — they now pass through ML scoring.
 --   ModSecurity CRS remains active on ALL paths regardless.
+-- NOTE: also duplicated in ml_decide.lua (content phase) — a location that
+-- dispatches to content_by_lua_file must independently skip the ML call for
+-- the same exempted paths, since the content phase runs regardless of what
+-- this access-phase script decided.
 local uri = ngx.var.uri or ""
 local function is_admin_request(path)
     -- Exact read-only telemetry endpoints that would cause DB/Redis feedback loops
@@ -134,43 +155,65 @@ local function check_ip_auth(red, client_ip)
         end
     end
 
+    -- 3. External threat-intel feed (Spamhaus DROP/EDROP via
+    -- threat_intel_service.py, Settings > Hardening). Kept in its own key
+    -- so a scheduled sync can never clobber the admin-managed blacklist
+    -- above — checked last, so the manual whitelist (already returned by
+    -- this point) always overrides a feed-sourced hit.
+    local feed_cidrs, err = red:smembers("waf:blacklist:feed:cidrs")
+    if feed_cidrs and #feed_cidrs > 0 then
+        local client_ip_int = ip_to_int(client_ip)
+        if client_ip_int and match_cidrs(client_ip_int, feed_cidrs) then
+            return "blacklist"
+        end
+    end
+
     return "none"
 end
 
--- Dynamic IP Restriction Check via Redis
-local red = redis:new()
-red:set_timeouts(100, 100, 100) -- 100ms
-
--- Read Redis password from environment variable first, then fallback to protected secret file
-local redis_password = os.getenv("REDIS_PASSWORD")
-if not redis_password or redis_password == "" then
-    local secret_file = io.open("/etc/cybersentinel/redis.secret", "r")
-    if secret_file then
-        redis_password = secret_file:read("*l")
-        secret_file:close()
-        if redis_password then
-            redis_password = redis_password:match("^%s*(.-)%s*$") -- trim whitespace
-        end
+-- $geoip2_data_country_code only exists as an nginx variable when
+-- nginx_manager.py's DDoS config generator actually emitted the `geoip2 {}`
+-- block (GEOIP2_MODULE_ENABLED=true and the Country MMDB present) — an
+-- undeclared nginx variable raises a Lua error on access rather than
+-- returning nil, so this must be pcall-guarded to stay safe if that's ever
+-- toggled off again.
+local function get_geo_country()
+    local ok, country = pcall(function() return ngx.var.geoip2_data_country_code end)
+    if ok and country and country ~= "" then
+        return country
     end
+    return nil
 end
 
-local redis_host = os.getenv("REDIS_HOST") or "127.0.0.1"
-local ok, err = red:connect(redis_host, 6379)
-if ok then
-    -- Only authenticate if password was loaded from the secret file
-    local auth_ok = true
-    if redis_password and redis_password ~= "" then
-        local res, auth_err = red:auth(redis_password)
-        if not res then
-            ngx.log(ngx.ERR, "Redis authentication failed: ", auth_err)
-            auth_ok = false
-        end
+-- Settings > Hardening's geo-block (nginx_manager.apply_geo_block_settings
+-- populates these keys, zero-reload like the IP whitelist/blacklist above).
+-- Fails open whenever the mode, country data, or Redis itself is unavailable
+-- — a missing GeoIP match must never turn into a lockout.
+local function check_geo_block(red)
+    local mode = red:get("waf:geo:block_mode")
+    if not mode or mode == ngx.null or mode == "disabled" then
+        return false
     end
+    local country = get_geo_country()
+    if not country then
+        return false
+    end
+    local is_member = red:sismember("waf:geo:countries", country)
+    if mode == "deny" then
+        return is_member == 1
+    elseif mode == "allow" then
+        return is_member ~= 1
+    end
+    return false
+end
 
-    if auth_ok then
+-- Dynamic IP Restriction Check via Redis
+local red = waf_redis.connect()
+if red then
+    do
         local client_ip = ngx.var.remote_addr or ""
         local status = check_ip_auth(red, client_ip)
-        
+
         if status == "whitelist" then
             red:set_keepalive(10000, 100)
             return
@@ -182,6 +225,21 @@ if ok then
             ngx.exit(ngx.HTTP_FORBIDDEN)
         end
 
+        if check_geo_block(red) then
+            red:set_keepalive(10000, 100)
+            ngx.status = ngx.HTTP_FORBIDDEN
+            ngx.header.content_type = "text/html; charset=UTF-8"
+            ngx.say("<h1>403 Forbidden</h1><p>Blocked by WAF (Geo-Restriction)</p>")
+            ngx.exit(ngx.HTTP_FORBIDDEN)
+        end
+
+        -- Positive-security API schema check (Settings > per-app "API
+        -- Schema"). No-ops unless this host has a schema configured AND the
+        -- request matches one of its declared endpoints. Exits internally
+        -- (400) in "enforce" mode on a violation; releases its own
+        -- keepalive first since it may not return.
+        schema_validate.check(red)
+
         -- Opt-in JS Challenge bot mitigation (DDoS & Bot Shield settings).
         -- No-ops immediately unless both the feature is enabled AND this
         -- request's UA matched the existing bad-bot signal — reuses the
@@ -192,104 +250,5 @@ if ok then
     red:set_keepalive(10000, 100)
 end
 
--- 1. Read the real ModSecurity anomaly score, exposed by the connector's
--- $modsecurity_anomaly_score variable (backed by CRS v4's
--- TX:BLOCKING_INBOUND_ANOMALY_SCORE via msc_get_tx_variable()). Populated
--- because ModSecurity's own access-phase handler always runs before this
--- script within the same access phase.
-local headers = ngx.req.get_headers()
-local crs_score = tonumber(ngx.var.modsecurity_anomaly_score) or 0.0
-local matched_vars = ngx.var.modsec_matched_var_names or ""
-
--- 3. Prepare telemetry payload parameters
-local payload = {
-    unique_id = ngx.var.unique_id or ngx.var.request_id or "",
-    crs_score = crs_score,
-    matched_vars = matched_vars,
-    uri = ngx.var.request_uri or "",
-    args = ngx.var.args or "",
-    method = ngx.req.get_method(),
-    body_len = tonumber(headers["Content-Length"]) or 0,
-    ct = headers["Content-Type"] or "",
-    ua = headers["User-Agent"] or "",
-    remote_addr = ngx.var.remote_addr or ""
-}
-
--- 4. Initiate the HTTP client with timeouts
-local httpc = http.new()
-httpc:set_timeouts(500, 500, 500)
-
--- CRS-only fallback threshold: if ML daemon is unavailable, only block requests where
--- the ModSecurity CRS score already indicates a clear attack (score >= 20).
--- This prevents a self-inflicted DoS if the ML daemon restarts during model retraining.
-local CRS_BLOCK_THRESHOLD = 20.0
-
-local function crs_only_fallback(reason)
-    ngx.log(ngx.WARN, "ML-WAF: ", reason, " — falling back to CRS-only mode.")
-    if crs_score >= CRS_BLOCK_THRESHOLD then
-        ngx.log(ngx.WARN, "ML-WAF CRS fallback: blocking request with CRS score=", crs_score)
-        ngx.status = ngx.HTTP_FORBIDDEN
-        ngx.header.content_type = "text/html; charset=UTF-8"
-        ngx.say("<h1>403 Forbidden</h1><p>Blocked by WAF (CRS Rule Enforcement)</p>")
-        ngx.exit(ngx.HTTP_FORBIDDEN)
-    else
-        -- CRS score is below threshold — allow through on ML daemon degraded mode
-        ngx.log(ngx.INFO, "ML-WAF CRS fallback: allowing request (CRS score=", crs_score, " < ", CRS_BLOCK_THRESHOLD, ")")
-        return
-    end
-end
-
-local ml_host = os.getenv("ML_HOST") or "127.0.0.1"
-local ml_port = tonumber(os.getenv("ML_PORT")) or 8003
-local ok, err
-if string.match(ml_host, "^unix:") then
-    ok, err = httpc:connect(ml_host)
-else
-    ok, err = httpc:connect(ml_host, ml_port)
-end
-
-if not ok then
-    crs_only_fallback("ML daemon unreachable: " .. (err or "unknown"))
-    return
-end
-
-local res, err = httpc:request({
-    path = "/predict",
-    method = "POST",
-    body = json.encode(payload),
-    headers = {
-        ["Host"] = string.match(ml_host, "^unix:") and "127.0.0.1" or ml_host,
-        ["Content-Type"] = "application/json",
-    }
-})
-
--- 5. Handle ML daemon failure — use CRS-only fallback instead of blocking all traffic
-if not res then
-    httpc:close()
-    crs_only_fallback("ML daemon request error: " .. (err or "unknown"))
-    return
-end
-
--- 6. Parse response from the FastAPI prediction server
-if res.status == 401 then
-    ngx.status = ngx.HTTP_FORBIDDEN
-    ngx.header.content_type = "text/html; charset=UTF-8"
-    ngx.say("<h1>403 Forbidden</h1><p>Blocked by WAF (ML Threat Engine)</p>")
-    ngx.exit(ngx.HTTP_FORBIDDEN)
-
-elseif res.status == 429 then
-    ngx.status = 429
-    ngx.header["Retry-After"] = "60"
-    ngx.header.content_type = "text/html; charset=UTF-8"
-    ngx.say("<h1>429 Too Many Requests</h1><p>Slow down — rate limited by WAF. Retry after 60s.</p>")
-    ngx.exit(429)
-
-elseif res.status == 200 then
-    return
-
-else
-    -- Unexpected daemon response — use CRS fallback instead of blanket block
-    ngx.log(ngx.WARN, "ML-WAF: unexpected daemon response status: ", res.status)
-    crs_only_fallback("unexpected daemon response status " .. tostring(res.status))
-    return
-end
+-- CRS score read + ML /predict call + block/challenge decision: see
+-- ml_decide.lua (content phase, run per-location via content_by_lua_file).

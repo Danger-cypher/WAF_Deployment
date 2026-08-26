@@ -2,6 +2,7 @@
 System-level API endpoints for WAF configuration and administrative actions.
 """
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import socket
 import subprocess
@@ -9,6 +10,8 @@ import requests
 import asyncio
 import logging
 from app.services.auth import require_admin, require_any_role, TokenData
+from app.services import backup_service
+from app.utils.audit import log_admin_action
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -273,3 +276,88 @@ async def sync_signatures_endpoint(current_user: TokenData = Depends(require_adm
             status_code=500,
             detail="Reload failed — OpenResty reload unsuccessful. Check backend logs."
         )
+
+
+class RestoreRequest(BaseModel):
+    # A second, explicit confirmation at the API layer — the frontend also
+    # confirms before calling this, but restore overwrites live nginx
+    # config and every control-plane DB, so it doesn't rely on the UI
+    # alone to prevent an accidental call.
+    confirm: bool = False
+
+
+@router.post("/backups")
+async def create_backup_endpoint(current_user: TokenData = Depends(require_admin)):
+    """
+    Snapshots nginx config + control-plane SQLite DBs into a downloadable
+    archive. See backup_service.py for exactly what's included/excluded.
+    """
+    try:
+        result = await asyncio.to_thread(
+            backup_service.create_backup, triggered_by=current_user.username, trigger_type="manual"
+        )
+    except Exception as e:
+        logger.error(f"Backup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Backup failed: {str(e)}")
+
+    log_admin_action(
+        "system", "backup", "create", current_user,
+        details={"filename": result["filename"], "size_bytes": result["size_bytes"]},
+    )
+    return result
+
+
+@router.get("/backups")
+async def list_backups_endpoint(current_user: TokenData = Depends(require_admin)):
+    return backup_service.list_backups()
+
+
+@router.get("/backups/{backup_id}/download")
+async def download_backup_endpoint(backup_id: int, current_user: TokenData = Depends(require_admin)):
+    record = backup_service.get_backup_archive_path(backup_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Backup not found or its archive file is missing on disk.")
+    return FileResponse(record["path"], filename=record["filename"], media_type="application/gzip")
+
+
+@router.post("/backups/{backup_id}/restore")
+async def restore_backup_endpoint(
+    backup_id: int, payload: RestoreRequest, current_user: TokenData = Depends(require_admin)
+):
+    """
+    Restores nginx config + control-plane SQLite DBs from a prior backup.
+    A fresh safety snapshot is taken automatically first; a restored nginx
+    config that fails `nginx -t` is rolled back automatically rather than
+    left half-applied. See backup_service.restore_backup for the full
+    sequence.
+    """
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Restore overwrites live nginx config and control-plane databases — resubmit with confirm: true.",
+        )
+
+    try:
+        success, message = await asyncio.to_thread(
+            backup_service.restore_backup, backup_id, current_user.username
+        )
+    except Exception as e:
+        logger.error(f"Restore failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Restore failed: {str(e)}")
+
+    log_admin_action(
+        "system", "backup", "restore", current_user,
+        details={"backup_id": backup_id, "success": success, "message": message},
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail=message)
+    return {"status": "success", "message": message}
+
+
+@router.delete("/backups/{backup_id}")
+async def delete_backup_endpoint(backup_id: int, current_user: TokenData = Depends(require_admin)):
+    success, message = backup_service.delete_backup(backup_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=message)
+    log_admin_action("system", "backup", "delete", current_user, details={"backup_id": backup_id})
+    return {"status": "success", "message": message}

@@ -3,11 +3,16 @@ from typing import List, Optional
 from app.models.rule_model import (
     RuleEntry,
     RuleToggleRequest,
+    RuleCanaryRequest,
+    RuleCanaryReport,
+    RuleCanaryStatus,
+    CanaryRolloutSettings,
+    CanaryRolloutResult,
     ParanoiaRequest,
     AuditLogEntry,
     RuleStatsResponse,
 )
-from app.services import rule_manager
+from app.services import rule_manager, clickhouse_service
 from app.services.auth import require_admin, require_any_role, TokenData
 from app.utils.audit import log_admin_action
 
@@ -180,6 +185,29 @@ async def save_custom_rules(
         )
 
 
+@router.get("/rules/canary-settings", response_model=CanaryRolloutSettings)
+async def get_canary_rollout_settings_route(
+    current_user: TokenData = Depends(require_any_role),
+):
+    return CanaryRolloutSettings(**rule_manager.get_canary_rollout_settings())
+
+
+@router.post("/rules/canary-settings", response_model=CanaryRolloutSettings)
+async def save_canary_rollout_settings_route(
+    settings: CanaryRolloutSettings, current_user: TokenData = Depends(require_admin),
+):
+    ok, msg = rule_manager.save_canary_rollout_settings(
+        settings.dict(), username=current_user.username
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return CanaryRolloutSettings(**rule_manager.get_canary_rollout_settings())
+
+
+# NOTE: must stay registered before /rules/{id} below — FastAPI matches
+# routes in registration order, and /rules/{id} would otherwise swallow
+# GET /rules/canary-settings as id="canary-settings" (confirmed live: a
+# 404 instead of the settings payload).
 @router.get("/rules/{id}", response_model=RuleEntry)
 async def get_rule(id: str, current_user: TokenData = Depends(require_any_role)):
     """
@@ -231,6 +259,65 @@ async def disable_rule(
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
     return {"message": msg}
+
+
+@router.post("/rules/canary")
+async def set_rule_canary(
+    request: RuleCanaryRequest, current_user: TokenData = Depends(require_admin)
+):
+    """
+    Flag/unflag a rule for canary review — see rule_manager.mark_rule_canary
+    for why this doesn't change live enforcement (CRS's anomaly-scoring
+    architecture means individual rules already never block alone). Use
+    GET /rules/{id}/canary-report to measure impact before actually
+    disabling it via the existing enable/disable endpoints.
+    """
+    ok, msg = rule_manager.mark_rule_canary(
+        rule_id=request.id, canary=request.canary, username=current_user.username,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"message": msg}
+
+
+@router.get("/rules/{id}/canary-report", response_model=RuleCanaryReport)
+async def get_rule_canary_report_route(
+    id: str,
+    hours: int = Query(168, ge=1, le=8760),
+    current_user: TokenData = Depends(require_any_role),
+):
+    """
+    Historical impact report for one rule: of its past matches in the given
+    window, how many were the sole violation on their request (disabling
+    the rule would have let those through unblocked) vs. co-matched by at
+    least one other rule (still blocked either way).
+    """
+    rule = rule_manager.get_rule_by_id(id)
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"Rule ID {id} not found.")
+
+    report = clickhouse_service.get_rule_canary_report(rule_id=id, hours=hours)
+    return RuleCanaryReport(rule_id=id, hours=hours, **report)
+
+
+@router.get("/rules/{id}/canary-status", response_model=Optional[RuleCanaryStatus])
+async def get_rule_canary_status_route(
+    id: str, current_user: TokenData = Depends(require_any_role),
+):
+    """Bounded monitoring-window bookkeeping for a canary-flagged rule —
+    null if the rule isn't currently flagged."""
+    status = rule_manager.get_canary_status(id)
+    return status
+
+
+@router.post("/rules/canary/run-now", response_model=CanaryRolloutResult)
+async def run_canary_rollout_now_route(
+    current_user: TokenData = Depends(require_admin),
+):
+    """Manually triggers one canary auto-rollout evaluation cycle instead of
+    waiting for the scheduler's next run — same logic either way."""
+    result = rule_manager.evaluate_canary_rollout()
+    return CanaryRolloutResult(**result)
 
 
 @router.post("/paranoia-level")

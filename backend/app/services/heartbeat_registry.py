@@ -48,6 +48,12 @@ EXPECTED_TASKS: Dict[str, float] = {
     "anti_defacement_monitor": 60.0,  # configurable at runtime; this is a display default
     "ssl_monitor": 60.0,
     "auto_learning": 6 * 3600,
+    "threat_intel": 24 * 3600,  # configurable at runtime; this is a display default
+    "canary_rollout": 6 * 3600,
+    # The one heartbeat here whose "error" status means "the condition it
+    # watches is unhealthy", not "this task's own cycle failed" — see
+    # redis_degraded_monitor.py's own docstring for why.
+    "waf_redis_degraded": 60,
 }
 
 # A task is "stale" once it's gone this many multiples of its own

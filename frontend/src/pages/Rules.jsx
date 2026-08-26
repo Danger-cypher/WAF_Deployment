@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity, ShieldAlert, ShieldAlert as AlertIcon, AlertTriangle as AlertTriangleIcon,
-  Clock, Code, Database, ShieldCheck, Search, X,
+  Clock, Code, Database, ShieldCheck, Search, X, FlaskConical,
 } from 'lucide-react';
 import {
   getRules, enableRule, disableRule, setParanoiaLevel, getRulesStats, getRulesHistory,
-  resetRules, getRuleDetails,
+  resetRules, getRuleDetails, setRuleCanary, getRuleCanaryReport, getRuleCanaryStatus,
+  getCanaryRolloutSettings, saveCanaryRolloutSettings, runCanaryRolloutNow,
 } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import { HelpText } from '../components/Tooltip';
@@ -75,6 +76,17 @@ export default function Rules({ userRole }) {
   const [selectedRule, setSelectedRule] = useState(null);
   const [ruleDetailLoading, setRuleDetailLoading] = useState(false);
   const [detailedRule, setDetailedRule] = useState(null);
+  const [canaryReport, setCanaryReport] = useState(null);
+  const [canaryReportLoading, setCanaryReportLoading] = useState(false);
+  const [canaryToggling, setCanaryToggling] = useState(false);
+  const [canaryStatus, setCanaryStatus] = useState(null);
+
+  // Canary auto-rollout settings panel
+  const [showRolloutSettings, setShowRolloutSettings] = useState(false);
+  const [rolloutSettings, setRolloutSettings] = useState(null);
+  const [rolloutSettingsLoading, setRolloutSettingsLoading] = useState(false);
+  const [rolloutSettingsSaving, setRolloutSettingsSaving] = useState(false);
+  const [rolloutRunning, setRolloutRunning] = useState(false);
 
   // Rule Disable Confirmation state
   const [ruleToDisable, setRuleToDisable] = useState(null);
@@ -143,14 +155,105 @@ export default function Rules({ userRole }) {
     setSelectedRule(rule);
     setRuleDetailLoading(true);
     setDetailedRule(null);
+    setCanaryReport(null);
+    setCanaryStatus(null);
     try {
       const detail = await getRuleDetails(rule.id);
       setDetailedRule(detail);
+      if (detail.is_canary) {
+        getRuleCanaryStatus(rule.id).then(setCanaryStatus).catch(() => {});
+      }
     } catch (error) {
       console.error("Failed to inspect rule details:", error);
       showToast(`Could not load details for rule ${rule.id}`, "error");
     } finally {
       setRuleDetailLoading(false);
+    }
+  };
+
+  const handleLoadRolloutSettings = async () => {
+    setRolloutSettingsLoading(true);
+    try {
+      const settings = await getCanaryRolloutSettings();
+      setRolloutSettings(settings);
+    } catch (error) {
+      showToast("Failed to load canary auto-rollout settings: " + (error.message || "Unknown error"), "error");
+    } finally {
+      setRolloutSettingsLoading(false);
+    }
+  };
+
+  const handleSaveRolloutSettings = async () => {
+    setRolloutSettingsSaving(true);
+    try {
+      const saved = await saveCanaryRolloutSettings(rolloutSettings);
+      setRolloutSettings(saved);
+      showToast("Canary auto-rollout settings saved.");
+    } catch (error) {
+      showToast("Failed to save settings: " + (error.message || "Unknown error"), "error");
+    } finally {
+      setRolloutSettingsSaving(false);
+    }
+  };
+
+  const handleRunRolloutNow = async () => {
+    setRolloutRunning(true);
+    try {
+      const result = await runCanaryRolloutNow();
+      const parts = [];
+      if (result.promoted.length) parts.push(`${result.promoted.length} promoted`);
+      if (result.rolled_back.length) parts.push(`${result.rolled_back.length} rolled back`);
+      if (result.needs_review.length) parts.push(`${result.needs_review.length} need review`);
+      if (result.still_monitoring.length) parts.push(`${result.still_monitoring.length} still monitoring`);
+      showToast(parts.length ? `Canary rollout: ${parts.join(', ')}.` : "No rules currently flagged for canary review.");
+      if (selectedRule?.is_canary) {
+        getRuleCanaryStatus(selectedRule.id).then(setCanaryStatus).catch(() => {});
+      }
+      fetchRulesData();
+    } catch (error) {
+      showToast("Failed to run canary rollout: " + (error.message || "Unknown error"), "error");
+    } finally {
+      setRolloutRunning(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showRolloutSettings && !rolloutSettings) {
+      handleLoadRolloutSettings();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showRolloutSettings]);
+
+  const handleToggleCanary = async (rule, canary) => {
+    setCanaryToggling(true);
+    try {
+      await setRuleCanary(rule.id, canary);
+      const updated = { ...(detailedRule || rule), is_canary: canary };
+      setDetailedRule(updated);
+      setSelectedRule((prev) => (prev ? { ...prev, is_canary: canary } : prev));
+      showToast(canary ? `Rule ${rule.id} flagged for canary review.` : `Rule ${rule.id} removed from canary review.`);
+      if (!canary) {
+        setCanaryReport(null);
+        setCanaryStatus(null);
+      } else {
+        getRuleCanaryStatus(rule.id).then(setCanaryStatus).catch(() => {});
+      }
+    } catch (error) {
+      showToast("Failed to update canary status: " + (error.message || "Unknown error"), "error");
+    } finally {
+      setCanaryToggling(false);
+    }
+  };
+
+  const handleLoadCanaryReport = async (rule) => {
+    setCanaryReportLoading(true);
+    try {
+      const report = await getRuleCanaryReport(rule.id, 168);
+      setCanaryReport(report);
+    } catch (error) {
+      showToast("Failed to load canary report: " + (error.message || "Unknown error"), "error");
+    } finally {
+      setCanaryReportLoading(false);
     }
   };
 
@@ -337,6 +440,117 @@ export default function Rules({ userRole }) {
             ))}
           </div>
         </div>
+      </motion.div>
+
+      {/* Canary Auto-Rollout Settings */}
+      <motion.div
+        className="glass-panel"
+        style={{ padding: '20px 24px', marginBottom: '8px' }}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        <div
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+          onClick={() => setShowRolloutSettings((v) => !v)}
+        >
+          <div className="card-title" style={{ margin: 0, fontSize: '14px' }}>
+            <FlaskConical size={18} color="var(--sev-low)" />
+            Canary Auto-Rollout
+            <HelpText>
+              Rules flagged for canary review enter a bounded monitoring window. When it re-runs
+              (scheduled every 6h, or on demand below), a rule with a low sole-match rate (well
+              corroborated by other rules) can be auto-promoted — just clears the flag, enforcement
+              never changed. A rule with a high sole-match rate (often the sole reason a request got
+              blocked, unconfirmed by anything else) can be auto-rolled-back — actually disabled,
+              same path as clicking Disable yourself. Auto-promote defaults off; auto-rollback
+              defaults on, since it can only ever disable a demonstrably risky rule.
+            </HelpText>
+          </div>
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{showRolloutSettings ? 'Hide' : 'Show'}</span>
+        </div>
+
+        {showRolloutSettings && (
+          <div style={{ marginTop: '16px' }}>
+            {rolloutSettingsLoading || !rolloutSettings ? (
+              <div className="spinner" style={{ margin: '12px auto' }}></div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)' }}>
+                    <input
+                      type="checkbox"
+                      checked={rolloutSettings.auto_promote_enabled}
+                      disabled={userRole !== 'admin'}
+                      onChange={(e) => setRolloutSettings({ ...rolloutSettings, auto_promote_enabled: e.target.checked })}
+                    />
+                    Auto-promote low-risk canary rules
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)' }}>
+                    <input
+                      type="checkbox"
+                      checked={rolloutSettings.auto_rollback_enabled}
+                      disabled={userRole !== 'admin'}
+                      onChange={(e) => setRolloutSettings({ ...rolloutSettings, auto_rollback_enabled: e.target.checked })}
+                    />
+                    Auto-rollback high-risk canary rules
+                  </label>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Monitoring window (hours)</div>
+                    <input
+                      type="number" min="1" max="720"
+                      value={rolloutSettings.window_hours}
+                      disabled={userRole !== 'admin'}
+                      onChange={(e) => setRolloutSettings({ ...rolloutSettings, window_hours: parseInt(e.target.value) || 1 })}
+                      className="settings-input"
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Min. sample size (matches)</div>
+                    <input
+                      type="number" min="1" max="10000"
+                      value={rolloutSettings.min_sample_size}
+                      disabled={userRole !== 'admin'}
+                      onChange={(e) => setRolloutSettings({ ...rolloutSettings, min_sample_size: parseInt(e.target.value) || 1 })}
+                      className="settings-input"
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Promote threshold (max sole-match %)</div>
+                    <input
+                      type="number" min="0" max="100"
+                      value={Math.round(rolloutSettings.promote_max_sole_match_rate * 100)}
+                      disabled={userRole !== 'admin'}
+                      onChange={(e) => setRolloutSettings({ ...rolloutSettings, promote_max_sole_match_rate: (parseInt(e.target.value) || 0) / 100 })}
+                      className="settings-input"
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Rollback threshold (min sole-match %)</div>
+                    <input
+                      type="number" min="0" max="100"
+                      value={Math.round(rolloutSettings.rollback_min_sole_match_rate * 100)}
+                      disabled={userRole !== 'admin'}
+                      onChange={(e) => setRolloutSettings({ ...rolloutSettings, rollback_min_sole_match_rate: (parseInt(e.target.value) || 0) / 100 })}
+                      className="settings-input"
+                    />
+                  </div>
+                </div>
+                {userRole === 'admin' && (
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={handleSaveRolloutSettings} disabled={rolloutSettingsSaving} className="action-btn-inspect">
+                      {rolloutSettingsSaving ? 'Saving...' : 'Save Settings'}
+                    </button>
+                    <button onClick={handleRunRolloutNow} disabled={rolloutRunning} className="action-btn-inspect">
+                      {rolloutRunning ? 'Running...' : 'Run Rollout Now'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </motion.div>
 
       {/* Main Grid View split into Rules grid and Audits sidebar */}
@@ -641,6 +855,73 @@ export default function Rules({ userRole }) {
                       <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Dynamic Logs Blocks</div>
                       <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>{selectedRule.hit_count} triggers</div>
                     </div>
+                  </div>
+
+                  {/* canary review */}
+                  <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <FlaskConical size={14} color="var(--sev-low)" />
+                        Canary Review
+                      </div>
+                      <button
+                        onClick={() => handleToggleCanary(selectedRule, !selectedRule.is_canary)}
+                        disabled={canaryToggling}
+                        className="action-btn-inspect"
+                        style={selectedRule.is_canary ? { background: 'var(--success-bg)', color: 'var(--success-color)', borderColor: 'var(--success-glow)' } : undefined}
+                      >
+                        {selectedRule.is_canary ? 'Flagged for Review' : 'Flag for Canary Review'}
+                      </button>
+                    </div>
+                    <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
+                      Doesn't change enforcement — this rule keeps running exactly as before. Flags it for
+                      review and lets you pull a historical-impact report: of its past matches, how many were
+                      the <em>only</em> rule that fired on that request (disabling it would let those through)
+                      vs. matched alongside another rule (still blocked either way).
+                    </p>
+                    {selectedRule.is_canary && canaryStatus && (
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                          Monitoring since {canaryStatus.started_at ? formatLocalTime(canaryStatus.started_at) : '—'}
+                          {canaryStatus.elapsed_hours != null && (
+                            ` (${Math.max(0, canaryStatus.window_hours - canaryStatus.elapsed_hours).toFixed(0)}h remaining)`
+                          )}
+                        </span>
+                        {canaryStatus.needs_review && (
+                          <span style={{ fontSize: '11px', background: 'var(--danger-bg)', color: 'var(--danger-color)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                            Needs Review — window elapsed without a confident auto-decision
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {selectedRule.is_canary && (
+                      <div>
+                        <button
+                          onClick={() => handleLoadCanaryReport(selectedRule)}
+                          disabled={canaryReportLoading}
+                          className="action-btn-inspect"
+                          style={{ fontSize: '11px' }}
+                        >
+                          {canaryReportLoading ? 'Loading...' : 'Load 7-Day Impact Report'}
+                        </button>
+                        {canaryReport && (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginTop: '10px' }}>
+                            <div className="rule-meta-box">
+                              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Total Matches</div>
+                              <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{canaryReport.total_matches}</div>
+                            </div>
+                            <div className="rule-meta-box">
+                              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Sole Match (would open a hole)</div>
+                              <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>{canaryReport.sole_match_count}</div>
+                            </div>
+                            <div className="rule-meta-box">
+                              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Co-Matched (still safe)</div>
+                              <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--success-color)' }}>{canaryReport.co_matched_count}</div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* syntax block */}

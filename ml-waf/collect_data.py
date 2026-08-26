@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import os
 import json
 import logging
-from opensearchpy import OpenSearch, OpenSearchException
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -10,8 +11,62 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_EVENTS_PATH = os.path.join(BASE_DIR, "logs/events.jsonl")
 
-def connect_opensearch() -> OpenSearch:
-    """Connects to local OpenSearch service."""
+# Analyst-reviewed rows (admin_label set via POST /ml/events/{id}/label) are
+# ground truth; everything else is the WAF's own self-generated label. An
+# attacker who crafts traffic to stay just under the block threshold gets
+# labeled "benign" with no human ever looking at it — down-weighting
+# unreviewed rows bounds how much a single such campaign can shift the
+# decision boundary at the next retrain, without needing new review UI.
+REVIEWED_WEIGHT = 1.0
+SELF_LABELED_WEIGHT = 0.5
+
+# Bounds a different, narrower poisoning vector than the weighting above:
+# an attacker can't earn a human review, but CAN replay the same
+# crafted-to-look-benign request thousands of times, hoping sheer
+# repetition shifts the decision boundary even at 0.5x weight each. Caps
+# how many times an identical (unreviewed) request signature counts toward
+# training — legitimate repeat traffic (health checks, polling) collapses
+# to a handful of samples instead of thousands, and a would-be flood loses
+# its main lever entirely rather than merely being discounted. Scoped to
+# the benign side only: the analogous "flood the attack side" doesn't
+# dilute detection the same way — more labeled examples of one attack
+# pattern make a classifier more sensitive to it, not less.
+MAX_DUPLICATE_UNREVIEWED_SAMPLES = 20
+
+
+def _cap_duplicate_unreviewed_rows(rows: list) -> list:
+    seen_counts = {}
+    capped = []
+    dropped = 0
+    for row in rows:
+        if row.get("admin_label"):
+            # A human already vouched for this exact row — exempt from the
+            # cap regardless of how many identical unreviewed rows exist.
+            capped.append(row)
+            continue
+        signature = (row.get("uri", ""), row.get("method", ""), row.get("args", ""))
+        seen_counts[signature] = seen_counts.get(signature, 0) + 1
+        if seen_counts[signature] <= MAX_DUPLICATE_UNREVIEWED_SAMPLES:
+            capped.append(row)
+        else:
+            dropped += 1
+    if dropped:
+        logger.info(
+            f"Capped {dropped} duplicate unreviewed benign samples "
+            f"(signature repeated beyond {MAX_DUPLICATE_UNREVIEWED_SAMPLES}x) before training."
+        )
+    return capped
+
+
+def connect_opensearch():
+    """Connects to local OpenSearch service, if the optional opensearchpy
+    dependency is installed. It is NOT in requirements.txt — this is a
+    best-effort fallback behind the primary SQLite path below, so its
+    absence must not break import of this module."""
+    try:
+        from opensearchpy import OpenSearch
+    except ImportError:
+        return None
     try:
         return OpenSearch(
             hosts=[{'host': 'localhost', 'port': 9200}],
@@ -22,13 +77,13 @@ def connect_opensearch() -> OpenSearch:
         logger.warning(f"Failed to initialize OpenSearch client: {e}")
         return None
 
-def fetch_events_from_opensearch(client: OpenSearch, query: dict, size: int = 10000) -> list:
+def fetch_events_from_opensearch(client, query: dict, size: int = 10000) -> list:
     """Fetches search query hits from OpenSearch index 'ml-waf-events'."""
     try:
         if not client.indices.exists(index="ml-waf-events"):
             logger.warning("Index 'ml-waf-events' does not exist in OpenSearch.")
             return []
-            
+
         response = client.search(
             index="ml-waf-events",
             body={"query": query},
@@ -36,7 +91,7 @@ def fetch_events_from_opensearch(client: OpenSearch, query: dict, size: int = 10
         )
         hits = response['hits']['hits']
         return [hit['_source'] for hit in hits]
-    except OpenSearchException as e:
+    except Exception as e:
         logger.error(f"OpenSearch query search failed: {e}")
         return []
 
@@ -62,10 +117,32 @@ def get_training_datasets() -> tuple[list, list]:
             
             cursor.execute("SELECT * FROM ml_events WHERE decision IN ('allow', 'log')")
             benign_logs = [dict(r) for r in cursor.fetchall()]
-            
-            cursor.execute("SELECT * FROM ml_events WHERE decision = 'block'")
+
+            # Blocks an analyst has confirmed were NOT actually malicious
+            # belong in the benign set, not the attack set — otherwise a
+            # corrected false positive keeps poisoning every future retrain.
+            cursor.execute(
+                "SELECT * FROM ml_events WHERE decision = 'block' AND admin_label = 'false_positive'"
+            )
+            benign_logs += [dict(r) for r in cursor.fetchall()]
+
+            cursor.execute(
+                "SELECT * FROM ml_events WHERE decision = 'block' "
+                "AND (admin_label IS NULL OR admin_label != 'false_positive')"
+            )
             attack_logs = [dict(r) for r in cursor.fetchall()]
-            
+
+            benign_logs = _cap_duplicate_unreviewed_rows(benign_logs)
+
+            for row in benign_logs + attack_logs:
+                row["_training_weight"] = REVIEWED_WEIGHT if row.get("admin_label") else SELF_LABELED_WEIGHT
+                # crs_score from the live request path can be stale (see
+                # crs_audit_enrichment.py's module docstring for why) —
+                # crs_score_verified, backfilled from ModSecurity's own
+                # audit log, is the real value when present.
+                if row.get("crs_score_verified") is not None:
+                    row["crs_score"] = row["crs_score_verified"]
+
             conn.close()
             logger.info(f"SQLite DB ETL complete. Extracted {len(benign_logs)} benign and {len(attack_logs)} attack samples.")
             if benign_logs or attack_logs:

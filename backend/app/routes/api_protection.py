@@ -94,7 +94,8 @@ def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
     # 1=confirmed https, 2=not yet measured; see api_discovery.py). Only
     # deduct on a confirmed-insecure hit — an unmeasured endpoint (older log
     # lines that predate scheme capture) is unknown, not guilty.
-    if ep.get("has_https", 2) == 0:
+    is_confirmed_insecure = ep.get("has_https", 2) == 0
+    if is_confirmed_insecure:
         score -= 20
 
     # 5. Versioning deduction
@@ -107,6 +108,19 @@ def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
     encoding = ep.get("content_encoding", "unknown")
     if encoding == "":
         score -= 5
+
+    # 7. Sensitive-param-over-plaintext deduction. A sensitive-named param
+    # existing at all stays a non-penalized, informational-only signal (see
+    # the comment on `sensitive_params` below) — an `email` field on a
+    # public signup form isn't a vulnerability. But a sensitive-named param
+    # on a CONFIRMED-plaintext (has_https == 0) endpoint is an objective
+    # risk regardless of what the field is for, on top of the flat HTTPS
+    # deduction above (that penalizes the endpoint being insecure at all;
+    # this penalizes it carrying sensitive-looking data while insecure,
+    # which is worse).
+    sensitive_params = flag_sensitive_params(ep.get("param_names") or [])
+    if sensitive_params and is_confirmed_insecure:
+        score -= 15
 
     # Clamp score
     score = max(0, min(100, score))
@@ -154,12 +168,10 @@ def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
     # consistent regardless of which store answered the query.
     ep_copy.setdefault("p95_response_time_ms", 0.0)
     ep_copy.setdefault("p99_response_time_ms", 0.0)
-    # Informational only — deliberately not a score deduction. A `email`
-    # param on a public signup form isn't a vulnerability; flagging it
-    # for a human to glance at is the right amount of confidence for a
-    # name-pattern match, not an automatic penalty.
+    # Name-pattern match only — see the scoring step above for how (and
+    # when) this affects `score`/`grade`.
     ep_copy["param_names"] = ep_copy.get("param_names") or []
-    ep_copy["sensitive_params"] = flag_sensitive_params(ep_copy["param_names"])
+    ep_copy["sensitive_params"] = sensitive_params
     return ep_copy
 
 

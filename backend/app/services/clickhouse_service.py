@@ -240,9 +240,13 @@ def event_ids_exist(ids: List[str]) -> set:
     if client is None:
         return set()
     try:
-        # Pass ids as a formatted tuple string for the IN clause
-        placeholders = ", ".join(f"'{i}'" for i in ids)
-        result = client.query(f"SELECT id FROM waf_events WHERE id IN ({placeholders})")
+        # ids are ModSecurity's own unique_id values, sourced from audit log
+        # filenames during backfill — not attacker-reachable through any API
+        # route today, but parameterized anyway rather than relying on that.
+        result = client.query(
+            "SELECT id FROM waf_events WHERE id IN %(ids)s",
+            parameters={"ids": tuple(ids)},
+        )
         return {row[0] for row in result.result_rows}
     except Exception as e:
         logger.warning(f"event_ids_exist query failed: {e}")
@@ -270,59 +274,144 @@ def _build_waf_events_where_clause(
     uri_type: Optional[str] = None,
     hours: Optional[int] = None,
     blocked_only: bool = True,
-) -> str:
+) -> Tuple[str, Dict[str, Any]]:
     """
     Shared WHERE-clause builder for waf_events queries — used by both
     query_waf_events() (raw rows) and query_waf_events_grouped() (Events
     page's collapsed-by-IP+rule view) so the two can never drift on what
     counts as a match for the same filter inputs.
+
+    Returns (sql_fragment, parameters). Callers MUST pass
+    `parameters=parameters` to every client.query() call built from this
+    fragment (including when it's empty — clickhouse-connect no-ops on an
+    empty/falsy parameters dict, so this is always safe). All user-controlled
+    values go through %(name)s placeholders — clickhouse-connect's
+    finalize_query() does real value escaping (backslash/quote-escaping the
+    whole value, not just stripping quotes) — rather than being interpolated
+    into the SQL text directly, which is what let the severity/decision
+    SQLi bugs happen (see git history: two call sites here were missing
+    even the old ad-hoc quote-stripping other call sites had).
+
+    Every LIKE-pattern wildcard (including the static '4%'/'5%'/'/api%'
+    ones below) is passed as a parameter VALUE too, not left as literal '%'
+    text in the template — clickhouse-connect's parameter substitution is a
+    single Python `%`-format pass over the WHOLE query string, so any bare
+    '%' left in the template (outside a %(name)s token) would raise
+    ValueError the moment this fragment is combined with a non-empty
+    parameters dict elsewhere in the query.
     """
     SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
     where = ["1=1"]
+    params: Dict[str, Any] = {}
 
     if blocked_only:
-        where.append("(http_code LIKE '4%' OR http_code LIKE '5%' OR length(violations) > 2)")
+        where.append("(http_code LIKE %(blocked_4xx)s OR http_code LIKE %(blocked_5xx)s OR length(violations) > 2)")
+        params["blocked_4xx"] = "4%"
+        params["blocked_5xx"] = "5%"
 
     if hours:
         where.append(f"timestamp >= now() - INTERVAL {int(hours)} HOUR")
 
     if severity:
-        where.append(f"lower(severity) = '{severity.lower()}'")
+        where.append("lower(severity) = %(severity)s")
+        params["severity"] = severity.lower()
 
     if min_severity:
         threshold = SEVERITY_ORDER.get(min_severity.lower(), 0)
         sev_list = [s for s, v in SEVERITY_ORDER.items() if v >= threshold]
         if sev_list:
+            # sev_list values are always drawn from SEVERITY_ORDER's fixed
+            # internal keys, never user input directly — safe to inline.
             in_clause = ", ".join(f"'{s}'" for s in sev_list)
             where.append(f"lower(severity) IN ({in_clause})")
 
     if rule_id:
-        where.append(f"rule_id = '{rule_id.replace(chr(39), '')}'")
+        where.append("rule_id = %(rule_id)s")
+        params["rule_id"] = rule_id
 
     if ip:
-        where.append(f"client_ip = '{ip.replace(chr(39), '')}'")
+        where.append("client_ip = %(client_ip)s")
+        params["client_ip"] = ip
 
     if attack_type:
-        where.append(f"lower(attack_type) = '{attack_type.lower().replace(chr(39), '')}'")
+        where.append("lower(attack_type) = %(attack_type)s")
+        params["attack_type"] = attack_type.lower()
 
     if status_code:
-        where.append(f"http_code = '{status_code.replace(chr(39), '')}'")
+        where.append("http_code = %(status_code)s")
+        params["status_code"] = status_code
 
     if search:
-        s = search.replace("'", "").replace("\\", "")
         where.append(
-            f"(lower(message) LIKE '%{s.lower()}%' OR lower(uri) LIKE '%{s.lower()}%' "
-            f"OR client_ip LIKE '%{s}%' OR rule_id LIKE '%{s}%' "
-            f"OR lower(attack_type) LIKE '%{s.lower()}%')"
+            "(lower(message) LIKE %(search_lower)s OR lower(uri) LIKE %(search_lower)s "
+            "OR client_ip LIKE %(search_raw)s OR rule_id LIKE %(search_raw)s "
+            "OR lower(attack_type) LIKE %(search_lower)s)"
         )
+        params["search_lower"] = f"%{search.lower()}%"
+        params["search_raw"] = f"%{search}%"
 
     if uri_type == "api":
-        where.append("uri LIKE '/api%'")
+        where.append("uri LIKE %(uri_prefix)s")
+        params["uri_prefix"] = "/api%"
     elif uri_type == "web":
-        where.append("uri NOT LIKE '/api%'")
+        where.append("uri NOT LIKE %(uri_prefix)s")
+        params["uri_prefix"] = "/api%"
 
-    return " AND ".join(where)
+    return " AND ".join(where), params
+
+
+def get_rule_canary_report(rule_id: str, hours: int = 168) -> Dict[str, int]:
+    """
+    Historical-impact measurement for a rule flagged canary (rule_manager.
+    mark_rule_canary) — answers "would disabling this rule actually open a
+    hole?" using real past traffic instead of a live experiment.
+
+    waf_events.violations is a String column holding a JSON-serialized list
+    (see configs/clickhouse/init.sql — NOT a native ClickHouse Array), and
+    the top-level `rule_id` column is only ONE selected "primary" rule per
+    request (see modsec_parser.py), not every rule that matched — so this
+    must search inside the violations JSON itself via JSONExtractArrayRaw/
+    JSONExtractString rather than filtering on the indexed rule_id column,
+    or it would silently undercount requests where this rule matched
+    alongside another one.
+
+    sole_match_count: this rule was the ONLY violation on the request —
+    disabling it would let these through unblocked.
+    co_matched_count: at least one other rule also matched — still blocked
+    even if this one were disabled.
+    """
+    client = _get_client()
+    if client is None:
+        return {"total_matches": 0, "sole_match_count": 0, "co_matched_count": 0}
+
+    matched_expr = (
+        "arrayExists(x -> JSONExtractString(x, 'rule_id') = %(rule_id)s, "
+        "JSONExtractArrayRaw(violations))"
+    )
+    count_expr = "length(JSONExtractArrayRaw(violations))"
+
+    try:
+        result = client.query(
+            f"""
+            SELECT
+                countIf({matched_expr}) AS total_matches,
+                countIf({matched_expr} AND {count_expr} = 1) AS sole_match_count,
+                countIf({matched_expr} AND {count_expr} > 1) AS co_matched_count
+            FROM waf_events
+            WHERE timestamp >= now() - INTERVAL {int(hours)} HOUR
+            """,
+            parameters={"rule_id": rule_id},
+        )
+        row = result.result_rows[0] if result.result_rows else (0, 0, 0)
+        return {
+            "total_matches": int(row[0]),
+            "sole_match_count": int(row[1]),
+            "co_matched_count": int(row[2]),
+        }
+    except Exception as e:
+        logger.error(f"get_rule_canary_report failed for rule {rule_id}: {e}")
+        return {"total_matches": 0, "sole_match_count": 0, "co_matched_count": 0}
 
 
 def query_waf_events(
@@ -347,7 +436,7 @@ def query_waf_events(
     if client is None:
         return [], 0
 
-    where_clause = _build_waf_events_where_clause(
+    where_clause, where_params = _build_waf_events_where_clause(
         severity=severity, min_severity=min_severity, rule_id=rule_id, ip=ip,
         attack_type=attack_type, status_code=status_code, search=search,
         uri_type=uri_type, hours=hours, blocked_only=blocked_only,
@@ -356,7 +445,8 @@ def query_waf_events(
 
     try:
         count_result = client.query(
-            f"SELECT count() FROM waf_events WHERE {where_clause}"
+            f"SELECT count() FROM waf_events WHERE {where_clause}",
+            parameters=where_params,
         )
         total = count_result.result_rows[0][0] if count_result.result_rows else 0
 
@@ -370,7 +460,8 @@ def query_waf_events(
             WHERE {where_clause}
             ORDER BY timestamp DESC
             LIMIT {int(size)} OFFSET {int(offset)}
-            """
+            """,
+            parameters=where_params,
         )
 
         columns = [
@@ -437,7 +528,7 @@ def query_waf_events_grouped(
     if client is None:
         return [], 0
 
-    where_clause = _build_waf_events_where_clause(
+    where_clause, where_params = _build_waf_events_where_clause(
         severity=severity, min_severity=min_severity, rule_id=rule_id, ip=ip,
         attack_type=attack_type, status_code=status_code, search=search,
         uri_type=uri_type, hours=hours, blocked_only=blocked_only,
@@ -451,7 +542,8 @@ def query_waf_events_grouped(
                 SELECT 1 FROM waf_events WHERE {where_clause}
                 GROUP BY client_ip, rule_id
             )
-            """
+            """,
+            parameters=where_params,
         )
         total = count_result.result_rows[0][0] if count_result.result_rows else 0
 
@@ -481,7 +573,8 @@ def query_waf_events_grouped(
             GROUP BY client_ip, rule_id
             ORDER BY last_seen DESC
             LIMIT {int(size)} OFFSET {int(offset)}
-            """
+            """,
+            parameters=where_params,
         )
 
         columns = [
@@ -518,9 +611,10 @@ def get_waf_event_by_id(log_id: str) -> Optional[Dict]:
                    rule_id, message, severity, attack_type,
                    request_headers, response_headers, violations, raw_log
             FROM waf_events
-            WHERE id = '{log_id.replace(chr(39), "")}'
+            WHERE id = %(log_id)s
             LIMIT 1
-            """
+            """,
+            parameters={"log_id": log_id},
         )
         if not result.result_rows:
             return None
@@ -846,23 +940,31 @@ def get_ml_events(
         return [], 0
     time_filter = _time_filter_clause(hours)
     where = ["1=1"] + ([f"timestamp >= now() - INTERVAL {int(hours)} HOUR"] if hours else [])
+    params: Dict[str, Any] = {}
     if decision:
-        where.append(f"decision = '{decision}'")
+        where.append("decision = %(decision)s")
+        params["decision"] = decision
     where_clause = " AND ".join(where)
     offset = (page - 1) * size
 
     try:
-        count_result = client.query(f"SELECT count() FROM ml_events WHERE {where_clause}")
+        count_result = client.query(
+            f"SELECT count() FROM ml_events WHERE {where_clause}",
+            parameters=params,
+        )
         total = count_result.result_rows[0][0] if count_result.result_rows else 0
 
-        result = client.query(f"""
+        result = client.query(
+            f"""
             SELECT unique_id, timestamp, remote_addr, method, uri,
                    crs_score, xgb_prob, iso_score, threat_score, decision, abuse_score
             FROM ml_events
             WHERE {where_clause}
             ORDER BY timestamp DESC
             LIMIT {int(size)} OFFSET {int(offset)}
-        """)
+            """,
+            parameters=params,
+        )
 
         cols = ["unique_id", "timestamp", "remote_addr", "method", "uri",
                 "crs_score", "xgb_prob", "iso_score", "threat_score", "decision", "abuse_score"]
@@ -940,9 +1042,10 @@ def get_false_positive_by_log_id(log_id: str) -> Optional[Dict]:
             SELECT log_id, rule_id, client_ip, uri, event_timestamp,
                    severity, attack_type, status, analyst_note, created_by, raw_log, id
             FROM analyst_feedback FINAL
-            WHERE log_id = '{log_id.replace(chr(39), "")}' AND status != 'Deleted'
+            WHERE log_id = %(log_id)s AND status != 'Deleted'
             LIMIT 1
-            """
+            """,
+            parameters={"log_id": log_id},
         )
         if not result.result_rows:
             return None
@@ -970,9 +1073,10 @@ def get_false_positive_by_id(entry_id: str) -> Optional[Dict]:
             SELECT log_id, rule_id, client_ip, uri, event_timestamp,
                    severity, attack_type, status, analyst_note, created_by, raw_log, id
             FROM analyst_feedback FINAL
-            WHERE id = '{entry_id.replace(chr(39), "")}' AND status != 'Deleted'
+            WHERE id = %(entry_id)s AND status != 'Deleted'
             LIMIT 1
-            """
+            """,
+            parameters={"entry_id": entry_id},
         )
         if not result.result_rows:
             return None
@@ -1000,18 +1104,23 @@ def get_all_false_positives(
     if client is None:
         return []
     where = ["status != 'Deleted'"]
+    params: Dict[str, Any] = {}
     if status:
-        where.append(f"status = '{status.replace(chr(39), '')}'")
+        where.append("status = %(status)s")
+        params["status"] = status
     if severity:
-        where.append(f"lower(severity) = '{severity.lower().replace(chr(39), '')}'")
+        where.append("lower(severity) = %(severity)s")
+        params["severity"] = severity.lower()
     if rule_id:
-        where.append(f"rule_id = '{rule_id.replace(chr(39), '')}'")
+        where.append("rule_id = %(rule_id)s")
+        params["rule_id"] = rule_id
     if search:
-        s = search.replace("'", "").replace("\\", "")
         where.append(
-            f"(lower(analyst_note) LIKE '%{s.lower()}%' OR lower(uri) LIKE '%{s.lower()}%' "
-            f"OR client_ip LIKE '%{s}%' OR rule_id LIKE '%{s}%')"
+            "(lower(analyst_note) LIKE %(search_lower)s OR lower(uri) LIKE %(search_lower)s "
+            "OR client_ip LIKE %(search_raw)s OR rule_id LIKE %(search_raw)s)"
         )
+        params["search_lower"] = f"%{search.lower()}%"
+        params["search_raw"] = f"%{search}%"
     where_clause = " AND ".join(where)
     try:
         result = client.query(
@@ -1021,7 +1130,8 @@ def get_all_false_positives(
             FROM analyst_feedback FINAL
             WHERE {where_clause}
             ORDER BY created_at DESC
-            """
+            """,
+            parameters=params,
         )
         columns = [
             "log_id", "rule_id", "client_ip", "uri", "timestamp",
@@ -1516,12 +1626,16 @@ def query_alert_history(
         return []
 
     where = ["1=1"]
+    params: Dict[str, Any] = {}
     if event_type:
-        where.append(f"event_type = '{event_type.replace(chr(39), '')}'")
+        where.append("event_type = %(event_type)s")
+        params["event_type"] = event_type
     if severity:
-        where.append(f"severity = '{severity.replace(chr(39), '')}'")
+        where.append("severity = %(severity)s")
+        params["severity"] = severity
     if status:
-        where.append(f"status = '{status.replace(chr(39), '')}'")
+        where.append("status = %(status)s")
+        params["status"] = status
     if start_date:
         where.append(f"created_at >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'")
     if end_date:
@@ -1537,7 +1651,8 @@ def query_alert_history(
             WHERE {where_clause}
             ORDER BY created_at DESC
             LIMIT {int(limit)} OFFSET {int(offset)}
-            """
+            """,
+            parameters=params,
         )
         columns = [
             "id", "rule_id", "rule_name", "event_type", "severity", "channels_notified",
@@ -1563,11 +1678,12 @@ def acknowledge_alert(alert_id: int, acknowledged_by: str) -> bool:
         return False
     try:
         client.command(
-            f"ALTER TABLE alert_history UPDATE "
-            f"status = 'acknowledged', "
-            f"acknowledged_by = '{acknowledged_by.replace(chr(39), '')}', "
-            f"acknowledged_at = now() "
-            f"WHERE id = {int(alert_id)}"
+            "ALTER TABLE alert_history UPDATE "
+            "status = 'acknowledged', "
+            "acknowledged_by = %(acknowledged_by)s, "
+            "acknowledged_at = now() "
+            f"WHERE id = {int(alert_id)}",
+            parameters={"acknowledged_by": acknowledged_by},
         )
         return True
     except Exception as e:
@@ -1752,24 +1868,32 @@ def get_audit_log(
         return [], 0
 
     where = ["1=1"]
+    params: Dict[str, Any] = {}
     if entity_type:
-        where.append(f"entity_type = '{entity_type.replace(chr(39), '')}'")
+        where.append("entity_type = %(entity_type)s")
+        params["entity_type"] = entity_type
     if hours:
         where.append(f"timestamp >= now() - INTERVAL {int(hours)} HOUR")
     where_clause = " AND ".join(where)
     offset = (page - 1) * size
 
     try:
-        count_result = client.query(f"SELECT count() FROM audit_log WHERE {where_clause}")
+        count_result = client.query(
+            f"SELECT count() FROM audit_log WHERE {where_clause}",
+            parameters=params,
+        )
         total = count_result.result_rows[0][0] if count_result.result_rows else 0
 
-        rows_result = client.query(f"""
+        rows_result = client.query(
+            f"""
             SELECT id, timestamp, entity_type, entity_id, action, username, details, ip_address
             FROM audit_log
             WHERE {where_clause}
             ORDER BY timestamp DESC
             LIMIT {int(size)} OFFSET {int(offset)}
-        """)
+            """,
+            parameters=params,
+        )
 
         columns = ["id", "timestamp", "entity_type", "entity_id", "action", "username", "details", "ip_address"]
         result = []

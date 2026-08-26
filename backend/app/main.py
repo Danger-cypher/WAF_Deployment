@@ -131,6 +131,22 @@ async def lifespan(app: FastAPI):
     from app.services.auto_learning import start_auto_learning_scheduler
     auto_learning_task = asyncio.create_task(start_auto_learning_scheduler())
 
+    # Start the canary rule auto-rollout scheduler background task
+    # (bounded-window auto-promote/auto-rollback for rules flagged canary)
+    from app.services.rule_manager import start_canary_rollout_scheduler
+    canary_rollout_task = asyncio.create_task(start_canary_rollout_scheduler())
+
+    # Start the Redis-degraded-mode monitor background task — surfaces the
+    # openresty/Lua side's silent fail-open (IP/geo/bot/schema checks) via
+    # the existing heartbeat/alerting pipeline instead of nobody noticing.
+    from app.services.redis_degraded_monitor import start_redis_degraded_monitor
+    redis_degraded_task = asyncio.create_task(start_redis_degraded_monitor())
+
+    # Start the external threat-intel feed sync background task (Spamhaus
+    # DROP/EDROP -> Redis, disabled by default via Settings)
+    from app.services.threat_intel_service import start_threat_intel_service
+    threat_intel_task = asyncio.create_task(start_threat_intel_service())
+
     # Start the heartbeat watchdog — checks whether the background tasks
     # above are actually still cycling, and alerts on the transition into
     # "stale" instead of relying on someone noticing a silent outage.
@@ -173,10 +189,31 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    # Cancel the canary rollout scheduler task
+    canary_rollout_task.cancel()
+    try:
+        await canary_rollout_task
+    except asyncio.CancelledError:
+        pass
+
+    # Cancel the Redis-degraded-mode monitor task
+    redis_degraded_task.cancel()
+    try:
+        await redis_degraded_task
+    except asyncio.CancelledError:
+        pass
+
     # Cancel the API discovery task
     api_discovery_task.cancel()
     try:
         await api_discovery_task
+    except asyncio.CancelledError:
+        pass
+
+    # Cancel the threat-intel sync task
+    threat_intel_task.cancel()
+    try:
+        await threat_intel_task
     except asyncio.CancelledError:
         pass
 

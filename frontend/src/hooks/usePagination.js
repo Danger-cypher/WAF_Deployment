@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 
 /**
  * Client-side pagination over an already-fetched array. For endpoints with
@@ -9,20 +9,18 @@ export function usePagination(items, pageSize = 15) {
   const [page, setPage] = useState(1);
   const total = items.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-  // Snap back into range when the underlying list shrinks (e.g. a filter
-  // change or a delete) and the current page no longer exists.
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+  // Clamped inline rather than synced back via a useEffect + setState —
+  // avoids rendering one frame with an out-of-range page (and the extra
+  // render pass) whenever the underlying list shrinks (filter change, delete).
+  const currentPage = Math.min(page, totalPages);
 
   const pageItems = useMemo(() => {
-    const start = (page - 1) * pageSize;
+    const start = (currentPage - 1) * pageSize;
     return items.slice(start, start + pageSize);
-  }, [items, page, pageSize]);
+  }, [items, currentPage, pageSize]);
 
   return {
-    page,
+    page: currentPage,
     totalPages,
     total,
     pageItems,

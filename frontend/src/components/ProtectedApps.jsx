@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Trash2, Edit2, Server, Globe, Power, Shield, Activity, ArrowRight, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2, X } from 'lucide-react';
-import { getProtectedApps, deleteProtectedApp, toggleProtectedApp, getDdosBotSettings, saveDdosBotSettings } from '../services/api';
+import { Plus, Trash2, Edit2, Server, Globe, Power, Shield, Activity, ArrowRight, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2, X, FileJson } from 'lucide-react';
+import { getProtectedApps, deleteProtectedApp, toggleProtectedApp, getDdosBotSettings, saveDdosBotSettings, getAppSchema, saveAppSchema } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import { useConfirm } from '../hooks/useConfirm';
@@ -250,6 +250,18 @@ export default function ProtectedApps({ onOpenWizard }) {
   const [loginBurst, setLoginBurst] = useState(3);
   const [savingLoginRule, setSavingLoginRule] = useState(false);
 
+  // Positive-security API schema — declared known-good endpoints per app,
+  // enforced (or just logged) in ml_check.lua's schema_validate module.
+  // Raw-JSON editing for the endpoint list is a deliberately minimal v1 UI
+  // (routes/apps.py's PUT /apps/{id}/schema does the real validation).
+  const [apiSchemaTarget, setApiSchemaTarget] = useState(null);
+  useEscapeToClose(() => setApiSchemaTarget(null), !!apiSchemaTarget);
+  const [apiSchemaMode, setApiSchemaMode] = useState('log');
+  const [apiSchemaEndpointsText, setApiSchemaEndpointsText] = useState('[]');
+  const [apiSchemaJsonError, setApiSchemaJsonError] = useState('');
+  const [savingApiSchema, setSavingApiSchema] = useState(false);
+  const [loadingApiSchema, setLoadingApiSchema] = useState(false);
+
   const fetchApps = async () => {
     setLoading(true);
     try {
@@ -351,6 +363,48 @@ export default function ProtectedApps({ onOpenWizard }) {
       showToast("Failed to remove login protection: " + (err.message || "Unknown error"), "error");
     } finally {
       setSavingLoginRule(false);
+    }
+  };
+
+  const openApiSchemaModal = async (app) => {
+    setApiSchemaTarget(app);
+    setApiSchemaJsonError('');
+    setLoadingApiSchema(true);
+    try {
+      const current = await getAppSchema(app.id);
+      setApiSchemaMode(current?.mode || 'log');
+      setApiSchemaEndpointsText(JSON.stringify(current?.endpoints || [], null, 2));
+    } catch (err) {
+      showToast("Failed to load API schema: " + (err.message || "Unknown error"), "error");
+      setApiSchemaMode('log');
+      setApiSchemaEndpointsText('[]');
+    } finally {
+      setLoadingApiSchema(false);
+    }
+  };
+
+  const closeApiSchemaModal = () => setApiSchemaTarget(null);
+
+  const handleSaveApiSchema = async (e) => {
+    e.preventDefault();
+    let endpoints;
+    try {
+      endpoints = JSON.parse(apiSchemaEndpointsText);
+      if (!Array.isArray(endpoints)) throw new Error('Endpoints must be a JSON array.');
+    } catch (err) {
+      setApiSchemaJsonError(err.message || 'Invalid JSON.');
+      return;
+    }
+    setApiSchemaJsonError('');
+    setSavingApiSchema(true);
+    try {
+      await saveAppSchema(apiSchemaTarget.id, { mode: apiSchemaMode, endpoints });
+      showToast(`API schema saved for ${apiSchemaTarget.name}.`);
+      closeApiSchemaModal();
+    } catch (err) {
+      showToast("Failed to save API schema: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setSavingApiSchema(false);
     }
   };
 
@@ -570,6 +624,26 @@ export default function ProtectedApps({ onOpenWizard }) {
                   {getLoginRule(app) ? 'Login Protected' : 'Protect Login'}
                 </button>
                 <button
+                  onClick={() => openApiSchemaModal(app)}
+                  disabled={actionLoading}
+                  title="Positive-security: declare known-good endpoints for this app"
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--surface-hover)',
+                    background: 'var(--surface-subtle)',
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '12px'
+                  }}
+                >
+                  <FileJson size={12} />
+                  API Schema
+                </button>
+                <button
                   onClick={() => onOpenWizard(app)}
                   disabled={actionLoading}
                   style={{
@@ -709,6 +783,83 @@ export default function ProtectedApps({ onOpenWizard }) {
                 </div>
               </div>
             </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {apiSchemaTarget && createPortal(
+        <div
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+          onClick={closeApiSchemaModal}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'rgba(20, 20, 20, 0.97)', border: '1px solid var(--border-strong)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '560px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: 'var(--text-primary)' }}>API Schema (Positive Security)</h3>
+                <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                  {apiSchemaTarget.domain}
+                </div>
+              </div>
+              <Button variant="ghost" size="md" icon={X} onClick={closeApiSchemaModal} aria-label="Close" />
+            </div>
+
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: 0, marginBottom: '18px', lineHeight: 1.5 }}>
+              Declares known-good endpoints for this app — only requests matching a listed
+              method + path are checked; everything else passes through untouched. JSON body
+              requests to a listed endpoint are rejected if a required field is missing, or
+              (when <code>allowed_fields</code> is set) if an unexpected field is present.
+              Optionally, <code>field_types</code> constrains a field beyond presence — type
+              (<code>string</code> / <code>number</code> / <code>boolean</code> / <code>enum</code>),
+              plus <code>max_length</code> and/or a regex <code>pattern</code> for strings, or an{' '}
+              <code>enum</code> list of allowed values.
+              "Log" records violations without blocking; "Enforce" rejects them with a 400.
+            </p>
+
+            {loadingApiSchema ? (
+              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>Loading...</div>
+            ) : (
+              <form onSubmit={handleSaveApiSchema} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Mode</label>
+                  <select
+                    className="settings-input"
+                    style={{ width: '100%', fontSize: '14px' }}
+                    value={apiSchemaMode}
+                    onChange={(e) => setApiSchemaMode(e.target.value)}
+                  >
+                    <option value="log">Log only (record violations, never block)</option>
+                    <option value="enforce">Enforce (reject violations with 400)</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Endpoints (JSON array)</label>
+                  <textarea
+                    className="settings-input"
+                    style={{ width: '100%', minHeight: '180px', resize: 'vertical', fontFamily: 'monospace', fontSize: '12px' }}
+                    value={apiSchemaEndpointsText}
+                    onChange={(e) => setApiSchemaEndpointsText(e.target.value)}
+                    placeholder={'[\n  {\n    "method": "POST",\n    "path": "/api/users",\n    "required_fields": ["name", "email"],\n    "allowed_fields": ["name", "email", "role"],\n    "field_types": {\n      "email": {"type": "string", "max_length": 254, "pattern": "^[^@]+@[^@]+$"},\n      "role": {"type": "enum", "enum": ["admin", "member"]}\n    }\n  }\n]'}
+                  />
+                  {apiSchemaJsonError && (
+                    <span style={{ fontSize: '11px', color: 'var(--danger-color)' }}>{apiSchemaJsonError}</span>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '4px' }}>
+                  <Button type="button" variant="secondary" onClick={closeApiSchemaModal}>
+                    Cancel
+                  </Button>
+                  <button type="submit" disabled={savingApiSchema} className="modal-btn primary" style={{ margin: 0 }}>
+                    {savingApiSchema ? 'Saving...' : 'Save Schema'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>,
         document.body
