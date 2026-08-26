@@ -33,7 +33,26 @@ local waf_redis = require("waf_redis")
 -- dispatches to content_by_lua_file must independently skip the ML call for
 -- the same exempted paths, since the content phase runs regardless of what
 -- this access-phase script decided.
-local uri = ngx.var.uri or ""
+--
+-- Deliberately reads $request_uri (the client's original request line,
+-- never touched by internal rewrites), not $uri: cybersentinel's own
+-- `location /api/` does `rewrite ^/api/(.*) /$1 break;`, and nginx's
+-- REWRITE phase runs before both the ACCESS phase (this file) and the
+-- CONTENT phase (ml_decide.lua) — so by the time either script runs,
+-- $uri for a request to /api/health has already become /health, and every
+-- entry in the exemption table below silently stops matching anything
+-- routed through that location. Confirmed live: /api/health, /api/top-ips
+-- etc. were reaching the ML daemon instead of being skipped. $request_uri
+-- includes the query string, so it's stripped below before matching.
+local function request_path()
+    local full = ngx.var.request_uri or ngx.var.uri or ""
+    local qmark = full:find("?", 1, true)
+    if qmark then
+        return full:sub(1, qmark - 1)
+    end
+    return full
+end
+local uri = request_path()
 local function is_admin_request(path)
     -- Exact read-only telemetry endpoints that would cause DB/Redis feedback loops
     local telemetry_reads = {

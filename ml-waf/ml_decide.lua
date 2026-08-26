@@ -30,6 +30,23 @@ local waf_redis = require("waf_redis")
 -- reach the ML daemon, and the content phase runs independently of what
 -- the access phase decided, so this check has to be repeated here rather
 -- than relied upon from access_by_lua_file.
+--
+-- Reads $request_uri (original, pre-rewrite), not $uri — see ml_check.lua's
+-- matching comment. cybersentinel's `location /api/` does `rewrite
+-- ^/api/(.*) /$1 break;` in the REWRITE phase, which runs before the
+-- CONTENT phase this script executes in, so $uri here for a request to
+-- /api/health has already become /health and every exemption below
+-- silently stopped matching. Confirmed live via ClickHouse ml_events: these
+-- paths were reaching the ML daemon instead of being skipped.
+local function request_path()
+    local full = ngx.var.request_uri or ngx.var.uri or ""
+    local qmark = full:find("?", 1, true)
+    if qmark then
+        return full:sub(1, qmark - 1)
+    end
+    return full
+end
+
 local function is_admin_request(path)
     local telemetry_reads = {
         ["/api/stats"]                  = true,
@@ -76,7 +93,7 @@ if not upstream_location or upstream_location == "" then
     ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
 end
 
-if is_admin_request(ngx.var.uri or "") then
+if is_admin_request(request_path()) then
     return ngx.exec(upstream_location)
 end
 
