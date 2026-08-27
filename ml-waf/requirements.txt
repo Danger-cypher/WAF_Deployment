@@ -1,10 +1,16 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.28.0
+fastapi==0.135.0
+uvicorn[standard]==0.29.0
 redis>=5.0.0
 numpy>=1.26.0
 xgboost>=2.0.0
 scikit-learn>=1.4.0
 clickhouse-connect>=0.7.19
-pytest>=8.0.0
+pytest==9.1.1
+# Pinned alongside fastapi/uvicorn above (matching backend/requirements-dev.txt) —
+# without this, pip resolves whatever httpx is latest at CI-run time, and a
+# sufficiently new starlette (transitively via fastapi) refuses to run
+# TestClient-based tests (test_ml_rollback.py, test_predict_risk_challenge.py)
+# unless a package literally named "httpx2" is installed instead.
+httpx==0.28.1
 pytz
 requests

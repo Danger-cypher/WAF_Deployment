@@ -11,7 +11,15 @@ jobs:
     name: Backend (pytest)
     runs-on: ubuntu-latest
     steps:
+      # test_rule_canary.py exercises rule_manager.py against real CRS rule
+      # IDs (e.g. 901001) parsed from configs/nginx/modsec/coreruleset — a
+      # git submodule actions/checkout doesn't fetch by default. Without
+      # this, rule_manager falls back to its small hardcoded sample set
+      # (which doesn't contain those IDs) and every canary test fails on
+      # "Rule ID ... does not exist in the active OWASP CRS dataset."
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-python@v5
         with:
