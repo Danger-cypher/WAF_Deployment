@@ -20,6 +20,7 @@ import {
   getBackups, createBackup, restoreBackup, deleteBackup, downloadBackup,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
+import SettingsAccordionCard from '../components/SettingsAccordionCard';
 import Toast from '../components/Toast';
 import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
@@ -1142,11 +1143,9 @@ export default function Settings({ onLogout }) {
 
             {activeSettingTab === 'hardening' && (
               <motion.div key="hardening" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
-                <div className="settings-section-title">
-                  <Server size={20} color="var(--sev-low)" />
-                  Infrastructure Hardening
-                </div>
-                <div className="settings-section-subtitle">Manage HSTS, server cloaking, and IP restrictions.</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <SettingsAccordionCard icon={Server} title="Infrastructure Hardening" status={hstsEnabled ? 'HSTS On' : 'HSTS Off'} tone={hstsEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>Manage HSTS, server cloaking, and IP restrictions.</div>
 
                 <form onSubmit={handleSaveHardening} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
@@ -1215,12 +1214,10 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+                </SettingsAccordionCard>
 
-                <div className="settings-section-title" style={{ marginTop: '32px' }}>
-                  <ShieldAlert size={20} color="var(--sev-low)" />
-                  Geo-Block
-                </div>
-                <div className="settings-section-subtitle">
+                <SettingsAccordionCard icon={ShieldAlert} title="Geo-Block" status={geoBlockEnabled ? 'Active' : 'Off'} tone={geoBlockEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
                   Allow or deny traffic by country. Requires GeoIP2 to be enabled (Settings loads with it
                   active in this deployment) — otherwise this has no effect.
                 </div>
@@ -1272,12 +1269,10 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+                </SettingsAccordionCard>
 
-                <div className="settings-section-title" style={{ marginTop: '32px' }}>
-                  <ShieldAlert size={20} color="var(--sev-low)" />
-                  External Threat-Intel Feed
-                </div>
-                <div className="settings-section-subtitle">
+                <SettingsAccordionCard icon={ShieldAlert} title="External Threat-Intel Feed" status={threatIntelEnabled ? 'Active' : 'Off'} tone={threatIntelEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
                   Pulls Spamhaus DROP + EDROP (free, no API key) on a schedule into a dedicated
                   blacklist Redis key — separate from the manual IP blacklist above, so a sync
                   can never overwrite your own entries. Your manual whitelist always overrides it.
@@ -1337,12 +1332,10 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+                </SettingsAccordionCard>
 
-                <div className="settings-section-title" style={{ marginTop: '32px' }}>
-                  <ShieldAlert size={20} color="var(--sev-low)" />
-                  Self-Learned IP Reputation
-                </div>
-                <div className="settings-section-subtitle">
+                <SettingsAccordionCard icon={ShieldAlert} title="Self-Learned IP Reputation" status={autoRepEnabled ? `${autoBlockedIps.length} IPs blocked` : 'Off'} tone={autoRepEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
                   Watches this deployment's own traffic (not a third-party feed) for IPs racking up
                   enough blocked requests to count as proven repeat offenders, and auto-blocks them —
                   a self-tuning defense that improves with your own traffic. Separate Redis key from
@@ -1457,12 +1450,10 @@ export default function Settings({ onLogout }) {
                     </tbody></table>
                   )}
                 </div>
+                </SettingsAccordionCard>
 
-                <div className="settings-section-title" style={{ marginTop: '32px' }}>
-                  <Lock size={20} color="var(--danger-color)" />
-                  Admin-Login IP Allowlist
-                </div>
-                <div className="settings-section-subtitle">
+                <SettingsAccordionCard icon={Lock} title="Admin-Login IP Allowlist" status={adminAllowlistEnabled ? 'Active' : 'Off'} tone={adminAllowlistEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
                   Restricts the dashboard's own login (and MFA step) to specific IPs/CIDRs — separate
                   from the Global IP Whitelist/Blacklist above, which gates all site traffic. Even a
                   stolen valid password can't reach a live session from outside this list. Applies to
@@ -1510,12 +1501,10 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+                </SettingsAccordionCard>
 
-                <div className="settings-section-title" style={{ marginTop: '32px' }}>
-                  <ShieldAlert size={20} color="var(--danger-color)" />
-                  Malware Scanning
-                </div>
-                <div className="settings-section-subtitle">
+                <SettingsAccordionCard icon={ShieldAlert} title="Malware Scanning" status={malwareScanEnabled ? 'Active' : 'Off'} tone={malwareScanEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
                   Scans uploaded files with ClamAV before they reach a protected app's backend
                   (or the dashboard's own certificate upload). A defense-in-depth layer on top of
                   the WAF's existing rule-based protections, not a replacement for them.
@@ -1582,6 +1571,8 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+                </SettingsAccordionCard>
+                </div>
               </motion.div>
             )}
 
