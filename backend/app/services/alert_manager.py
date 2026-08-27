@@ -174,56 +174,93 @@ class AlertManager:
                 channel_ids = []
 
             channels_data = []
-            channels_notified_names = []
             for c_id in channel_ids:
                 chan = self.db.get_channel(c_id)
                 if chan and chan.get("enabled", True):
                     channels_data.append(chan)
-                    channels_notified_names.append(chan["name"])
+
+            # Syslog channels bypass throttling entirely and get their own,
+            # independent dispatch + history entry — handled unconditionally
+            # here, BEFORE the throttle logic below, and without ever
+            # touching alert_aggregations. A SIEM wants every matching
+            # event for its own correlation, not a deduped subset meant to
+            # stop a human-facing Slack/email channel from spamming someone
+            # — and since alert_aggregations is one row per (rule_id,
+            # event_signature) shared by every channel on the rule, letting
+            # syslog's own firing update it would incorrectly reset the
+            # throttle clock for the OTHER channels on this same rule too.
+            always_send_channels = [c for c in channels_data if c.get("channel_type") == "syslog"]
+            throttle_gated_channels = [c for c in channels_data if c.get("channel_type") != "syslog"]
+            throttle_gated_names = [c["name"] for c in throttle_gated_channels]
+
+            if always_send_channels:
+                always_names = [c["name"] for c in always_send_channels]
+                always_results = self.dispatcher.dispatch(
+                    channels_list=always_send_channels,
+                    severity=severity, event_type=event_type,
+                    message=message, event_data=event_data,
+                )
+                always_failed = [r["channel_name"] for r in always_results if not r["success"]]
+                always_status = "failed" if always_failed and len(always_failed) == len(always_send_channels) else "sent"
+                always_err = "; ".join(
+                    f"{r['channel_name']}: {r['error']}" for r in always_results if r["error"]
+                ) or None
+                always_id = self.db.create_alert_history(
+                    rule_id=rule_id, rule_name=rule_name, event_type=event_type, severity=severity,
+                    channels_notified=always_names, event_data=event_data, message=message,
+                    status=always_status, error_message=always_err,
+                )
+                await self._broadcast_new_alert(
+                    always_id, rule_id, rule_name, event_type, severity, always_names,
+                    event_data, message, always_status, always_err,
+                )
 
             if is_throttled:
-                logger.info(f"Alert rule '{rule_name}' is currently throttled. Aggregating event.")
-                # Update aggregation entry without sending notification
-                self.db.update_aggregation(rule_id, event_signature, notified=False)
-                # Save to history with status throttled
-                self.db.create_alert_history(
-                    rule_id=rule_id,
-                    rule_name=rule_name,
-                    event_type=event_type,
-                    severity=severity,
-                    channels_notified=channels_notified_names,
-                    event_data=event_data,
-                    message=message,
-                    status="throttled"
-                )
+                if throttle_gated_channels:
+                    logger.info(f"Alert rule '{rule_name}' is currently throttled. Aggregating event.")
+                    # Update aggregation entry without sending notification
+                    self.db.update_aggregation(rule_id, event_signature, notified=False)
+                    # Save to history with status throttled (syslog, if
+                    # attached, was already handled unconditionally above)
+                    self.db.create_alert_history(
+                        rule_id=rule_id,
+                        rule_name=rule_name,
+                        event_type=event_type,
+                        severity=severity,
+                        channels_notified=throttle_gated_names,
+                        event_data=event_data,
+                        message=message,
+                        status="throttled"
+                    )
                 continue
 
             # Update aggregation entry with notified=True
             self.db.update_aggregation(rule_id, event_signature, notified=True)
 
-            if not channels_data:
-                logger.warning(f"No active notification channels configured for rule: {rule_name}")
-                new_id = self.db.create_alert_history(
-                    rule_id=rule_id,
-                    rule_name=rule_name,
-                    event_type=event_type,
-                    severity=severity,
-                    channels_notified=[],
-                    event_data=event_data,
-                    message=message,
-                    status="sent",
-                    error_message="No active notification channels configured."
-                )
-                await self._broadcast_new_alert(
-                    new_id, rule_id, rule_name, event_type, severity, [],
-                    event_data, message, "sent", "No active notification channels configured."
-                )
+            if not throttle_gated_channels:
+                if not always_send_channels:
+                    logger.warning(f"No active notification channels configured for rule: {rule_name}")
+                    new_id = self.db.create_alert_history(
+                        rule_id=rule_id,
+                        rule_name=rule_name,
+                        event_type=event_type,
+                        severity=severity,
+                        channels_notified=[],
+                        event_data=event_data,
+                        message=message,
+                        status="sent",
+                        error_message="No active notification channels configured."
+                    )
+                    await self._broadcast_new_alert(
+                        new_id, rule_id, rule_name, event_type, severity, [],
+                        event_data, message, "sent", "No active notification channels configured."
+                    )
                 continue
 
             # 6. Dispatch notifications
-            logger.info(f"Dispatching alerts for rule '{rule_name}' to channels: {channels_notified_names}")
+            logger.info(f"Dispatching alerts for rule '{rule_name}' to channels: {throttle_gated_names}")
             dispatch_results = self.dispatcher.dispatch(
-                channels_list=channels_data,
+                channels_list=throttle_gated_channels,
                 severity=severity,
                 event_type=event_type,
                 message=message,
@@ -237,7 +274,7 @@ class AlertManager:
             status_str = "sent"
             err_msg = None
             if failed_channels:
-                if len(failed_channels) == len(channels_data):
+                if len(failed_channels) == len(throttle_gated_channels):
                     status_str = "failed"
                 err_msg = "; ".join(error_msgs)
 
@@ -246,14 +283,14 @@ class AlertManager:
                 rule_name=rule_name,
                 event_type=event_type,
                 severity=severity,
-                channels_notified=channels_notified_names,
+                channels_notified=throttle_gated_names,
                 event_data=event_data,
                 message=message,
                 status=status_str,
                 error_message=err_msg
             )
             await self._broadcast_new_alert(
-                new_id, rule_id, rule_name, event_type, severity, channels_notified_names,
+                new_id, rule_id, rule_name, event_type, severity, throttle_gated_names,
                 event_data, message, status_str, err_msg
             )
 

@@ -71,6 +71,21 @@ class UserCreate(BaseModel):
     _validate_password = field_validator("password")(_validate_password_strength)
 
 
+class SessionOut(BaseModel):
+    """One active login session (P1-8 Part B) — see session_service.py.
+    Never carries the session cookie/JWT itself, only metadata about it."""
+    session_id: str
+    ip: str
+    user_agent: str
+    created_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
+    expires_in_seconds: int = 0
+    # True for the session the requester is currently authenticated with —
+    # lets the UI hide/disable "revoke" for your own current session
+    # without a separate API round-trip to figure out which one that is.
+    is_current: bool = False
+
+
 class UserUpdate(BaseModel):
     role: Optional[Literal["admin", "analyst", "app_admin"]] = None
     enabled: Optional[bool] = None

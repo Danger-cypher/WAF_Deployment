@@ -17,6 +17,7 @@ class ChannelType(str, Enum):
     SLACK = "slack"
     WEBHOOK = "webhook"
     PAGERDUTY = "pagerduty"
+    SYSLOG = "syslog"
 
 
 class EventType(str, Enum):
@@ -100,6 +101,20 @@ class PagerDutyChannelConfig(BaseModel):
     )
 
 
+class SyslogChannelConfig(BaseModel):
+    """Outbound SIEM/syslog export configuration. Deliberately NOT
+    throttled/deduped like the other channel types — see alert_manager's
+    trigger_event, which dispatches syslog channels unconditionally on
+    every matching event, since a SIEM wants everything for its own
+    correlation rather than a deduped subset meant to avoid human alert
+    fatigue."""
+    host: str = Field(..., description="Syslog collector hostname or IP")
+    port: int = Field(default=514, ge=1, le=65535)
+    protocol: Literal["udp", "tcp"] = Field(default="udp")
+    facility: str = Field(default="local0", description="Syslog facility (e.g. local0-local7, auth, daemon)")
+    format: Literal["rfc5424", "rfc3164"] = Field(default="rfc5424")
+
+
 # ============================================================================
 # Alert Channel Models
 # ============================================================================
@@ -131,6 +146,8 @@ class AlertChannelCreate(AlertChannelBase):
                 WebhookChannelConfig(**v)
             elif channel_type == ChannelType.PAGERDUTY:
                 PagerDutyChannelConfig(**v)
+            elif channel_type == ChannelType.SYSLOG:
+                SyslogChannelConfig(**v)
         except Exception as e:
             raise ValueError(f"Invalid configuration for {channel_type}: {str(e)}")
         return v

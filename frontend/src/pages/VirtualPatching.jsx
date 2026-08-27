@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { Check, Code, RefreshCw } from 'lucide-react';
 import { getCustomRules, saveCustomRules } from '../services/api';
 import Button from '../components/Button';
+import CveTemplateLibrary from '../components/CveTemplateLibrary';
+import Toast from '../components/Toast';
+import { useToast } from '../hooks/useToast';
 
 // Custom Rules Editor (Virtual Patching) Component
 export default function CustomRulesEditor({ userRole }) {
@@ -9,6 +12,7 @@ export default function CustomRulesEditor({ userRole }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
+  const { toast, showToast } = useToast();
 
   const fetchRules = async () => {
     setLoading(true);
@@ -47,6 +51,9 @@ export default function CustomRulesEditor({ userRole }) {
   };
 
   return (
+    <div>
+      <CveTemplateLibrary userRole={userRole} showToast={showToast} />
+      <Toast toast={toast} />
     <div style={{ background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border-color)', padding: '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
@@ -154,6 +161,7 @@ export default function CustomRulesEditor({ userRole }) {
           }}
         />
       </div>
+    </div>
     </div>
   );
 }

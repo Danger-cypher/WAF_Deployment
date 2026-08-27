@@ -87,6 +87,10 @@ def test_predict_log_band_sets_risk_challenge_header(monkeypatch):
     assert body["decision"] == "log"
     assert 0.40 <= body["threat_score"] < 0.70
     assert resp.headers.get("x-waf-risk-challenge") == "1"
+    # P1-2: named sub-scores travel alongside the blended total.
+    assert body["sub_scores"]["total"] == body["threat_score"]
+    assert body["sub_scores"]["crs"] == 0.5
+    assert body["sub_scores"]["xgb"] == 0.6
 
 
 def test_predict_allow_band_does_not_set_risk_challenge_header(monkeypatch):

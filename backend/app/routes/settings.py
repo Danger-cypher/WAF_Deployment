@@ -1,15 +1,35 @@
 import asyncio
+import ipaddress
 import logging
-from fastapi import APIRouter, HTTPException, status, Depends, Query
-from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from datetime import datetime, timezone
+from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
+from pydantic import BaseModel, field_validator
+from typing import Dict, Any, Optional, List
 
 from app.services.settings_manager import settings_manager
 from app.services.auth import verify_password, require_admin, TokenData
 from app.utils.audit import log_admin_action
+from app.utils.security import get_client_ip, is_ip_in_networks
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _validate_ip_or_cidr(ip_str: str) -> bool:
+    """Shared by the hardening and admin-login-allowlist routes: accepts
+    either a plain IP address or a CIDR network string."""
+    s = ip_str.strip()
+    if not s:
+        return False
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        try:
+            ipaddress.ip_network(s, strict=False)
+            return True
+        except ValueError:
+            return False
 
 
 class GeneralSettingsModel(BaseModel):
@@ -85,6 +105,11 @@ class DdosBotMitigationModel(BaseModel):
     # default: a deployment that hasn't explicitly opted in sees zero
     # behavior change.
     risk_challenge_enabled: bool = False
+    # Independent of both toggles above — a tighter, Lua/Redis-enforced
+    # rate check for IPs whose reputation has crossed a threshold, layered
+    # on top of (never replacing) the native limit_req zones. Off by
+    # default, same reasoning as risk_challenge_enabled.
+    adaptive_throttle_enabled: bool = False
 
 
 class HardeningModel(BaseModel):
@@ -93,6 +118,11 @@ class HardeningModel(BaseModel):
     server_cloaking: bool
     ip_blacklist: List[str]
     ip_whitelist: List[str]
+
+
+class AdminLoginAllowlistModel(BaseModel):
+    enabled: bool
+    allowed_networks: List[str]
 
 
 class GeoBlockModel(BaseModel):
@@ -106,10 +136,32 @@ class ThreatIntelModel(BaseModel):
     sync_interval_hours: int
 
 
+class AutoReputationModel(BaseModel):
+    enabled: bool
+    block_threshold: int
+    window_hours: int
+    block_ttl_hours: int
+    sync_interval_minutes: int
+
+
 class AntiDefacementModel(BaseModel):
     enabled: bool
     monitored_files: List[str]
     check_interval_seconds: int
+
+
+class MalwareScanningModel(BaseModel):
+    enabled: bool
+    fail_mode: str
+    scan_timeout_seconds: int
+
+    @field_validator("fail_mode")
+    @classmethod
+    def validate_fail_mode(cls, value: str) -> str:
+        allowed = {"open", "closed"}
+        if value not in allowed:
+            raise ValueError(f"fail_mode must be one of: {', '.join(allowed)}")
+        return value
 
 
 # 1. General Settings Routes
@@ -327,34 +379,17 @@ async def get_hardening_settings(current_user: TokenData = Depends(require_admin
 async def update_hardening_settings(
     settings: HardeningModel, current_user: TokenData = Depends(require_admin)
 ):
-    import ipaddress
-
     logger.info("Updating Infrastructure Hardening & Cloaking settings.")
 
-    # Validate IP address and CIDR inputs
-    def validate_ip_or_cidr(ip_str: str) -> bool:
-        s = ip_str.strip()
-        if not s:
-            return False
-        try:
-            ipaddress.ip_address(s)
-            return True
-        except ValueError:
-            try:
-                ipaddress.ip_network(s, strict=False)
-                return True
-            except ValueError:
-                return False
-
     for ip in settings.ip_blacklist:
-        if ip.strip() and not validate_ip_or_cidr(ip):
+        if ip.strip() and not _validate_ip_or_cidr(ip):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid IP address or CIDR network in Blacklist: {ip}",
             )
 
     for ip in settings.ip_whitelist:
-        if ip.strip() and not validate_ip_or_cidr(ip):
+        if ip.strip() and not _validate_ip_or_cidr(ip):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid IP address or CIDR network in Whitelist: {ip}",
@@ -374,6 +409,50 @@ async def update_hardening_settings(
         )
 
     log_admin_action("settings", "hardening", "update", current_user, details=settings.dict())
+    return saved_settings
+
+
+@router.get("/settings/admin-login-allowlist", response_model=Dict[str, Any])
+async def get_admin_login_allowlist_settings(current_user: TokenData = Depends(require_admin)):
+    return settings_manager.get_admin_login_allowlist()
+
+
+@router.post("/settings/admin-login-allowlist", response_model=Dict[str, Any])
+async def update_admin_login_allowlist_settings(
+    settings: AdminLoginAllowlistModel, request: Request, current_user: TokenData = Depends(require_admin)
+):
+    """Restricts /auth/login (and /auth/login/mfa) to the given IPs/CIDRs.
+    Distinct from /settings/hardening's ip_whitelist/ip_blacklist, which
+    gates all site traffic — this gates only the dashboard's own login."""
+    logger.info("Updating admin-login IP allowlist settings.")
+
+    for ip in settings.allowed_networks:
+        if ip.strip() and not _validate_ip_or_cidr(ip):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid IP address or CIDR network: {ip}",
+            )
+
+    # Refuse to enable a list that would lock the requester themself out —
+    # there's no other admin-facing way back in once every account's login
+    # is blocked, short of direct DB/Redis/file access on the server.
+    if settings.enabled:
+        requester_ip = get_client_ip(request)
+        if not is_ip_in_networks(requester_ip, settings.allowed_networks):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Refusing to enable: your current IP address ({requester_ip}) is not "
+                    "included in the allowlist you're saving, which would lock you out "
+                    "immediately. Add your own IP or CIDR first."
+                ),
+            )
+
+    saved_settings = settings_manager.update_admin_login_allowlist(settings.dict())
+
+    log_admin_action(
+        "settings", "admin_login_allowlist", "update", current_user, details=settings.dict()
+    )
     return saved_settings
 
 
@@ -465,6 +544,81 @@ async def trigger_threat_intel_sync(current_user: TokenData = Depends(require_ad
     return result
 
 
+# 3.9.3 Self-Learned IP Reputation Settings Routes (P1-7)
+@router.get("/settings/auto-reputation", response_model=Dict[str, Any])
+async def get_auto_reputation_settings(current_user: TokenData = Depends(require_admin)):
+    return settings_manager.get_auto_reputation()
+
+
+@router.post("/settings/auto-reputation", response_model=Dict[str, Any])
+async def update_auto_reputation_settings(
+    settings: AutoReputationModel, current_user: TokenData = Depends(require_admin)
+):
+    if settings.block_threshold < 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="block_threshold must be at least 1.")
+    if settings.window_hours < 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="window_hours must be at least 1.")
+    if settings.block_ttl_hours < 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="block_ttl_hours must be at least 1.")
+    if settings.sync_interval_minutes < 5:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="sync_interval_minutes must be at least 5.")
+
+    # Merge rather than replace — last_sync_* are status fields the
+    # background service owns, not part of this admin-editable form; a full
+    # replace here would silently wipe them on every settings save.
+    current = settings_manager.get_auto_reputation()
+    merged = {
+        **current,
+        "enabled": settings.enabled,
+        "block_threshold": settings.block_threshold,
+        "window_hours": settings.window_hours,
+        "block_ttl_hours": settings.block_ttl_hours,
+        "sync_interval_minutes": settings.sync_interval_minutes,
+    }
+    saved_settings = settings_manager.update_auto_reputation(merged)
+
+    log_admin_action("settings", "auto_reputation", "update", current_user, details=settings.dict())
+    return saved_settings
+
+
+@router.post("/settings/auto-reputation/sync-now", response_model=Dict[str, Any])
+async def trigger_auto_reputation_sync(current_user: TokenData = Depends(require_admin)):
+    """Runs a sync cycle immediately, bypassing the enabled check — lets an
+    admin verify the threshold/window before waiting for the scheduled
+    interval or leaving auto-sync permanently on."""
+    from app.services.auto_reputation_service import run_auto_reputation_sync
+
+    result = await asyncio.to_thread(run_auto_reputation_sync, force=True)
+
+    log_admin_action("settings", "auto_reputation", "sync_now", current_user, details=result)
+
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Auto-reputation sync failed: {result.get('error', 'unknown error')}",
+        )
+    return result
+
+
+@router.get("/settings/auto-reputation/blocked")
+async def list_auto_blocked_ips(current_user: TokenData = Depends(require_admin)):
+    from app.services.auto_reputation_service import get_auto_blocked_ips
+
+    return await asyncio.to_thread(get_auto_blocked_ips)
+
+
+@router.post("/settings/auto-reputation/release/{ip}")
+async def release_auto_blocked_ip_route(ip: str, current_user: TokenData = Depends(require_admin)):
+    from app.services.auto_reputation_service import release_auto_blocked_ip
+
+    released = await asyncio.to_thread(release_auto_blocked_ip, ip)
+    if not released:
+        raise HTTPException(status_code=404, detail=f"{ip} is not currently auto-blocked.")
+
+    log_admin_action("settings", "auto_reputation", "release_ip", current_user, details={"ip": ip})
+    return {"message": f"{ip} released from auto-block."}
+
+
 # 3.10 Web Anti-Defacement Settings Routes
 @router.get("/settings/anti-defacement", response_model=Dict[str, Any])
 async def get_anti_defacement_settings(
@@ -485,6 +639,69 @@ async def update_anti_defacement_settings(
     result = settings_manager.update_anti_defacement(settings.dict())
     log_admin_action("settings", "anti-defacement", "update", current_user, details=settings.dict())
     return result
+
+
+# 3.11 Malware Scanning Settings Routes (P1-10)
+@router.get("/settings/malware-scanning", response_model=Dict[str, Any])
+async def get_malware_scanning_settings(current_user: TokenData = Depends(require_admin)):
+    return settings_manager.get_malware_scanning()
+
+
+@router.post("/settings/malware-scanning", response_model=Dict[str, Any])
+async def update_malware_scanning_settings(
+    settings: MalwareScanningModel, current_user: TokenData = Depends(require_admin)
+):
+    if settings.scan_timeout_seconds < 1 or settings.scan_timeout_seconds > 60:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scan_timeout_seconds must be between 1 and 60.",
+        )
+
+    # Merge rather than replace — last_check_* are status fields the
+    # background monitor owns, not part of this admin-editable form.
+    current = settings_manager.get_malware_scanning()
+    merged = {
+        **current,
+        "enabled": settings.enabled,
+        "fail_mode": settings.fail_mode,
+        "scan_timeout_seconds": settings.scan_timeout_seconds,
+    }
+    saved_settings = settings_manager.update_malware_scanning(merged)
+
+    from app.services import nginx_manager
+
+    success, err_msg = nginx_manager.apply_malware_scanning_settings(saved_settings)
+    if not success:
+        logger.error(f"Failed to apply malware scanning settings to NGINX: {err_msg}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply and reload settings in NGINX. {err_msg}",
+        )
+
+    log_admin_action("settings", "malware_scanning", "update", current_user, details=settings.dict())
+    return saved_settings
+
+
+@router.post("/settings/malware-scanning/check-now", response_model=Dict[str, Any])
+async def check_malware_scanning_now(current_user: TokenData = Depends(require_admin)):
+    """Pings ClamAV immediately, bypassing the 60s monitor cycle — lets an
+    admin verify connectivity right after enabling the feature instead of
+    waiting for the next scheduled check."""
+    from app.services.malware_scan_service import ping
+
+    reachable = await asyncio.to_thread(ping)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    current = settings_manager.get_malware_scanning()
+    saved_settings = settings_manager.update_malware_scanning({
+        **current,
+        "last_check_status": "ok" if reachable else "degraded",
+        "last_check_at": now_iso,
+        "last_check_error": None if reachable else "ClamAV unreachable or ping timed out",
+    })
+
+    log_admin_action("settings", "malware_scanning", "check_now", current_user, details={"reachable": reachable})
+    return saved_settings
 
 
 # 4. Password Change Route

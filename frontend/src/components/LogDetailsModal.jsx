@@ -4,12 +4,17 @@ import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check } from 'lu
 import { formatLocalTime } from '../utils/helpers';
 import HighlightedJson from './JsonViewer';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { getLogExplain } from '../services/api';
 
 export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
   const [copied, setCopied] = useState(false);
   const [showReqHeaders, setShowReqHeaders] = useState(false);
   const [showResHeaders, setShowResHeaders] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
+  const [showExplain, setShowExplain] = useState(false);
+  const [explainData, setExplainData] = useState(null);
+  const [explainLoading, setExplainLoading] = useState(false);
+  const [explainError, setExplainError] = useState('');
 
   useEscapeToClose(onClose, isOpen);
 
@@ -26,10 +31,25 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
         setShowReqHeaders(false);
         setShowResHeaders(false);
         setShowRawJson(false);
+        setShowExplain(false);
+        setExplainData(null);
+        setExplainError('');
       }, 0);
       return () => clearTimeout(timer);
     }
-  }, [isOpen]);
+  }, [isOpen, log?.id]);
+
+  useEffect(() => {
+    if (showExplain && !explainData && !explainLoading && log?.id) {
+      setExplainLoading(true);
+      setExplainError('');
+      getLogExplain(log.id)
+        .then(setExplainData)
+        .catch((err) => setExplainError(err.message || 'Failed to load explain data'))
+        .finally(() => setExplainLoading(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showExplain]);
 
   if (!isOpen || !log) return null;
 
@@ -234,6 +254,61 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
             )}
           </div>
 
+
+          {/* ── Explain This Block (ML correlation) ── */}
+          <div style={sectionStyle}>
+            {collapsibleHeader('Why Was This Blocked? (ML Correlation)', undefined, showExplain, () => setShowExplain(!showExplain))}
+            {showExplain && (
+              <div style={{ background: 'var(--inset-bg)', padding: '12px', border: '1px solid var(--surface-hover)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px' }}>
+                {explainLoading && (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>Loading...</div>
+                )}
+                {explainError && (
+                  <div style={{ color: 'var(--danger-color)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>{explainError}</div>
+                )}
+                {explainData && !explainData.ml_event && (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px', padding: '4px 0' }}>{explainData.ml_match_note}</div>
+                )}
+                {explainData && explainData.ml_event && (
+                  <>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}>{explainData.ml_match_note}</div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                      <tr style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                        <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600 }}>ML Decision</td>
+                        <td style={{ padding: '5px 8px', fontFamily: 'monospace', color: 'var(--danger-color)', fontWeight: 700 }}>{explainData.ml_event.decision}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                        <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600 }}>Blended Threat Score</td>
+                        <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{explainData.ml_event.threat_score?.toFixed(3)}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                        <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600 }}>CRS Anomaly Score</td>
+                        <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{explainData.ml_event.crs_score}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                        <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600 }}>XGBoost Probability</td>
+                        <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{explainData.ml_event.xgb_prob?.toFixed(3)}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                        <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600 }}>Isolation Forest Score</td>
+                        <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{explainData.ml_event.iso_score?.toFixed(3)}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                        <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600 }}>IP Reputation</td>
+                        <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{explainData.ml_event.redis_rep}</td>
+                      </tr>
+                      {explainData.ml_event.matched_vars && (
+                        <tr>
+                          <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600, verticalAlign: 'top' }}>Matched Variables</td>
+                          <td style={{ padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all' }}>{explainData.ml_event.matched_vars}</td>
+                        </tr>
+                      )}
+                    </tbody></table>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* ── Raw JSON (collapsed by default) ── */}
           <div style={{ marginBottom: '8px' }}>

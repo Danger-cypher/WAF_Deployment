@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
-import { User, X, ShieldCheck, KeyRound, Save, BellOff, Smartphone } from 'lucide-react';
+import { User, X, ShieldCheck, KeyRound, Save, BellOff, Smartphone, Monitor } from 'lucide-react';
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import Button from './Button';
-import { initialsFor } from '../utils/helpers';
+import { initialsFor, formatLocalTime } from '../utils/helpers';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import {
   getMyProfile, updateMyProfile, changeMyPassword,
   getMyNotificationPreferences, updateMyNotificationPreferences,
   getMyMfaStatus, setupMyMfa, confirmMyMfa, disableMyMfa,
+  getMySessions, revokeMySession,
 } from '../services/api';
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
@@ -65,7 +66,15 @@ export default function Profile({ onClose }) {
   const [mfaDisablePassword, setMfaDisablePassword] = useState('');
   const [mfaDisableCode, setMfaDisableCode] = useState('');
   const [mfaSavingDisable, setMfaSavingDisable] = useState(false);
+  const [sessions, setSessions] = useState(null);
+  const [revokingSessionId, setRevokingSessionId] = useState(null);
   const { toast, showToast } = useToast();
+
+  const loadSessions = () => {
+    getMySessions()
+      .then(setSessions)
+      .catch((err) => showToast('Failed to load sessions: ' + (err.message || 'Unknown error'), 'error'));
+  };
 
   useEffect(() => {
     getMyProfile()
@@ -83,7 +92,30 @@ export default function Profile({ onClose }) {
     getMyMfaStatus()
       .then(setMfaStatus)
       .catch((err) => showToast('Failed to load MFA status: ' + (err.message || 'Unknown error'), 'error'));
+
+    loadSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleRevokeSession = async (sessionId, isCurrent) => {
+    if (isCurrent && !window.confirm('This is your current session — revoking it will log you out immediately. Continue?')) {
+      return;
+    }
+    setRevokingSessionId(sessionId);
+    try {
+      await revokeMySession(sessionId);
+      showToast(isCurrent ? 'Session revoked — logging out…' : 'Session revoked.');
+      if (isCurrent) {
+        window.location.reload();
+        return;
+      }
+      loadSessions();
+    } catch (err) {
+      showToast('Failed to revoke session: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setRevokingSessionId(null);
+    }
+  };
 
   const handleSaveProfile = async () => {
     setSavingProfile(true);
@@ -415,6 +447,58 @@ export default function Profile({ onClose }) {
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Active Sessions */}
+            {sessions && (
+              <div className="panel-card">
+                <div className="panel-card-header">
+                  <span className="panel-card-title"><Monitor size={12} /> Active Sessions</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{sessions.length} active</span>
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                  Every device/browser currently logged into your account. Revoke one you don't recognize
+                  or left open elsewhere without changing your password or logging out everywhere.
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {sessions.map((s) => (
+                    <div
+                      key={s.session_id}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
+                        padding: '8px 10px', borderRadius: 'var(--radius-sm)',
+                        background: s.is_current ? 'var(--accent-bg)' : 'var(--surface-subtle)',
+                        border: s.is_current ? '1px solid var(--accent-border)' : '1px solid transparent',
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                        <span style={{ fontSize: '12px', color: 'var(--text-primary)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          {s.ip}
+                          {s.is_current && (
+                            <span style={{
+                              fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: 'var(--radius-pill)',
+                              background: 'var(--accent-color)', color: '#fff', textTransform: 'uppercase',
+                            }}>
+                              This device
+                            </span>
+                          )}
+                        </span>
+                        <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {s.user_agent} · last used {s.last_seen_at ? formatLocalTime(s.last_seen_at) : 'unknown'}
+                        </span>
+                      </div>
+                      <Button
+                        variant="danger" size="sm"
+                        loading={revokingSessionId === s.session_id}
+                        onClick={() => handleRevokeSession(s.session_id, s.is_current)}
+                        style={{ flexShrink: 0 }}
+                      >
+                        Revoke
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

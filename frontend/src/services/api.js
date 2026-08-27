@@ -108,6 +108,21 @@ export async function getLogById(logId) {
 }
 
 /**
+ * Unified "why was this blocked" view (P1-13): merges this transaction's
+ * ModSecurity rule-match record with whatever ML scoring happened for the
+ * same request, if any (best-effort fuzzy match — see backend for why).
+ */
+export async function getLogExplain(logId) {
+  try {
+    const response = await fetch(`${BASE_URL}/logs/${logId}/explain`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to fetch explain view for log ${logId}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Fetch overall statistics
  */
 export async function getStats(hours) {
@@ -1278,6 +1293,180 @@ export async function syncThreatIntelNow() {
 }
 
 /**
+ * Self-learned IP reputation (P1-7): auto-blocks repeat WAF-block
+ * offenders from this deployment's own traffic, on top of the manual
+ * blacklist and the external threat-intel feed.
+ */
+export async function getAutoReputationSettings() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/auto-reputation`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch auto-reputation settings:", error);
+    throw error;
+  }
+}
+
+export async function saveAutoReputationSettings(settings) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/auto-reputation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save auto-reputation settings:", error);
+    throw error;
+  }
+}
+
+export async function syncAutoReputationNow() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/auto-reputation/sync-now`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to trigger auto-reputation sync:", error);
+    throw error;
+  }
+}
+
+export async function getAutoBlockedIps() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/auto-reputation/blocked`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch auto-blocked IPs:", error);
+    throw error;
+  }
+}
+
+export async function releaseAutoBlockedIp(ip) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/auto-reputation/release/${encodeURIComponent(ip)}`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to release auto-blocked IP ${ip}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Admin-login IP allowlist (P1-8 Part A): restricts /auth/login (and the
+ * MFA step) to configured IPs/CIDRs — distinct from
+ * getHardeningSettings/saveHardeningSettings above, which gates all site
+ * traffic rather than just the dashboard's own login.
+ */
+export async function getAdminLoginAllowlistSettings() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/admin-login-allowlist`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch admin-login allowlist settings:", error);
+    throw error;
+  }
+}
+
+export async function saveAdminLoginAllowlistSettings(settings) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/admin-login-allowlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save admin-login allowlist settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Malware scanning (P1-10): ClamAV-backed content scanning for uploaded
+ * files, via ModSecurity's @inspectFile operator for protected-app
+ * traffic and directly for the dashboard's own cert-upload endpoint.
+ */
+export async function getMalwareScanningSettings() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/malware-scanning`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch malware scanning settings:", error);
+    throw error;
+  }
+}
+
+export async function saveMalwareScanningSettings(settings) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/malware-scanning`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save malware scanning settings:", error);
+    throw error;
+  }
+}
+
+export async function checkMalwareScanningNow() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/malware-scanning/check-now`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to check ClamAV connectivity:", error);
+    throw error;
+  }
+}
+
+/**
+ * API keys (P1-9): machine credentials for scripts/CI/CD/external tools to
+ * call this API without an interactive session login.
+ */
+export async function getApiKeys() {
+  try {
+    const response = await fetch(`${BASE_URL}/api-keys`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch API keys:", error);
+    throw error;
+  }
+}
+
+export async function createApiKey(payload) {
+  try {
+    const response = await fetch(`${BASE_URL}/api-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to create API key:", error);
+    throw error;
+  }
+}
+
+export async function revokeApiKey(id) {
+  try {
+    const response = await fetch(`${BASE_URL}/api-keys/${id}/revoke`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to revoke API key ${id}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Fetch Web Anti-Defacement settings
  */
 export async function getAntiDefacementSettings() {
@@ -1792,6 +1981,57 @@ export async function saveCustomRules(rules_content) {
   }
 }
 
+/**
+ * CVE virtual-patch template library (P1-5): curated, pre-built
+ * ModSecurity rules keyed to specific CVEs, deployable in detect
+ * (log-only) or block mode without hand-writing raw SecRule syntax.
+ */
+export async function getVirtualPatchLibrary() {
+  try {
+    const response = await fetch(`${BASE_URL}/virtual-patches`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch virtual patch library:", error);
+    throw error;
+  }
+}
+
+export async function deployVirtualPatch(cveId, mode) {
+  try {
+    const response = await fetch(`${BASE_URL}/virtual-patches/${encodeURIComponent(cveId)}/deploy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to deploy virtual patch:", error);
+    throw error;
+  }
+}
+
+export async function undeployVirtualPatch(cveId) {
+  try {
+    const response = await fetch(`${BASE_URL}/virtual-patches/${encodeURIComponent(cveId)}/undeploy`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to undeploy virtual patch:", error);
+    throw error;
+  }
+}
+
+export async function getVirtualPatchHits(cveId, hours = 24) {
+  try {
+    const response = await fetch(`${BASE_URL}/virtual-patches/${encodeURIComponent(cveId)}/hits?hours=${hours}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch virtual patch hit count:", error);
+    throw error;
+  }
+}
+
 // ============================================================================
 // User Management (Admin > Users) & Self-Service Profile
 // ============================================================================
@@ -1978,6 +2218,55 @@ export async function adminDisableUserMfa(userId) {
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to force-disable user MFA:", error);
+    throw error;
+  }
+}
+
+/**
+ * Per-session revoke (P1-8 Part B): every active login for an account,
+ * with the ability to kill one specific session without affecting any of
+ * that account's other sessions or forcing a password reset.
+ */
+export async function getMySessions() {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/sessions`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch sessions:", error);
+    throw error;
+  }
+}
+
+export async function revokeMySession(sessionId) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/me/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to revoke session:", error);
+    throw error;
+  }
+}
+
+export async function getUserSessions(userId) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/${userId}/sessions`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch user sessions:", error);
+    throw error;
+  }
+}
+
+export async function revokeUserSession(userId, sessionId) {
+  try {
+    const response = await fetch(`${BASE_URL}/users/${userId}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to revoke user session:", error);
     throw error;
   }
 }

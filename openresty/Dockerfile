@@ -114,6 +114,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# ── ClamAV client (P1-10 malware scanning) ────────────────────────────────
+# clamav-daemon provides the clamdscan CLIENT binary used by
+# malware-scan.sh (generated at runtime — see nginx_manager.py's
+# apply_malware_scanning_settings) via ModSecurity's @inspectFile
+# operator. We do NOT run clamd itself in this container — scanning
+# happens against the waf-clamav sidecar over TCP, so clamd.conf below
+# points clamdscan there instead of a local socket. `apt-get install` in
+# a Docker RUN layer never actually starts the daemon (no init system),
+# so installing this package here is inert beyond providing the binary.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clamav-daemon \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /etc/clamav \
+    && printf 'TCPSocket 3310\nTCPAddr waf-clamav\n' > /etc/clamav/clamd.conf
+
 # ── Copy compiled ModSecurity dynamic libraries from builder stage ──────────
 COPY --from=builder /usr/local/modsecurity /usr/local/modsecurity
 RUN ln -s /usr/local/modsecurity/lib/libmodsecurity.so.3 /usr/local/lib/libmodsecurity.so.3 \
@@ -150,7 +165,9 @@ RUN mkdir -p \
     /etc/nginx/conf.d \
     /etc/nginx/ssl \
     /var/log/nginx \
-    /var/log/modsecurity/audit
+    /var/log/modsecurity/audit \
+    /var/modsecurity/uploads \
+    && chmod 700 /var/modsecurity/uploads
 
 ENV PATH="/usr/local/openresty/bin:/usr/local/openresty/nginx/sbin:${PATH}"
 

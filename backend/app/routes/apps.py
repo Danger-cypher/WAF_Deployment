@@ -17,6 +17,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class OriginModel(BaseModel):
+    """One extra backend server for load balancing (P1-14) — see
+    ProtectedAppBase.additional_origins. Same shape/validation as the
+    primary upstream_host/upstream_port pair, just repeatable."""
+    host: str = Field(..., min_length=1)
+    port: int = Field(..., ge=1, le=65535)
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not re.match(r'^[a-zA-Z0-9.\-_]+$', cleaned):
+            raise ValueError("Origin host contains invalid characters. Only alphanumeric, hyphens, dots, and underscores are allowed.")
+        return cleaned
+
+
 class ProtectedAppBase(BaseModel):
     name: str = Field(..., min_length=1, description="Friendly name of the application")
     domain: str = Field(..., min_length=1, description="Domain name (e.g. app.localhost) or '_'")
@@ -24,6 +40,31 @@ class ProtectedAppBase(BaseModel):
     upstream_port: int = Field(..., ge=1, le=65535, description="Upstream network port")
     protocol: str = Field("http", description="Upstream protocol: 'http' or 'https'")
     is_active: int = Field(1, ge=0, le=1, description="1 = active, 0 = inactive")
+    additional_origins: List[OriginModel] = Field(
+        default_factory=list,
+        description=(
+            "Extra backend servers for load balancing (P1-14) — nginx round-robins "
+            "across upstream_host/upstream_port plus these, with automatic passive "
+            "failover away from one that starts erroring. Same protocol for all."
+        ),
+    )
+
+    @field_validator("additional_origins", mode="before")
+    @classmethod
+    def parse_additional_origins(cls, value):
+        # DB rows carry this as a pre-serialized JSON string (see
+        # db_service.py); a request body carries it as a real JSON array
+        # already. Accept either so ProtectedAppResponse can be built
+        # directly from a raw DB dict without a separate parsing step at
+        # every route handler.
+        if isinstance(value, str):
+            if not value.strip():
+                return []
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return value or []
     rate_limit_rps: int = Field(50, ge=1, le=10000, description="RPS limit per client IP")
     burst_tolerance: int = Field(100, ge=1, le=20000, description="Rate limit burst allowance")
     ssl_option: str = Field("self-signed", description="SSL mode: 'letsencrypt', 'custom', 'self-signed'")
@@ -83,6 +124,14 @@ class ProtectedAppResponse(ProtectedAppBase):
     ssl_key_path: Optional[str] = None
 
 
+def _serialize_origins(origins: List[OriginModel]) -> Optional[str]:
+    """None (not '[]') when empty, matching every other optional per-app
+    JSON-blob column's NULL-means-absent convention (e.g. api_schema)."""
+    if not origins:
+        return None
+    return json.dumps([o.model_dump() for o in origins])
+
+
 @router.get("/apps", response_model=List[ProtectedAppResponse])
 async def list_apps(current_user: TokenData = Depends(require_any_role)):
     """List all registered protected applications — 'admin'/'analyst' see
@@ -131,6 +180,7 @@ async def add_app(app_data: ProtectedAppCreate, current_user: TokenData = Depend
         require_auth=app_data.require_auth,
         auth_check_type=app_data.auth_check_type,
         auth_header_name=app_data.auth_header_name,
+        additional_origins=_serialize_origins(app_data.additional_origins),
     )
     if not app:
         raise HTTPException(
@@ -185,6 +235,7 @@ async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: To
         require_auth=app_data.require_auth,
         auth_check_type=app_data.auth_check_type,
         auth_header_name=app_data.auth_header_name,
+        additional_origins=_serialize_origins(app_data.additional_origins),
     )
     if not app:
         raise HTTPException(
@@ -212,6 +263,7 @@ async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: To
             require_auth=existing_app.get("require_auth", 0),
             auth_check_type=existing_app.get("auth_check_type", "header"),
             auth_header_name=existing_app.get("auth_header_name", "Authorization"),
+            additional_origins=existing_app.get("additional_origins"),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -263,6 +315,7 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_app_
             require_auth=existing_app.get("require_auth", 0),
             auth_check_type=existing_app.get("auth_check_type", "header"),
             auth_header_name=existing_app.get("auth_header_name", "Authorization"),
+            additional_origins=existing_app.get("additional_origins"),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -333,6 +386,7 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
         require_auth=app.get("require_auth", 0),
         auth_check_type=app.get("auth_check_type", "header"),
         auth_header_name=app.get("auth_header_name", "Authorization"),
+        additional_origins=app.get("additional_origins"),
     )
 
     # Sync configurations with Nginx
@@ -353,6 +407,7 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
             require_auth=app.get("require_auth", 0),
             auth_check_type=app.get("auth_check_type", "header"),
             auth_header_name=app.get("auth_header_name", "Authorization"),
+            additional_origins=app.get("additional_origins"),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -501,6 +556,16 @@ async def provision_letsencrypt(
             ssl_option="letsencrypt",
             ssl_cert_path=fullchain,
             ssl_key_path=privkey,
+            # These three were previously omitted here entirely, which
+            # meant provisioning a Let's Encrypt cert silently reset
+            # require_auth/auth_check_type/auth_header_name to their
+            # function defaults for this app (require_auth back to
+            # disabled) — a real pre-existing bug, fixed in passing while
+            # already touching this call site to add additional_origins.
+            require_auth=app.get("require_auth", 0),
+            auth_check_type=app.get("auth_check_type", "header"),
+            auth_header_name=app.get("auth_header_name", "Authorization"),
+            additional_origins=app.get("additional_origins"),
         )
 
         # Regenerate Nginx config to use the real cert
@@ -580,6 +645,29 @@ async def upload_custom_cert(
         if not key_data.strip().startswith(b"-----BEGIN"):
             raise HTTPException(status_code=400, detail="Private key does not appear to be a valid PEM file.")
 
+        # Malware scan (P1-10) — opt-in, same ClamAV sidecar the
+        # protected-app upload path (@inspectFile) uses. A PEM cert/key is
+        # low-value malware bait, but scanning it too costs nothing extra
+        # and keeps "every file upload in this app gets scanned" uniform
+        # once an admin turns the feature on.
+        from app.services.settings_manager import settings_manager as _settings_manager
+
+        scan_settings = _settings_manager.get_malware_scanning()
+        if scan_settings.get("enabled", False):
+            from app.services.malware_scan_service import scan_bytes
+
+            for label, data in (("certificate", cert_data), ("private key", key_data)):
+                allowed, detail = scan_bytes(
+                    data,
+                    timeout_seconds=scan_settings.get("scan_timeout_seconds", 5),
+                    fail_mode=scan_settings.get("fail_mode", "open"),
+                )
+                if not allowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Uploaded {label} failed malware scan: {detail}",
+                    )
+
         with open(cert_path, "wb") as f:
             f.write(cert_data)
         with open(key_path, "wb") as f:
@@ -607,6 +695,12 @@ async def upload_custom_cert(
         ssl_option="custom",
         ssl_cert_path=cert_path,
         ssl_key_path=key_path,
+        # Same pre-existing gap fixed in the Let's Encrypt provisioning
+        # call above — see the comment there.
+        require_auth=app.get("require_auth", 0),
+        auth_check_type=app.get("auth_check_type", "header"),
+        auth_header_name=app.get("auth_header_name", "Authorization"),
+        additional_origins=app.get("additional_origins"),
     )
 
     # Regenerate Nginx config

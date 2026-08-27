@@ -18,6 +18,7 @@ beforeEach(() => {
   api.getMyProfile.mockResolvedValue(BASE_PROFILE);
   api.getMyNotificationPreferences.mockResolvedValue(BASE_PREFS);
   api.getMyMfaStatus.mockResolvedValue(BASE_MFA_STATUS);
+  api.getMySessions.mockResolvedValue([]);
 });
 
 describe('Profile', () => {

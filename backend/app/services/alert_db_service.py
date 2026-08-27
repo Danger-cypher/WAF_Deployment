@@ -33,6 +33,45 @@ class AlertDatabaseService:
         conn.row_factory = sqlite3.Row
         return conn
     
+    def _migrate_alert_channels_syslog_type(self, cursor: sqlite3.Cursor) -> None:
+        """
+        Widens alert_channels.channel_type's CHECK constraint to allow
+        'syslog' (P1-12), for databases created before that channel type
+        existed. `CREATE TABLE IF NOT EXISTS` above is a no-op against an
+        already-existing table, so an existing install's table still has
+        the old CHECK(...'pagerduty')) baked in — SQLite has no ALTER TABLE
+        for modifying a CHECK constraint in place, so this is the standard
+        rebuild-and-copy migration: rename, recreate with the wider
+        constraint, copy every row across, drop the old table. Idempotent
+        — checks sqlite_master's stored SQL text for 'syslog' first, so
+        this is a no-op on every run after the first (or on a fresh
+        install, which already has the wide constraint from CREATE TABLE).
+        """
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_channels'")
+        row = cursor.fetchone()
+        existing_sql = row[0] if row else ""
+        if not existing_sql or "syslog" in existing_sql:
+            return
+
+        logger.info("Migrating alert_channels.channel_type CHECK constraint to allow 'syslog'.")
+        cursor.execute("ALTER TABLE alert_channels RENAME TO alert_channels_old")
+        cursor.execute("""
+            CREATE TABLE alert_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                channel_type TEXT NOT NULL CHECK(channel_type IN ('email', 'slack', 'webhook', 'pagerduty', 'syslog')),
+                config TEXT NOT NULL,
+                enabled BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO alert_channels (id, name, channel_type, config, enabled, created_at, updated_at)
+            SELECT id, name, channel_type, config, enabled, created_at, updated_at FROM alert_channels_old
+        """)
+        cursor.execute("DROP TABLE alert_channels_old")
+
     def _init_database(self):
         """Initialize database schema if not exists"""
         conn = self._get_connection()
@@ -44,14 +83,15 @@ class AlertDatabaseService:
                 CREATE TABLE IF NOT EXISTS alert_channels (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
-                    channel_type TEXT NOT NULL CHECK(channel_type IN ('email', 'slack', 'webhook', 'pagerduty')),
+                    channel_type TEXT NOT NULL CHECK(channel_type IN ('email', 'slack', 'webhook', 'pagerduty', 'syslog')),
                     config TEXT NOT NULL,
                     enabled BOOLEAN DEFAULT 1,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+            self._migrate_alert_channels_syslog_type(cursor)
+
             # Create alert_rules table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS alert_rules (

@@ -646,6 +646,58 @@ def get_waf_event_by_id(log_id: str) -> Optional[Dict]:
         return None
 
 
+# waf_events (ModSecurity's own transaction ID) and ml_events (nginx's
+# $request_id) are independent ID spaces — nothing in this stack threads
+# one into the other (same limitation ml-waf/crs_audit_enrichment.py
+# already documents and works around for its own, offline, SQLite-side
+# join). This is the ClickHouse-side equivalent: both tables' timestamp
+# columns are the same type (DateTime('Asia/Kolkata')), confirmed via
+# DESCRIBE TABLE, so no timezone conversion is needed here — just a
+# bounded window on (client_ip, uri, timestamp). Fuzzy by necessity, not
+# a guaranteed match: two near-simultaneous requests from the same IP to
+# the same URI could rarely mismatch, same accepted tradeoff as the
+# offline job.
+EXPLAIN_MATCH_WINDOW_SECONDS = 3
+
+
+def find_ml_event_near(client_ip: str, uri: str, timestamp: str, window_seconds: int = EXPLAIN_MATCH_WINDOW_SECONDS) -> Optional[Dict]:
+    """Best-effort lookup of the ml_events row (if any) for the same
+    request a waf_events row describes — see the module comment above for
+    why this can't be an exact join. Returns None if ml scoring never ran
+    for this request (e.g. it was blocked natively by ModSecurity before
+    reaching the content-phase /predict call — see ml_decide.lua) or no
+    match falls inside the window."""
+    client = _get_client()
+    if client is None:
+        return None
+    try:
+        result = client.query(
+            """
+            SELECT unique_id, timestamp, crs_score, matched_vars, xgb_prob,
+                   iso_score, threat_score, decision, redis_rep, abuse_score
+            FROM ml_events
+            WHERE remote_addr = %(client_ip)s
+              AND uri = %(uri)s
+              AND timestamp BETWEEN %(ts)s - INTERVAL %(window)s SECOND
+                                AND %(ts)s + INTERVAL %(window)s SECOND
+            ORDER BY abs(dateDiff('second', timestamp, %(ts)s)) ASC
+            LIMIT 1
+            """,
+            parameters={"client_ip": client_ip, "uri": uri, "ts": timestamp, "window": window_seconds},
+        )
+        if not result.result_rows:
+            return None
+        columns = ["unique_id", "timestamp", "crs_score", "matched_vars", "xgb_prob",
+                   "iso_score", "threat_score", "decision", "redis_rep", "abuse_score"]
+        d = dict(zip(columns, result.result_rows[0]))
+        if isinstance(d["timestamp"], datetime):
+            d["timestamp"] = d["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+        return d
+    except Exception as e:
+        logger.error(f"find_ml_event_near failed: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Stats / Aggregation Queries
 # ---------------------------------------------------------------------------
@@ -771,6 +823,35 @@ def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
         ]
     except Exception as e:
         logger.error(f"get_top_ips failed: {e}")
+        raise
+
+
+def get_repeat_offender_ips(threshold: int, hours: int) -> List[str]:
+    """Self-learned IP reputation (P1-7): IPs with at least `threshold`
+    blocked (401/403/406/429) requests in the last `hours` — the
+    server-side HAVING equivalent of get_top_ips above, used by
+    auto_reputation_service's scheduled job rather than a dashboard
+    display, so it returns just the qualifying IP list, not a ranked
+    top-N with country/count for humans to read."""
+    client = _get_client()
+    if client is None:
+        raise RuntimeError("ClickHouse client unavailable")
+    try:
+        result = client.query(
+            f"""
+            SELECT client_ip
+            FROM waf_events
+            WHERE http_code IN {_BLOCKED_HTTP_CODES_SQL}
+              AND client_ip != ''
+              AND timestamp >= now() - INTERVAL %(hours)s HOUR
+            GROUP BY client_ip
+            HAVING count() >= %(threshold)s
+            """,
+            parameters={"hours": hours, "threshold": threshold},
+        )
+        return [row[0] for row in result.result_rows]
+    except Exception as e:
+        logger.error(f"get_repeat_offender_ips failed: {e}")
         raise
 
 

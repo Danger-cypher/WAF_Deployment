@@ -7,6 +7,11 @@ import {
   changeAdminPassword, restartWafEngine, reloadNginxProxy, purgeStatsCache, syncSignatures,
   getHardeningSettings, saveHardeningSettings, getGeoBlockSettings, saveGeoBlockSettings,
   getThreatIntelSettings, saveThreatIntelSettings, syncThreatIntelNow,
+  getAutoReputationSettings, saveAutoReputationSettings, syncAutoReputationNow,
+  getAutoBlockedIps, releaseAutoBlockedIp,
+  getAdminLoginAllowlistSettings, saveAdminLoginAllowlistSettings,
+  getMalwareScanningSettings, saveMalwareScanningSettings, checkMalwareScanningNow,
+  getApiKeys, createApiKey, revokeApiKey,
   getAntiDefacementSettings, saveAntiDefacementSettings,
   getPositiveSecurity, savePositiveSecurity,
   getCustomResponse, saveCustomResponse, getAutoLearning, saveAutoLearning,
@@ -68,6 +73,34 @@ export default function Settings({ onLogout }) {
   const [threatIntelStatus, setThreatIntelStatus] = useState(null);
   const [threatIntelSyncing, setThreatIntelSyncing] = useState(false);
 
+  // Self-Learned IP Reputation (P1-7) — auto-blocks repeat WAF-block
+  // offenders from this deployment's own traffic. Separate Redis key
+  // namespace from both the manual blacklist and the threat-intel feed
+  // above; individual per-IP TTL'd entries, not a CIDR set.
+  const [autoRepEnabled, setAutoRepEnabled] = useState(false);
+  const [autoRepThreshold, setAutoRepThreshold] = useState(50);
+  const [autoRepWindowHours, setAutoRepWindowHours] = useState(1);
+  const [autoRepTtlHours, setAutoRepTtlHours] = useState(24);
+  const [autoRepIntervalMinutes, setAutoRepIntervalMinutes] = useState(15);
+  const [autoRepStatus, setAutoRepStatus] = useState(null);
+  const [autoRepSyncing, setAutoRepSyncing] = useState(false);
+  const [adminAllowlistEnabled, setAdminAllowlistEnabled] = useState(false);
+  const [adminAllowlistNetworks, setAdminAllowlistNetworks] = useState("");
+  const [malwareScanEnabled, setMalwareScanEnabled] = useState(false);
+  const [malwareScanFailMode, setMalwareScanFailMode] = useState('open');
+  const [malwareScanTimeout, setMalwareScanTimeout] = useState(5);
+  const [malwareScanStatus, setMalwareScanStatus] = useState(null);
+  const [malwareScanChecking, setMalwareScanChecking] = useState(false);
+  const [apiKeys, setApiKeys] = useState([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyRole, setNewKeyRole] = useState('analyst');
+  const [newKeyExpiresDays, setNewKeyExpiresDays] = useState('');
+  const [creatingApiKey, setCreatingApiKey] = useState(false);
+  const [revealedApiKey, setRevealedApiKey] = useState(null);
+  const [autoBlockedIps, setAutoBlockedIps] = useState([]);
+  const [autoBlockedIpsLoading, setAutoBlockedIpsLoading] = useState(false);
+
   // Anti-Defacement Settings
   const [defacementEnabled, setDefacementEnabled] = useState(true);
   const [defacementFiles, setDefacementFiles] = useState("");
@@ -112,13 +145,16 @@ export default function Settings({ onLogout }) {
   const fetchSettings = async () => {
     setSettingsLoadError('');
     try {
-        const [gen, logs, waf, hardening, geoBlock, threatIntel, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
+        const [gen, logs, waf, hardening, geoBlock, threatIntel, autoRep, adminLoginAllowlist, malwareScan, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
           getGeneralSettings(),
           getLogSettings(),
           getWafSettings(),
           getHardeningSettings(),
           getGeoBlockSettings(),
           getThreatIntelSettings(),
+          getAutoReputationSettings(),
+          getAdminLoginAllowlistSettings(),
+          getMalwareScanningSettings(),
           getAntiDefacementSettings(),
           getPositiveSecurity(),
           getCustomResponse(),
@@ -158,6 +194,24 @@ export default function Settings({ onLogout }) {
           if (threatIntel.enabled !== undefined) setThreatIntelEnabled(threatIntel.enabled);
           if (threatIntel.sync_interval_hours !== undefined) setThreatIntelIntervalHours(threatIntel.sync_interval_hours);
           setThreatIntelStatus(threatIntel);
+        }
+        if (autoRep) {
+          if (autoRep.enabled !== undefined) setAutoRepEnabled(autoRep.enabled);
+          if (autoRep.block_threshold !== undefined) setAutoRepThreshold(autoRep.block_threshold);
+          if (autoRep.window_hours !== undefined) setAutoRepWindowHours(autoRep.window_hours);
+          if (autoRep.block_ttl_hours !== undefined) setAutoRepTtlHours(autoRep.block_ttl_hours);
+          if (autoRep.sync_interval_minutes !== undefined) setAutoRepIntervalMinutes(autoRep.sync_interval_minutes);
+          setAutoRepStatus(autoRep);
+        }
+        if (adminLoginAllowlist) {
+          if (adminLoginAllowlist.enabled !== undefined) setAdminAllowlistEnabled(adminLoginAllowlist.enabled);
+          if (adminLoginAllowlist.allowed_networks !== undefined) setAdminAllowlistNetworks(adminLoginAllowlist.allowed_networks.join(', '));
+        }
+        if (malwareScan) {
+          if (malwareScan.enabled !== undefined) setMalwareScanEnabled(malwareScan.enabled);
+          if (malwareScan.fail_mode) setMalwareScanFailMode(malwareScan.fail_mode);
+          if (malwareScan.scan_timeout_seconds !== undefined) setMalwareScanTimeout(malwareScan.scan_timeout_seconds);
+          setMalwareScanStatus(malwareScan);
         }
         if (defacement) {
           if (defacement.enabled !== undefined) setDefacementEnabled(defacement.enabled);
@@ -291,6 +345,158 @@ export default function Settings({ onLogout }) {
       showToast("Threat-intel sync failed: " + (err.message || "Unknown error"), "error");
     } finally {
       setThreatIntelSyncing(false);
+    }
+  };
+
+  const handleFetchAutoBlockedIps = async () => {
+    setAutoBlockedIpsLoading(true);
+    try {
+      const ips = await getAutoBlockedIps();
+      setAutoBlockedIps(ips);
+    } catch (err) {
+      showToast("Failed to load auto-blocked IPs: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setAutoBlockedIpsLoading(false);
+    }
+  };
+
+  const handleSaveAutoReputation = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const saved = await saveAutoReputationSettings({
+        enabled: autoRepEnabled,
+        block_threshold: parseInt(autoRepThreshold) || 50,
+        window_hours: parseInt(autoRepWindowHours) || 1,
+        block_ttl_hours: parseInt(autoRepTtlHours) || 24,
+        sync_interval_minutes: parseInt(autoRepIntervalMinutes) || 15,
+      });
+      setAutoRepStatus(saved);
+      showToast("Self-learned IP reputation settings updated.");
+    } catch (err) {
+      showToast("Failed to update auto-reputation settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleSyncAutoReputationNow = async () => {
+    setAutoRepSyncing(true);
+    try {
+      const result = await syncAutoReputationNow();
+      showToast(`Auto-reputation sync complete — ${result.count} IP(s) auto-blocked.`);
+      const refreshed = await getAutoReputationSettings();
+      setAutoRepStatus(refreshed);
+      handleFetchAutoBlockedIps();
+    } catch (err) {
+      showToast("Auto-reputation sync failed: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setAutoRepSyncing(false);
+    }
+  };
+
+  const handleReleaseAutoBlockedIp = async (ip) => {
+    try {
+      await releaseAutoBlockedIp(ip);
+      showToast(`${ip} released from auto-block.`);
+      handleFetchAutoBlockedIps();
+    } catch (err) {
+      showToast(`Failed to release ${ip}: ` + (err.message || "Unknown error"), "error");
+    }
+  };
+
+  const handleSaveAdminLoginAllowlist = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const networks = adminAllowlistNetworks.split(',').map(ip => ip.trim()).filter(ip => ip);
+      const saved = await saveAdminLoginAllowlistSettings({
+        enabled: adminAllowlistEnabled,
+        allowed_networks: networks,
+      });
+      setAdminAllowlistNetworks(saved.allowed_networks.join(', '));
+      showToast("Admin-login IP allowlist updated.");
+    } catch (err) {
+      // Includes the backend's self-lockout guard message when an admin
+      // tries to enable a list that excludes their own current IP.
+      showToast("Failed to update admin-login allowlist: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleSaveMalwareScanning = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const saved = await saveMalwareScanningSettings({
+        enabled: malwareScanEnabled,
+        fail_mode: malwareScanFailMode,
+        scan_timeout_seconds: parseInt(malwareScanTimeout, 10) || 5,
+      });
+      setMalwareScanStatus(saved);
+      showToast("Malware scanning settings updated.");
+    } catch (err) {
+      showToast("Failed to update malware scanning settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleCheckMalwareScanningNow = async () => {
+    setMalwareScanChecking(true);
+    try {
+      const result = await checkMalwareScanningNow();
+      setMalwareScanStatus(result);
+      showToast(
+        result.last_check_status === "ok"
+          ? "ClamAV is reachable."
+          : "ClamAV is unreachable — see status below."
+      );
+    } catch (err) {
+      showToast("Failed to check ClamAV connectivity: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setMalwareScanChecking(false);
+    }
+  };
+
+  const fetchApiKeys = async () => {
+    setApiKeysLoading(true);
+    try {
+      const keys = await getApiKeys();
+      setApiKeys(keys || []);
+    } catch (err) {
+      showToast("Failed to load API keys: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setApiKeysLoading(false);
+    }
+  };
+
+  const handleCreateApiKey = async (e) => {
+    e.preventDefault();
+    setCreatingApiKey(true);
+    try {
+      const payload = { name: newKeyName, role: newKeyRole };
+      if (newKeyExpiresDays) payload.expires_in_days = parseInt(newKeyExpiresDays);
+      const created = await createApiKey(payload);
+      setRevealedApiKey(created);
+      setNewKeyName('');
+      setNewKeyExpiresDays('');
+      fetchApiKeys();
+    } catch (err) {
+      showToast("Failed to create API key: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setCreatingApiKey(false);
+    }
+  };
+
+  const handleRevokeApiKey = async (id) => {
+    try {
+      await revokeApiKey(id);
+      showToast("API key revoked.");
+      fetchApiKeys();
+    } catch (err) {
+      showToast("Failed to revoke API key: " + (err.message || "Unknown error"), "error");
     }
   };
 
@@ -452,6 +658,22 @@ export default function Settings({ onLogout }) {
   useEffect(() => {
     if (activeSettingTab === 'backups') {
       const timer = setTimeout(() => fetchBackups(), 0);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSettingTab]);
+
+  useEffect(() => {
+    if (activeSettingTab === 'security') {
+      const timer = setTimeout(() => fetchApiKeys(), 0);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSettingTab]);
+
+  useEffect(() => {
+    if (activeSettingTab === 'hardening') {
+      const timer = setTimeout(() => handleFetchAutoBlockedIps(), 0);
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1115,6 +1337,251 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+
+                <div className="settings-section-title" style={{ marginTop: '32px' }}>
+                  <ShieldAlert size={20} color="var(--sev-low)" />
+                  Self-Learned IP Reputation
+                </div>
+                <div className="settings-section-subtitle">
+                  Watches this deployment's own traffic (not a third-party feed) for IPs racking up
+                  enough blocked requests to count as proven repeat offenders, and auto-blocks them —
+                  a self-tuning defense that improves with your own traffic. Separate Redis key from
+                  the manual blacklist and the threat-intel feed above; each auto-block self-expires
+                  on its own TTL rather than growing a permanent list, and never overrides your manual
+                  whitelist.
+                </div>
+
+                <form onSubmit={handleSaveAutoReputation} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Auto-Block</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — nobody gets auto-blocked until enabled</span>
+                    </div>
+                    <div className={`toggle-switch ${autoRepEnabled ? 'active' : ''}`} onClick={() => setAutoRepEnabled(!autoRepEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {autoRepEnabled && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingBottom: '10px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Threshold (requests)</label>
+                            <input
+                              type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
+                              value={autoRepThreshold} onChange={(e) => setAutoRepThreshold(e.target.value)}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Window (hours)</label>
+                            <input
+                              type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
+                              value={autoRepWindowHours} onChange={(e) => setAutoRepWindowHours(e.target.value)}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Duration (hours)</label>
+                            <input
+                              type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
+                              value={autoRepTtlHours} onChange={(e) => setAutoRepTtlHours(e.target.value)}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Sync Interval (minutes)</label>
+                            <input
+                              type="number" min="5" className="settings-input" style={{ fontSize: '14px' }}
+                              value={autoRepIntervalMinutes} onChange={(e) => setAutoRepIntervalMinutes(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', paddingBottom: '10px' }}>
+                          An IP with {autoRepThreshold}+ blocked requests in the last {autoRepWindowHours}h gets
+                          auto-blocked for {autoRepTtlHours}h, checked every {autoRepIntervalMinutes} minutes.
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {autoRepStatus && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      Last sync: {autoRepStatus.last_sync_at ? formatLocalTime(autoRepStatus.last_sync_at) : 'never'}
+                      {autoRepStatus.last_sync_status === 'success' && ` — ${autoRepStatus.last_sync_count} IP(s) auto-blocked`}
+                      {autoRepStatus.last_sync_status === 'error' && ` — failed: ${autoRepStatus.last_sync_error || 'unknown error'}`}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '4px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      Apply Auto-Reputation Changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSyncAutoReputationNow}
+                      disabled={autoRepSyncing}
+                      className="action-btn-inspect"
+                    >
+                      {autoRepSyncing ? 'Syncing...' : 'Sync Now'}
+                    </button>
+                  </div>
+                </form>
+
+                <div style={{ marginTop: '20px', maxWidth: '600px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+                    Currently Auto-Blocked ({autoBlockedIps.length})
+                  </div>
+                  {autoBlockedIpsLoading ? (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Loading...</div>
+                  ) : autoBlockedIps.length === 0 ? (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>No IPs currently auto-blocked.</div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                      {autoBlockedIps.map((entry) => (
+                        <tr key={entry.ip} style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                          <td style={{ padding: '6px 0', fontFamily: 'monospace' }}>{entry.ip}</td>
+                          <td style={{ padding: '6px 8px', color: 'var(--text-secondary)' }}>
+                            expires in {Math.max(0, Math.round(entry.ttl_seconds / 60))}m
+                          </td>
+                          <td style={{ padding: '6px 0', textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleReleaseAutoBlockedIp(entry.ip)}
+                              className="action-btn-inspect"
+                              style={{ padding: '3px 10px', fontSize: '11px' }}
+                            >
+                              Release
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody></table>
+                  )}
+                </div>
+
+                <div className="settings-section-title" style={{ marginTop: '32px' }}>
+                  <Lock size={20} color="var(--danger-color)" />
+                  Admin-Login IP Allowlist
+                </div>
+                <div className="settings-section-subtitle">
+                  Restricts the dashboard's own login (and MFA step) to specific IPs/CIDRs — separate
+                  from the Global IP Whitelist/Blacklist above, which gates all site traffic. Even a
+                  stolen valid password can't reach a live session from outside this list. Applies to
+                  every account (admin, analyst, and app-scoped admins) uniformly.
+                </div>
+
+                <div style={{
+                  display: 'flex', gap: '10px', background: 'var(--sev-low-bg)',
+                  border: '1px solid var(--sev-low-border)', borderRadius: '10px',
+                  padding: '14px 16px', marginBottom: '20px', maxWidth: '600px',
+                }}>
+                  <AlertTriangle size={16} color="var(--sev-low)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                    The server refuses to enable this if your own current IP isn't in the list below —
+                    there's no other admin-facing way back in once every login is blocked. Add your
+                    own IP or CIDR first.
+                  </span>
+                </div>
+
+                <form onSubmit={handleSaveAdminLoginAllowlist} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Login Allowlist</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — login works from anywhere until enabled</span>
+                    </div>
+                    <div className={`toggle-switch ${adminAllowlistEnabled ? 'active' : ''}`} onClick={() => setAdminAllowlistEnabled(!adminAllowlistEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Allowed IPs / CIDRs (Comma separated)</label>
+                    <textarea
+                      className="settings-input"
+                      style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
+                      value={adminAllowlistNetworks}
+                      onChange={(e) => setAdminAllowlistNetworks(e.target.value)}
+                      placeholder="203.0.113.5, 10.0.0.0/24"
+                    />
+                  </div>
+
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      {loadingAction ? 'Applying...' : 'Apply Login Allowlist'}
+                    </button>
+                  </div>
+                </form>
+
+                <div className="settings-section-title" style={{ marginTop: '32px' }}>
+                  <ShieldAlert size={20} color="var(--danger-color)" />
+                  Malware Scanning
+                </div>
+                <div className="settings-section-subtitle">
+                  Scans uploaded files with ClamAV before they reach a protected app's backend
+                  (or the dashboard's own certificate upload). A defense-in-depth layer on top of
+                  the WAF's existing rule-based protections, not a replacement for them.
+                </div>
+
+                <form onSubmit={handleSaveMalwareScanning} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Malware Scanning</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no uploads are scanned until enabled</span>
+                    </div>
+                    <div className={`toggle-switch ${malwareScanEnabled ? 'active' : ''}`} onClick={() => setMalwareScanEnabled(!malwareScanEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {malwareScanEnabled && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingBottom: '10px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>If ClamAV is unreachable</label>
+                            <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={malwareScanFailMode} onChange={(e) => setMalwareScanFailMode(e.target.value)}>
+                              <option value="open">Allow uploads through unscanned (recommended)</option>
+                              <option value="closed">Block all uploads until it recovers</option>
+                            </select>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Scan Timeout (seconds)</label>
+                            <input
+                              type="number" min="1" max="60" className="settings-input" style={{ fontSize: '14px' }}
+                              value={malwareScanTimeout} onChange={(e) => setMalwareScanTimeout(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {malwareScanStatus && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      ClamAV status: {' '}
+                      <strong style={{ color: malwareScanStatus.last_check_status === 'ok' ? 'var(--success-color)' : 'var(--danger-color)' }}>
+                        {malwareScanStatus.last_check_status === 'ok' ? 'Reachable'
+                          : malwareScanStatus.last_check_status === 'degraded' ? 'Unreachable'
+                          : 'Never checked'}
+                      </strong>
+                      {malwareScanStatus.last_check_at && ` — last checked ${formatLocalTime(malwareScanStatus.last_check_at)}`}
+                      {malwareScanStatus.last_check_error && ` (${malwareScanStatus.last_check_error})`}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '4px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      Apply Malware Scanning Changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCheckMalwareScanningNow}
+                      disabled={malwareScanChecking}
+                      className="action-btn-inspect"
+                    >
+                      {malwareScanChecking ? 'Checking...' : 'Check Connection Now'}
+                    </button>
+                  </div>
+                </form>
               </motion.div>
             )}
 
@@ -1472,6 +1939,115 @@ export default function Settings({ onLogout }) {
                       </button>
                     </div>
                   </form>
+
+                  {/* API Keys */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                      <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>API Keys</div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                        Machine credentials for scripts, CI/CD, or external tools to call this API without an
+                        interactive login. Each key carries the same admin/analyst role permissions as a
+                        dashboard account, independent of any user's password or session.
+                      </div>
+                    </div>
+
+                    {revealedApiKey && (
+                      <div style={{ background: 'var(--sev-low-bg)', border: '1px solid var(--sev-low-border)', borderRadius: '10px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                          Key "{revealedApiKey.name}" created — copy it now, it will not be shown again.
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <code style={{ flex: 1, fontSize: '12px', background: 'var(--surface-subtle)', padding: '8px 10px', borderRadius: '6px', wordBreak: 'break-all' }}>
+                            {revealedApiKey.api_key}
+                          </code>
+                          <button
+                            type="button"
+                            className="action-btn-inspect"
+                            style={{ padding: '6px 12px', fontSize: '12px', flexShrink: 0 }}
+                            onClick={() => {
+                              navigator.clipboard.writeText(revealedApiKey.api_key);
+                              showToast("Copied to clipboard.");
+                            }}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setRevealedApiKey(null)}
+                          className="action-btn-inspect"
+                          style={{ alignSelf: 'flex-start', padding: '4px 10px', fontSize: '11px' }}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleCreateApiKey} style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '2 1 160px' }}>
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Key Name</label>
+                        <input
+                          type="text" className="settings-input" value={newKeyName}
+                          onChange={(e) => setNewKeyName(e.target.value)}
+                          placeholder="CI/CD pipeline" required
+                        />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 140px' }}>
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Role</label>
+                        <select className="filter-select" style={{ padding: '10px' }} value={newKeyRole} onChange={(e) => setNewKeyRole(e.target.value)}>
+                          <option value="analyst">Analyst (read-only)</option>
+                          <option value="admin">Admin (full access)</option>
+                        </select>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 110px' }}>
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Expires (days)</label>
+                        <input
+                          type="number" min="1" className="settings-input" value={newKeyExpiresDays}
+                          onChange={(e) => setNewKeyExpiresDays(e.target.value)}
+                          placeholder="Never"
+                        />
+                      </div>
+                      <button type="submit" disabled={creatingApiKey} className="modal-btn primary" style={{ padding: '10px 18px', fontSize: '13px' }}>
+                        {creatingApiKey ? 'Creating...' : 'Create Key'}
+                      </button>
+                    </form>
+
+                    {apiKeysLoading ? (
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Loading...</div>
+                    ) : apiKeys.length === 0 ? (
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>No API keys created yet.</div>
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                        {apiKeys.map((k) => (
+                          <tr key={k.id} style={{ borderBottom: '1px solid var(--surface-subtle)', opacity: k.enabled ? 1 : 0.5 }}>
+                            <td style={{ padding: '8px 0' }}>
+                              <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{k.name}</div>
+                              <div style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{k.key_prefix}…</div>
+                            </td>
+                            <td style={{ padding: '8px', color: 'var(--text-secondary)' }}>{k.role}</td>
+                            <td style={{ padding: '8px', color: 'var(--text-secondary)' }}>
+                              {!k.enabled ? 'revoked' : k.expires_at ? `expires ${formatLocalTime(k.expires_at)}` : 'never expires'}
+                            </td>
+                            <td style={{ padding: '8px', color: 'var(--text-secondary)' }}>
+                              {k.last_used_at ? `used ${formatLocalTime(k.last_used_at)}` : 'never used'}
+                            </td>
+                            <td style={{ padding: '8px 0', textAlign: 'right' }}>
+                              {k.enabled && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRevokeApiKey(k.id)}
+                                  className="action-btn-inspect"
+                                  style={{ padding: '3px 10px', fontSize: '11px', color: 'var(--danger-color)' }}
+                                >
+                                  Revoke
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody></table>
+                    )}
+                  </div>
 
                   {/* Danger Zone */}
                   <div style={{ background: 'linear-gradient(135deg, var(--danger-bg) 0%, rgba(0, 0, 0, 0) 100%)', border: '1px solid var(--danger-border)', borderRadius: '16px', padding: '24px' }}>

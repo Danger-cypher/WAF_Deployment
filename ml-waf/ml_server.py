@@ -741,7 +741,7 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
             "Models not yet available."
         )
         response.status_code = status.HTTP_200_OK
-        return {"decision": "allow", "threat_score": 0.0, "passive_mode": True}
+        return {"decision": "allow", "threat_score": 0.0, "passive_mode": True, "sub_scores": None}
 
     # 1. Fetch live Redis behavioral telemetry
     redis_rpm, redis_rep, abuse_score = redis_features.get_redis_metrics(ip)
@@ -763,7 +763,7 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
         logger.error(f"Feature engineering failed: {e}")
         # Default to safe allow, letting ModSecurity's base rules decide
         response.status_code = status.HTTP_200_OK
-        return {"decision": "allow", "threat_score": 0.0}
+        return {"decision": "allow", "threat_score": 0.0, "sub_scores": None}
 
     # 4. Perform machine learning inference
     try:
@@ -774,10 +774,11 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
     except Exception as e:
         logger.error(f"ML Inference failed: {e}")
         response.status_code = status.HTTP_200_OK
-        return {"decision": "allow", "threat_score": 0.0}
+        return {"decision": "allow", "threat_score": 0.0, "sub_scores": None}
 
-    # 5. Calculate normalized combined threat score
-    score = threat_score.calculate_threat_score(payload.crs_score, xgb_prob, iso_score, redis_rep, abuse_score)
+    # 5. Calculate normalized combined threat score + its named components
+    sub_scores = threat_score.calculate_threat_score(payload.crs_score, xgb_prob, iso_score, redis_rep, abuse_score)
+    score = sub_scores["total"]
     decision = threat_score.get_routing_outcome(score, payload.crs_score)
 
     # 6. Update Redis behavioral metrics and IP reputation counters based on outcome
@@ -836,4 +837,4 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
     if iso_score < -0.35:
         background_tasks.add_task(send_backend_alert, "ml_anomaly", event_data)
 
-    return {"decision": decision, "threat_score": score}
+    return {"decision": decision, "threat_score": score, "sub_scores": sub_scores}

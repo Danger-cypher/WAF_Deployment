@@ -379,6 +379,7 @@ export default function AlertsIntegrations({ userRole }) {
                       if (newType === 'email') defaultCfg = { smtp_host: "smtp.office365.com", smtp_port: 587, username: "alerts@yourcompany.com", password: "YOUR_PASSWORD_HERE", from_addr: "alerts@yourcompany.com", to_addrs: ["soc@yourcompany.com"], use_tls: true, use_ssl: false };
                       else if (newType === 'slack') defaultCfg = { webhook_url: "https://hooks.slack.com/services/..." };
                       else if (newType === 'pagerduty') defaultCfg = { integration_key: "YOUR_PAGERDUTY_INTEGRATION_KEY" };
+                      else if (newType === 'syslog') defaultCfg = { host: "siem.yourcompany.internal", port: 514, protocol: "udp", facility: "local0", format: "rfc5424" };
                       else defaultCfg = { url: "https://company.api/events", method: "POST", headers: {} };
                       setChannelForm({ ...channelForm, channel_type: newType, config: defaultCfg });
                     }}>
@@ -386,17 +387,25 @@ export default function AlertsIntegrations({ userRole }) {
                       <option value="email">Email SMTP</option>
                       <option value="pagerduty">PagerDuty</option>
                       <option value="webhook">Generic Webhook</option>
+                      <option value="syslog">Syslog (SIEM export)</option>
                     </select>
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Configuration Payload (JSON)</label>
-                  <textarea 
+                  {channelForm.channel_type === 'syslog' && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Gets every matching event immediately — unlike the other channel types above,
+                      syslog is never throttled/deduped, since a SIEM wants everything for its own
+                      correlation rather than a reduced-noise subset meant for humans.
+                    </div>
+                  )}
+                  <textarea
                     key={channelForm.channel_type}
-                    className="settings-input" 
-                    required 
-                    style={{ minHeight: '140px', fontSize: '11px', fontFamily: 'monospace' }} 
-                    defaultValue={Object.keys(channelForm.config).length > 0 ? JSON.stringify(channelForm.config, null, 2) : (channelForm.channel_type === 'slack' ? '{\n  "webhook_url": "https://hooks.slack.com/services/..."\n}' : channelForm.channel_type === 'email' ? '{\n  "smtp_host": "smtp.office365.com",\n  "smtp_port": 587,\n  "username": "alerts@yourcompany.com",\n  "password": "YOUR_PASSWORD_HERE",\n  "from_addr": "alerts@yourcompany.com",\n  "to_addrs": ["soc@yourcompany.com"],\n  "use_tls": true,\n  "use_ssl": false\n}' : channelForm.channel_type === 'pagerduty' ? '{\n  "integration_key": "YOUR_PAGERDUTY_INTEGRATION_KEY"\n}' : '{\n  "url": "https://company.api/events",\n  "method": "POST",\n  "headers": {}\n}')}
+                    className="settings-input"
+                    required
+                    style={{ minHeight: '140px', fontSize: '11px', fontFamily: 'monospace' }}
+                    defaultValue={Object.keys(channelForm.config).length > 0 ? JSON.stringify(channelForm.config, null, 2) : (channelForm.channel_type === 'slack' ? '{\n  "webhook_url": "https://hooks.slack.com/services/..."\n}' : channelForm.channel_type === 'email' ? '{\n  "smtp_host": "smtp.office365.com",\n  "smtp_port": 587,\n  "username": "alerts@yourcompany.com",\n  "password": "YOUR_PASSWORD_HERE",\n  "from_addr": "alerts@yourcompany.com",\n  "to_addrs": ["soc@yourcompany.com"],\n  "use_tls": true,\n  "use_ssl": false\n}' : channelForm.channel_type === 'pagerduty' ? '{\n  "integration_key": "YOUR_PAGERDUTY_INTEGRATION_KEY"\n}' : channelForm.channel_type === 'syslog' ? '{\n  "host": "siem.yourcompany.internal",\n  "port": 514,\n  "protocol": "udp",\n  "facility": "local0",\n  "format": "rfc5424"\n}' : '{\n  "url": "https://company.api/events",\n  "method": "POST",\n  "headers": {}\n}')}
                     onChange={(e) => {
                       try {
                         const cfg = JSON.parse(e.target.value);

@@ -31,6 +31,31 @@ class LogEntry(BaseModel):
     raw_log: Optional[Dict[str, Any]] = None
 
 
+class MlSubScoreDetail(BaseModel):
+    """ml_events row matched to a waf_events transaction — see
+    clickhouse_service.find_ml_event_near for the fuzzy-join details."""
+    unique_id: str
+    timestamp: str
+    crs_score: float
+    matched_vars: str
+    xgb_prob: float
+    iso_score: float
+    threat_score: float
+    decision: str
+    redis_rep: float
+    abuse_score: float
+
+
+class ExplainBlockResponse(BaseModel):
+    """Unified 'why was this blocked' view (P1-13): the ModSecurity
+    rule-match record plus whatever ML scoring happened for the same
+    request, if any — merged from two ClickHouse tables that don't share
+    a request ID (see find_ml_event_near)."""
+    waf_event: LogEntry
+    ml_event: Optional[MlSubScoreDetail] = None
+    ml_match_note: str
+
+
 class GroupedLogEntry(BaseModel):
     """One collapsed (client_ip, rule_id) group for the Events page's
     Grouped view — see clickhouse_service.query_waf_events_grouped()."""

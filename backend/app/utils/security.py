@@ -6,6 +6,7 @@ import os
 import re
 import html
 import json
+import ipaddress
 from typing import Any, Dict, List, Union, Optional
 from datetime import datetime, timezone
 from pathlib import Path
@@ -192,6 +193,34 @@ def get_client_ip(request: Request) -> str:
     return "unknown"
 
 
+def is_ip_in_networks(client_ip: str, networks: List[str]) -> bool:
+    """
+    True if client_ip matches any entry in networks — each entry may be a
+    plain IP ("203.0.113.5") or a CIDR ("10.0.0.0/24"); ip_network() parses
+    a bare IP as a /32 (or /128), so no separate exact-match branch is
+    needed. Used by the admin-login IP allowlist (P1-8 Part A).
+
+    A malformed client_ip or a malformed saved entry is skipped rather than
+    raised — one bad allowlist entry must not take down login for everyone
+    else, and this always fails toward "not allowed" rather than raising
+    into a 500 that could look like an outage.
+    """
+    try:
+        ip_obj = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    for entry in networks:
+        entry = (entry or "").strip()
+        if not entry:
+            continue
+        try:
+            if ip_obj in ipaddress.ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 class SecurityAuditLogger:
     """
     Security audit logger for tracking authentication events,
@@ -287,6 +316,18 @@ class SecurityAuditLogger:
             }
         )
     
+    def log_ip_blocked_login(self, client_ip: str, endpoint: str):
+        """Log a login attempt rejected before any credential check by the
+        admin-login IP allowlist (P1-8 Part A)."""
+        self._log(
+            level="WARNING",
+            event_type="IP_ALLOWLIST_BLOCKED",
+            details={
+                "client_ip": client_ip,
+                "endpoint": endpoint,
+            }
+        )
+
     def log_csrf_failure(
         self,
         client_ip: str,

@@ -295,6 +295,97 @@ class PagerDutyNotificationChannel(BaseNotificationChannel):
             return False, str(e)
 
 
+class SyslogNotificationChannel(BaseNotificationChannel):
+    """
+    Sends alerts to an external syslog collector (RFC 5424 or RFC 3164) —
+    the outbound SIEM export channel. Deliberately not given the same
+    outbound-host restriction Slack/webhook get above: those integrate
+    with public third-party services with no legitimate reason to point
+    at an internal address, but a syslog collector is *supposed* to live
+    on the customer's own internal network — that's the entire point of
+    "export to your SIEM". There's also no classic SSRF read-back risk
+    here (UDP is fire-and-forget; TCP is a one-way write, no response is
+    ever parsed or exposed back to the caller), unlike a webhook whose
+    response could otherwise be reflected somewhere.
+
+    Deliberately dispatched unconditionally by alert_manager.trigger_event
+    (bypassing the throttle/dedup logic every other channel type goes
+    through) — a SIEM wants every matching event for its own correlation,
+    not a deduped subset meant to avoid human alert fatigue.
+    """
+
+    _FACILITY_CODES = {
+        "kern": 0, "user": 1, "mail": 2, "daemon": 3, "auth": 4, "syslog": 5,
+        "lpr": 6, "news": 7, "uucp": 8, "cron": 9, "authpriv": 10, "ftp": 11,
+        "local0": 16, "local1": 17, "local2": 18, "local3": 19,
+        "local4": 20, "local5": 21, "local6": 22, "local7": 23,
+    }
+    # RFC 5424 severity numbers (lower = more severe) mapped from this
+    # codebase's own alert severities ("critical"/"high"/"medium"/"low"/"info").
+    _SEVERITY_CODES = {
+        "critical": 2,  # Critical
+        "high": 3,      # Error
+        "medium": 4,    # Warning
+        "low": 5,       # Notice
+        "info": 6,      # Informational
+    }
+
+    def send(self, config: Dict[str, Any], severity: str, event_type: str, message: str, event_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        try:
+            host = config.get("host")
+            port = int(config.get("port", 514))
+            protocol = config.get("protocol", "udp")
+            facility_name = config.get("facility", "local0")
+            fmt = config.get("format", "rfc5424")
+
+            if not host:
+                return False, "Missing syslog host."
+
+            facility_code = self._FACILITY_CODES.get(facility_name, 16)
+            severity_code = self._SEVERITY_CODES.get(severity.lower(), 6)
+            pri = facility_code * 8 + severity_code
+
+            # event_data can contain non-JSON-native values (e.g. datetime)
+            # depending on the caller — default=str keeps this from ever
+            # raising and silently dropping an alert over a formatting issue.
+            full_msg = f"{message} | {json.dumps(event_data, default=str)}"
+
+            if fmt == "rfc3164":
+                timestamp = dt_module.datetime.utcnow().strftime("%b %d %H:%M:%S")
+                packet = f"<{pri}>{timestamp} cybersentinel-waf cybersentinel[{event_type}]: {full_msg}"
+            else:
+                timestamp = dt_module.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                # RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MSG
+                # PROCID and STRUCTURED-DATA are NILVALUE ("-") — kept
+                # simple, everything goes in MSG instead of SD-PARAMs.
+                packet = (
+                    f"<{pri}>1 {timestamp} cybersentinel-waf cybersentinel - "
+                    f"{event_type} - {full_msg}"
+                )
+
+            packet_bytes = packet.encode("utf-8", errors="replace")
+
+            if protocol == "tcp":
+                # RFC 6587 octet-counting framing, so a TCP collector can
+                # split messages on the stream without depending on
+                # newlines (or their absence) inside the message body.
+                framed = f"{len(packet_bytes)} ".encode("utf-8") + packet_bytes
+                with socket.create_connection((host, port), timeout=5) as sock:
+                    sock.sendall(framed)
+            else:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    sock.settimeout(5)
+                    sock.sendto(packet_bytes, (host, port))
+                finally:
+                    sock.close()
+
+            return True, None
+        except Exception as e:
+            logger.error(f"Syslog notification dispatch failed: {e}")
+            return False, str(e)
+
+
 class NotificationDispatcher:
     """Manages routing of alert notifications to specific channels"""
 
@@ -304,6 +395,7 @@ class NotificationDispatcher:
             "slack": SlackNotificationChannel(),
             "webhook": WebhookNotificationChannel(),
             "pagerduty": PagerDutyNotificationChannel(),
+            "syslog": SyslogNotificationChannel(),
         }
         self.executor = ThreadPoolExecutor(max_workers=5)
 
