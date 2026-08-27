@@ -37,7 +37,14 @@ DEFAULT_CANARY_SETTINGS = {
 CANARY_ROLLOUT_CHECK_INTERVAL_SECONDS = 6 * 3600
 
 # Paths
-RULES_DIR = "/etc/nginx/modsec/coreruleset/rules"
+# CRS_RULES_DIR override exists for CI/bare-checkout test runs: in a real
+# deployment this is always /etc/nginx/... (the container's bind-mounted
+# path — see docker-compose.yml), but a GitHub Actions runner has no such
+# path at all, only whatever actions/checkout put at $GITHUB_WORKSPACE.
+# Without this, test_rule_canary.py's real-CRS-rule-id tests silently fall
+# back to the small hardcoded sample set (see _parse_crs_rules below) and
+# fail on "Rule ID ... does not exist in the active OWASP CRS dataset."
+RULES_DIR = os.environ.get("CRS_RULES_DIR", "/etc/nginx/modsec/coreruleset/rules")
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "rule_states.json"
 )
