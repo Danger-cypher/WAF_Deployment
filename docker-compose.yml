@@ -56,6 +56,9 @@ services:
       - ./scripts:/app/scripts:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
+      # SIEM SSO — RS256/JWKS phase: the SIEM's edge cert, trusted for the
+      # JWKS fetch only (see SIEM_SSO_CA_CERT / services/sso.py).
+      - ./configs/certs:/app/certs:ro
     expose:
       - "8000"
     environment:
@@ -72,6 +75,7 @@ services:
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
       WAF_SSO_SECRET: ${WAF_SSO_SECRET:-}
       SIEM_JWKS_URL: ${SIEM_JWKS_URL:-}
+      SIEM_SSO_CA_CERT: ${SIEM_SSO_CA_CERT:-}
       INTERNAL_ALERT_TRIGGER_KEY: ${INTERNAL_ALERT_TRIGGER_KEY}
       CLICKHOUSE_HOST: waf-clickhouse
       CLICKHOUSE_PORT: 8123
