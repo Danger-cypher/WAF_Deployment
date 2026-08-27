@@ -8,6 +8,7 @@ it (services/sso.py), JIT-provision or update the local account, and drop
 the analyst straight into a normal session — no separate password, no
 MFA prompt, since the SIEM has already authenticated them.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -54,7 +55,17 @@ async def sso_exchange(payload: SsoExchangeRequest, request: Request, response: 
         )
 
     try:
-        claims = verify_sso_exchange_token(payload.token)
+        # verify_sso_exchange_token is synchronous, and for an RS256 token
+        # it does a blocking network fetch to the SIEM's JWKS endpoint
+        # (services/sso.py — PyJWKClient uses urllib, not an async client).
+        # This backend runs as a single uvicorn worker/event loop (no
+        # --workers flag), so calling it directly here would stall every
+        # other request — including unrelated ones — for up to the JWKS
+        # client's 5s timeout on every exchange attempt. Worse, this
+        # endpoint is unauthenticated by design, so that would be a live
+        # DoS vector: anyone could freeze the whole backend by POSTing a
+        # garbage RS256-header token repeatedly. Run it off the event loop.
+        claims = await asyncio.to_thread(verify_sso_exchange_token, payload.token)
     except SsoTokenError as e:
         logger.warning(f"Rejected SSO exchange token from {client_ip}: {e}")
         security_audit_logger.log_auth_attempt(
