@@ -20,8 +20,10 @@ router = APIRouter()
 def _origin_allowed(origin: str) -> bool:
     """
     Defense-in-depth check for the WS handshake's Origin header. The cookie
-    itself is samesite="strict" so a modern browser won't attach it
-    cross-site anyway — this exists as a second, independent layer for
+    itself is samesite="lax" (relaxed from "strict" for the SSO redirect
+    landing — see routes/auth.py), and a WebSocket handshake isn't a
+    top-level navigation either way, so a modern browser won't attach it
+    cross-site regardless — this exists as a second, independent layer for
     older/non-compliant clients rather than relying on the cookie alone.
     """
     if not origin:

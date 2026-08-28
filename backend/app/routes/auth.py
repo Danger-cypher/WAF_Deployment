@@ -78,7 +78,7 @@ def _issue_session(request: Request, response: Response, user: dict) -> LoginRes
         value=access_token,
         httponly=True,
         secure=is_secure,
-        samesite="strict",
+        samesite="lax",
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
     response.set_cookie(
@@ -86,11 +86,11 @@ def _issue_session(request: Request, response: Response, user: dict) -> LoginRes
         value=csrf_token,
         httponly=False,
         secure=is_secure,
-        samesite="strict",
+        samesite="lax",
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
     # Clear any leftover MFA-pending cookie now that the real session is live.
-    response.delete_cookie(key=MFA_PENDING_COOKIE, secure=is_secure, samesite="strict")
+    response.delete_cookie(key=MFA_PENDING_COOKIE, secure=is_secure, samesite="lax")
 
     return LoginResponse(message="Login successful", role=role)
 
@@ -199,7 +199,7 @@ async def login_for_access_token(
             value=pending_token,
             httponly=True,
             secure=is_secure,
-            samesite="strict",
+            samesite="lax",
             max_age=MFA_PENDING_MINUTES * 60,
         )
         return LoginResponse(message="MFA code required", mfa_required=True)
@@ -293,8 +293,8 @@ async def logout(request: Request, response: Response):
     except Exception as e:
         logger.warning(f"Failed to revoke session during logout: {e}")
 
-    response.delete_cookie(key="waf_session_v3", secure=is_secure, samesite="strict")
-    response.delete_cookie(key="XSRF-TOKEN-V3", secure=is_secure, samesite="strict")
+    response.delete_cookie(key="waf_session_v3", secure=is_secure, samesite="lax")
+    response.delete_cookie(key="XSRF-TOKEN-V3", secure=is_secure, samesite="lax")
     return {"message": "Logged out successfully"}
 
 @router.get("/me", response_model=TokenData)
