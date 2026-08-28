@@ -360,8 +360,19 @@ async def add_security_headers(request, call_next):
     try:
         hardening = _get_hardening_cached()
 
-        # 1. HSTS Header
-        if hardening.get("hsts_enabled", True):
+        # 1. HSTS Header — only over an actually-HTTPS request. HSTS is
+        # host-scoped, not port-scoped: sending it on a plain-HTTP
+        # response (e.g. this backend also serves the HTTP-only :3020
+        # admin dashboard used for SIEM SSO) gets it cached by the
+        # browser for the whole host from that response alone, then
+        # every subsequent request to *any* port on this host — including
+        # the HTTP-only one — gets silently force-upgraded to HTTPS and
+        # hangs. Same bug class as nginx.conf's global add_header, fixed
+        # separately there; this is this app's own independent source of
+        # the same header and needs the same scheme check. Mirrors the
+        # is_secure pattern in routes/auth.py's _issue_session().
+        is_https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+        if is_https and hardening.get("hsts_enabled", True):
             max_age = hardening.get("hsts_max_age", 31536000)
             response.headers["Strict-Transport-Security"] = (
                 f"max-age={max_age}; includeSubDomains; preload"
