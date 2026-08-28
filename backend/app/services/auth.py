@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import jwt
@@ -7,6 +8,8 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
 from app.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # Password hashing is done directly with bcrypt
 # OAuth2 scheme for dependency (kept for Swagger UI docs)
@@ -58,6 +61,11 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
     HTTP dependency below and the WebSocket handshake (which has no
     Request object to hang a FastAPI Depends() off of)."""
     if not token:
+        # No cookie and no Bearer header at all — logged at debug, not
+        # warning: this is the normal, expected state for an anonymous
+        # visitor hitting a protected route (e.g. every page load before
+        # login), not evidence of anything going wrong.
+        logger.debug("[Auth] No session token present on request")
         return None
 
     try:
@@ -69,9 +77,11 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
         token_version = payload.get("tv")
         session_id: Optional[str] = payload.get("sid")
         if username is None or role is None:
+            logger.warning("[Auth] Token rejected: missing sub/role claim")
             return None
         token_data = TokenData(username=username, role=role, session_id=session_id)
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
+        logger.warning(f"[Auth] Token rejected: {e}")
         return None
 
     # Verify the account still exists, hasn't been disabled, and its
@@ -82,7 +92,17 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
     from app.services.user_service import user_service
 
     user = user_service.get_by_username(token_data.username)
-    if user is None or not user["enabled"] or user["session_version"] != token_version:
+    if user is None:
+        logger.warning(f"[Auth] Token rejected: user '{token_data.username}' no longer exists")
+        return None
+    if not user["enabled"]:
+        logger.warning(f"[Auth] Token rejected: user '{token_data.username}' is disabled")
+        return None
+    if user["session_version"] != token_version:
+        logger.warning(
+            f"[Auth] Token rejected: session_version mismatch for '{token_data.username}' "
+            f"(token has {token_version}, DB has {user['session_version']})"
+        )
         return None
 
     # Source the role from the live DB record rather than the (now
@@ -101,6 +121,10 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
         from app.services.session_service import is_session_active
 
         if not is_session_active(token_data.username, token_data.session_id):
+            logger.warning(
+                f"[Auth] Token rejected: session '{token_data.session_id}' for "
+                f"'{token_data.username}' no longer active (revoked or expired record)"
+            )
             return None
 
     return token_data
