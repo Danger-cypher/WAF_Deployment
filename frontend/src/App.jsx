@@ -108,12 +108,29 @@ function App() {
       setActiveTabState(tab);
     };
     window.addEventListener('popstate', onPopState);
-    // Replace the current history entry with proper state so back works from page 1
-    window.history.replaceState(
-      { tab: activeTab },
-      '',
-      TAB_ROUTES[activeTab] || '/dashboard'
-    );
+
+    // SsoCallback owns the URL on this route until its own token exchange
+    // finishes (see the matching guard on the bootstrap effect below) —
+    // this effect runs first (declared earlier in this component, and
+    // React fires a component's own effects in declaration order), so an
+    // unconditional replaceState here rewrote the URL to /dashboard
+    // *before* that other effect ever got to check the pathname itself,
+    // silently defeating its guard. That let its getCurrentUser()
+    // bootstrap race the in-flight SSO exchange, 401, and force a logout
+    // loop before the exchange could complete. Skip only the replaceState
+    // — the popstate listener itself is harmless to register regardless,
+    // and skipping it too would leave the browser back/forward buttons
+    // silently broken for the rest of an SSO-originated session (this
+    // effect has an empty deps array, so it never runs again to fix that
+    // once the app has genuinely navigated to /dashboard).
+    if (window.location.pathname !== '/auth/sso') {
+      // Replace the current history entry with proper state so back works from page 1
+      window.history.replaceState(
+        { tab: activeTab },
+        '',
+        TAB_ROUTES[activeTab] || '/dashboard'
+      );
+    }
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
