@@ -22,7 +22,7 @@ def _mint(
     name="Jane Analyst",
     iss="cybersentinel-siem",
     aud="cybersentinel-waf",
-    purpose="sso-exchange",
+    purpose="sso_exchange",
     secret=TEST_SECRET,
     ttl=120,
     nbf_skew=-60,

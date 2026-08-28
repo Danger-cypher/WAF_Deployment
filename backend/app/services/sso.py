@@ -28,7 +28,10 @@ from app.utils.redis_client import get_global_redis_client
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_PURPOSE = "sso-exchange"
+# Underscore, not hyphen — matches what the SIEM's /waf/sso/login actually
+# mints, confirmed against a real decoded token. The original onboarding
+# doc said "sso-exchange" (hyphen); that was wrong, not this.
+REQUIRED_PURPOSE = "sso_exchange"
 
 # In-process fallback for single-use nonce tracking when Redis is
 # unavailable — mirrors utils/rate_limiter.py's fallback approach. This
@@ -172,7 +175,7 @@ def verify_sso_exchange_token(token: str) -> Dict[str, Any]:
         raise SsoTokenError(f"Token verification failed: {e}")
 
     if claims.get("purpose") != REQUIRED_PURPOSE:
-        raise SsoTokenError("Token purpose is not sso-exchange")
+        raise SsoTokenError("Token purpose is not sso_exchange")
 
     nonce = claims.get("nonce")
     if not nonce or not isinstance(nonce, str):
