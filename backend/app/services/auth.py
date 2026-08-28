@@ -81,7 +81,16 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
             return None
         token_data = TokenData(username=username, role=role, session_id=session_id)
     except jwt.PyJWTError as e:
-        logger.warning(f"[Auth] Token rejected: {e}")
+        # A safe preview, not the full token — length and dot-count reveal
+        # whether this is even JWT-shaped (3 segments) or something else
+        # entirely ended up in this cookie; the first few chars distinguish
+        # "looks like a JWT but is malformed" (starts "eyJ", our base64url
+        # JSON header) from "isn't a JWT at all".
+        preview = token[:40] if isinstance(token, str) else repr(token)[:40]
+        logger.warning(
+            f"[Auth] Token rejected: {e} "
+            f"(len={len(token)}, dots={token.count('.')}, preview={preview!r})"
+        )
         return None
 
     # Verify the account still exists, hasn't been disabled, and its
