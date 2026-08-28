@@ -1080,6 +1080,15 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                 "    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;",
                 "    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;",
                 "",
+                # Only ever emitted inside a `listen 443 ssl` block — this
+                # generator never puts it on a plain-HTTP server{}, unlike
+                # the bug fixed globally in nginx.conf/main.py (see those
+                # for why HSTS on a plain-HTTP response is dangerous: it's
+                # host-scoped, not port-scoped, and poisons every other
+                # port on this host too, including the SSO-critical :3020
+                # admin dashboard).
+                "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;",
+                "",
                 "    location / {",
                 "        default_type text/html;",
                 "        return 404 \"<html><head><title>No Protected Applications</title></head><body style='font-family:sans-serif; text-align:center; padding:50px; background:#0b0f19; color:#f3f4f6;'><h2>CyberSentinel WAF</h2><p style='color:#9ca3af;'>No active protected applications are currently routed through this gateway.</p></body></html>\";",
@@ -1179,6 +1188,11 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     f"    ssl_certificate     {active_cert};",
                     f"    ssl_certificate_key {active_key};",
                     "",
+                    # Only ever emitted inside a `listen 443 ssl` block —
+                    # see the fallback block above for why this must never
+                    # appear on a plain-HTTP server{}.
+                    "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;",
+                    "",
                     "    resolver 127.0.0.11 valid=30s ipv6=off;",
                     "",
                     # Scoped to this protected app's own server block only —
@@ -1274,6 +1288,10 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     "",
                     "    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;",
                     "    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;",
+                    "",
+                    # Only ever emitted inside a `listen 443 ssl` block —
+                    # see the no-active-apps fallback above for why.
+                    "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;",
                     "",
                     "    location / {",
                     "        return 444;",
