@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check, ChevronUp, ChevronDown } from 'lucide-react';
+import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check, ChevronUp, ChevronDown, Ban } from 'lucide-react';
 import { formatLocalTime } from '../utils/helpers';
 import HighlightedJson from './JsonViewer';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
@@ -14,7 +14,7 @@ import { getLogExplain } from '../services/api';
  * it, and Up/Down lets an analyst step through a triage queue without
  * closing and reopening for every row.
  */
-export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive, onNavigate, canGoPrev, canGoNext }) {
+export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive, onCreateRule, onNavigate, canGoPrev, canGoNext }) {
   const [activeTab, setActiveTab] = useState('details');
   const [copied, setCopied] = useState(false);
   const [showReqHeaders, setShowReqHeaders] = useState(false);
@@ -176,6 +176,17 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
               >
                 <ShieldCheck size={13} color="var(--success-color)" />
                 <span>Mark as FP</span>
+              </button>
+            )}
+            {onCreateRule && (
+              <button
+                className="pagination-btn"
+                onClick={() => onCreateRule(log)}
+                title="Jump to Virtual Patching with this event's IP/URI pre-filled"
+                style={{ padding: '3px 10px', fontSize: '11px', borderColor: 'var(--danger-border)', background: 'var(--danger-bg)', color: 'var(--danger-color)' }}
+              >
+                <Ban size={13} color="var(--danger-color)" />
+                <span>Create Rule</span>
               </button>
             )}
             <button className="log-drawer-close" onClick={onClose} aria-label="Close log details">

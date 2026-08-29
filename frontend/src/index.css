@@ -308,6 +308,32 @@ textarea:focus-visible,
   border-radius: var(--radius-sm);
 }
 
+/* Toggle switches render as real <button role="switch"> elements now (were
+   plain <div onClick>s — unreachable by keyboard, silent to screen readers).
+   The .toggle-switch rules elsewhere already set every property that
+   actually draws the track/knob look; this only strips the native OS
+   button chrome a bare <button> can otherwise pick up (most visible in
+   Safari), so converting the element never changes how it renders. */
+button.toggle-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+}
+
+/* Respect the OS-level "reduce motion" preference across the whole app —
+   Framer Motion honors this automatically via useReducedMotion internally
+   for its own transitions, but the many plain CSS transitions/animations
+   throughout this stylesheet (toggle knobs, hover states, spinners, etc.)
+   don't get that for free and need this explicit override. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ─── Scrollbar ───────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-primary); }
@@ -1805,6 +1831,19 @@ body::before {
   width: 280px;
   flex-shrink: 0;
   gap: 4px;
+}
+/* Groups the 11 settings tabs into domains (Engine / Hardening / Detection
+   Tuning / Access & Audit) — same typography as the main app sidebar's
+   .sidebar-section-label, purely a visual label with no click behavior. */
+.settings-sidebar-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 14px 20px 6px;
+  margin-top: 8px;
+  user-select: none;
 }
 .settings-tab-btn {
   display: flex;

@@ -499,13 +499,17 @@ export default function DdosBotMitigation() {
                 advancedRules.map((rule) => (
                   <tr key={rule.id}>
                     <td>
-                      <div
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={rule.enabled}
+                        aria-label={`Rate limit rule "${rule.name}" ${rule.enabled ? 'enabled' : 'disabled'}`}
                         className={`toggle-switch ${rule.enabled ? 'active' : ''}`}
                         onClick={() => handleToggleRule(rule.id)}
                         style={{ transform: 'scale(0.85)', margin: 0 }}
                       >
                         <div className="toggle-knob"></div>
-                      </div>
+                      </button>
                     </td>
                     <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{rule.name}</td>
                     <td style={{ color: 'var(--sev-low)', fontWeight: 600 }}>{rule.parameter_type}</td>

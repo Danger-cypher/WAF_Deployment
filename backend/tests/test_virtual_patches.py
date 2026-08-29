@@ -312,7 +312,11 @@ def test_hits_route_returns_canary_report_shape(isolated_client, make_user, monk
 
     r = client.get(f"/virtual-patches/{KNOWN_CVE}/hits")
     assert r.status_code == 200
-    assert r.json() == {"total_matches": 5, "sole_match_count": 2, "co_matched_count": 3}
+    body = r.json()
+    assert body["total_matches"] == 5
+    assert body["sole_match_count"] == 2
+    assert body["co_matched_count"] == 3
+    assert "daily_breakdown" in body
     # The rule id used against ClickHouse is this CVE's own deterministic id.
     assert fake.params[0] == {"rule_id": str(virtual_patch_service.rule_id_for(KNOWN_CVE))}
 

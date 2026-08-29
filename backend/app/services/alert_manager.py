@@ -209,6 +209,7 @@ class AlertManager:
                     rule_id=rule_id, rule_name=rule_name, event_type=event_type, severity=severity,
                     channels_notified=always_names, event_data=event_data, message=message,
                     status=always_status, error_message=always_err,
+                    channel_results=always_results,
                 )
                 await self._broadcast_new_alert(
                     always_id, rule_id, rule_name, event_type, severity, always_names,
@@ -287,7 +288,8 @@ class AlertManager:
                 event_data=event_data,
                 message=message,
                 status=status_str,
-                error_message=err_msg
+                error_message=err_msg,
+                channel_results=dispatch_results,
             )
             await self._broadcast_new_alert(
                 new_id, rule_id, rule_name, event_type, severity, throttle_gated_names,

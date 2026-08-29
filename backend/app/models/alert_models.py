@@ -259,6 +259,12 @@ class AlertHistoryCreate(BaseModel):
     message: str
     status: AlertStatus
     error_message: Optional[str] = None
+    # Per-channel {channel_name, success, error} — the actual dispatch
+    # result AlertDispatcher.dispatch() already computes per channel,
+    # previously discarded (only the collapsed channels_notified list +
+    # one concatenated error string were kept). Backs the per-channel
+    # delivery-health rollup below.
+    channel_results: List[Dict[str, Any]] = []
 
 
 class AlertHistoryAcknowledge(BaseModel):
@@ -281,9 +287,26 @@ class AlertHistory(BaseModel):
     acknowledged_by: Optional[str] = None
     acknowledged_at: Optional[datetime] = None
     created_at: datetime
-    
+    channel_results: List[Dict[str, Any]] = []  # absent on rows written before this field existed
+
     class Config:
         orm_mode = True
+
+
+# ============================================================================
+# Channel Delivery Health Models
+# ============================================================================
+
+class ChannelDeliveryHealth(BaseModel):
+    """Rolling delivery health for one notification channel, derived from
+    its most recent dispatch attempts (see AlertDatabaseService.
+    get_channel_delivery_health)."""
+    channel_name: str
+    attempts: int
+    successes: int
+    last_attempt_at: Optional[str] = None
+    last_success: Optional[bool] = None
+    last_error: Optional[str] = None
 
 
 # ============================================================================

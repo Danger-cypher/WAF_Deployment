@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Activity, AlertTriangle as AlertTriangleIcon, Code, Database, Globe, Lock, ShieldAlert,
+  CheckCircle2, XCircle, AlertCircle,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
@@ -9,7 +10,7 @@ import {
 } from 'recharts';
 import {
   getStats, getTimeline, getAttackTypes, getTopIPs, getTopRules, getSeverityDistribution,
-  getGeneralSettings,
+  getGeneralSettings, getHealth, getBackgroundTasksHealth,
 } from '../services/api';
 import { NoTrafficEmptyState, FetchErrorState } from '../components/EmptyStates';
 
@@ -101,7 +102,23 @@ function CustomTooltip({ active, payload, label }) {
   );
 }
 
-export default function ThreatAnalytics() {
+// One chip in the config-health strip. `neutral` is for a feature that's
+// simply off by design (e.g. ML engine not configured) — status by icon
+// shape as well as color, not color alone (an amber dot reads the same to
+// a colorblind viewer as a green one without the shape difference).
+function HealthChip({ label, ok, neutral = false, okLabel = 'Healthy', downLabel = 'Unreachable' }) {
+  const Icon = neutral ? AlertCircle : ok ? CheckCircle2 : XCircle;
+  const color = neutral ? 'var(--text-muted)' : ok ? 'var(--success-color)' : 'var(--danger-color)';
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+      <Icon size={13} color={color} />
+      <span>{label}:</span>
+      <span style={{ fontWeight: 600, color }}>{neutral ? downLabel : ok ? okLabel : downLabel}</span>
+    </span>
+  );
+}
+
+export default function ThreatAnalytics({ userRole }) {
   const [stats, setStats] = useState({
     total_requests: 0,
     total_blocked: 0,
@@ -133,6 +150,16 @@ export default function ThreatAnalytics() {
   const [fetchError, setFetchError] = useState(null);
   const [refreshInterval, setRefreshInterval] = useState(3000);
   const [liveUpdates, setLiveUpdates] = useState(true);
+
+  // Config-health rollup — connectivity + background-task status, already
+  // computed by the backend (health.py / heartbeat_registry.py) but never
+  // surfaced anywhere in the UI before. Polled far less often than traffic
+  // stats (service up/down doesn't change second-to-second) and kept
+  // separate from that polling cycle so a slow health check never delays
+  // the KPI cards.
+  const [health, setHealth] = useState(null);
+  const [backgroundHealth, setBackgroundHealth] = useState(null);
+  const isAdmin = userRole === 'admin';
 
   const [showFlash, setShowFlash] = useState(false);
   const [activeVectorIndex, setActiveVectorIndex] = useState(null);
@@ -246,6 +273,21 @@ export default function ThreatAnalytics() {
     return () => clearTimeout(timer);
   }, [refreshInterval, liveUpdates]);
 
+  useEffect(() => {
+    const fetchHealth = () => {
+      getHealth().then(setHealth).catch(err => console.error("Failed to fetch health status", err));
+      if (isAdmin) {
+        getBackgroundTasksHealth().then(setBackgroundHealth).catch(err => console.error("Failed to fetch background task health", err));
+      }
+    };
+    const timer = setTimeout(fetchHealth, 0);
+    const interval = setInterval(fetchHealth, 30000);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
+  }, [isAdmin]);
+
 
   // Previously this returned a full-page skeleton and rendered NOTHING else
   // until every section had data. Now the real grid below renders
@@ -300,6 +342,34 @@ export default function ThreatAnalytics() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
     >
+      {/* Config-health rollup — a single compact strip, not another wall of
+          cards (six KPI cards below already cover traffic; this is purely
+          "is the platform itself healthy"). Only rendered once the first
+          health poll has come back, so it never flashes a false "down"
+          before data exists. */}
+      {health && (
+        <div className="glass-panel" style={{
+          gridColumn: '1 / -1', padding: '10px 18px', display: 'flex',
+          flexWrap: 'wrap', alignItems: 'center', gap: '18px', fontSize: '12px',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.05em' }}>
+            System Health
+          </span>
+          <HealthChip label="Redis" ok={health.redis_connected} />
+          <HealthChip label="ClickHouse" ok={health.clickhouse_connected} />
+          <HealthChip label="Database" ok={health.db_initialized} />
+          <HealthChip label="ML Engine" ok={health.ml_enabled} okLabel="Enabled" downLabel="Disabled" neutral={!health.ml_enabled} />
+          {isAdmin && backgroundHealth && (
+            <HealthChip
+              label="Background Tasks"
+              ok={backgroundHealth.all_healthy}
+              okLabel="All on schedule"
+              downLabel={`${Object.values(backgroundHealth.tasks || {}).filter(t => t.stale).length} stale`}
+            />
+          )}
+        </div>
+      )}
+
       {/* Row 1: 6 KPI Stat Cards */}
 
       {/* Total Requests */}

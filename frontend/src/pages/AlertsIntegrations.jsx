@@ -4,6 +4,7 @@ import { Activity, Lock, Database, Code, Server, AlertTriangle, RotateCw } from 
 import {
   getAlertChannels, createAlertChannel, updateAlertChannel, deleteAlertChannel,
   testAlertChannel, getAlertRules, createAlertRule, updateAlertRule, deleteAlertRule, getHealth,
+  getAlertChannelsHealth,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
@@ -15,6 +16,10 @@ export default function AlertsIntegrations({ userRole }) {
   const { toast, showToast } = useToast();
   const confirm = useConfirm();
   const [healthData, setHealthData] = useState(null);
+  // Per-channel delivery health (attempts/successes/last outcome), keyed by
+  // channel name — separate from healthData above, which is the unrelated
+  // system-level /health (Redis/ClickHouse/DB).
+  const [channelHealth, setChannelHealth] = useState({});
   const [activeSubTab, setActiveSubTab] = useState('connectors'); // 'connectors', 'channels', 'rules'
 
   // Alert Config State
@@ -66,6 +71,16 @@ export default function AlertsIntegrations({ userRole }) {
       // An admin has no way to tell those two states apart without this.
       console.error("Error loading alert configurations:", err);
       setAlertDataError(err.message || 'Could not reach the backend API.');
+    }
+
+    // Best-effort — a failed health fetch shouldn't block channels/rules
+    // from loading, so it's kept out of the try/catch above (channel cards
+    // just render without a health badge instead).
+    try {
+      const health = await getAlertChannelsHealth();
+      setChannelHealth(Object.fromEntries((health || []).map(h => [h.channel_name, h])));
+    } catch (err) {
+      console.error("Failed to load channel delivery health:", err);
     }
   };
 
@@ -426,12 +441,30 @@ export default function AlertsIntegrations({ userRole }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '16px' }}>
             {channels.length > 0 ? (
-              channels.map(chan => (
+              channels.map(chan => {
+                const health = channelHealth[chan.name];
+                return (
                 <div key={chan.id} className="glass-panel" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, minWidth: 0, paddingRight: '16px' }}>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{chan.name}</span>
                       <span style={{ background: 'var(--sev-low-border)', color: 'var(--sev-low)', fontSize: '9px', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>{chan.channel_type}</span>
+                      {health ? (
+                        <span
+                          title={health.last_success ? undefined : (health.last_error || 'Last delivery attempt failed')}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: '4px', fontSize: '9px', fontWeight: 700,
+                            textTransform: 'uppercase', padding: '2px 6px', borderRadius: '4px',
+                            background: health.last_success ? 'var(--success-bg)' : 'var(--danger-bg)',
+                            color: health.last_success ? 'var(--success-color)' : 'var(--danger-color)',
+                          }}
+                        >
+                          <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'currentColor' }} />
+                          {health.last_success ? 'Healthy' : 'Degraded'} · {health.successes}/{health.attempts}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>No deliveries yet</span>
+                      )}
                     </div>
                     <code style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace', wordBreak: 'break-all' }}>{JSON.stringify(chan.config)}</code>
                   </div>
@@ -451,7 +484,8 @@ export default function AlertsIntegrations({ userRole }) {
                     )}
                   </div>
                 </div>
-              ))
+                );
+              })
             ) : (
               <div className="glass-panel" style={{ gridColumn: 'span 12', padding: '30px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                 No active notification integrations configured.

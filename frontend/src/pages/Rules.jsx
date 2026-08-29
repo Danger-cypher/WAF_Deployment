@@ -18,6 +18,7 @@ import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import Pagination from '../components/Pagination';
 import { FetchErrorState } from '../components/EmptyStates';
+import CanaryTrendChart from '../components/CanaryTrendChart';
 
 const CATEGORY_MAP = {
   "901": "Initialization",
@@ -48,7 +49,7 @@ const CATEGORY_MAP = {
   "980": "Correlation"
 };
 
-export default function Rules({ userRole }) {
+export default function Rules({ userRole, initialSearch, onConsumeInitialSearch }) {
   const [rules, setRules] = useState([]);
   const [stats, setStats] = useState({
     total_rules: 0,
@@ -67,7 +68,15 @@ export default function Rules({ userRole }) {
   const size = 10;
 
   // Filters state
-  const [search, setSearch] = useState('');
+  // Seeded once from the command palette's rule-ID lookup, if that's how
+  // this page was reached (App.jsx remounts this component on every tab
+  // switch, so this only ever applies at that first mount).
+  const [search, setSearch] = useState(initialSearch || '');
+
+  useEffect(() => {
+    if (initialSearch) onConsumeInitialSearch?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [category, setCategory] = useState('');
   const [severity, setSeverity] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -685,13 +694,17 @@ export default function Rules({ userRole }) {
 
                     {/* Toggle Guard Switch */}
                     {userRole === 'admin' ? (
-                      <div
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={rule.enabled}
+                        aria-label={`Rule ${rule.id} ${rule.enabled ? 'enabled' : 'disabled'}`}
                         className={`toggle-switch ${rule.enabled ? 'active' : ''}`}
                         onClick={() => handleToggleState(rule)}
                         style={{ flexShrink: 0 }}
                       >
                         <div className="toggle-knob"></div>
-                      </div>
+                      </button>
                     ) : (
                       <div
                         className={`toggle-switch ${rule.enabled ? 'active' : ''}`}
@@ -916,6 +929,7 @@ export default function Rules({ userRole }) {
                         </div>
                       </div>
                     )}
+                    {canaryReport && <CanaryTrendChart data={canaryReport.daily_breakdown} />}
                   </div>
                 )}
               </div>

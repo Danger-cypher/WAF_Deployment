@@ -65,24 +65,41 @@ class _FakeResult:
 
 
 class _FakeClient:
-    def __init__(self, rows):
+    """
+    get_rule_canary_report now issues two queries — the aggregate totals,
+    then the per-day breakdown — with different result shapes. `rows`
+    answers the first call; `daily_rows` (defaulting to the same `rows`,
+    which is fine for tests that don't care about the second call's shape)
+    answers the second.
+    """
+    def __init__(self, rows, daily_rows=None):
         self._rows = rows
+        self._daily_rows = rows if daily_rows is None else daily_rows
         self.queries = []
         self.params = []
 
     def query(self, sql, *args, parameters=None, **kwargs):
         self.queries.append(sql)
         self.params.append(parameters)
-        return _FakeResult(self._rows)
+        is_first_call = len(self.queries) == 1
+        return _FakeResult(self._rows if is_first_call else self._daily_rows)
 
 
 def test_canary_report_maps_query_result_correctly(monkeypatch):
+    # Same fake row shape for both the aggregate and the daily-breakdown
+    # query — good enough to prove the mapping/plumbing; the daily query's
+    # own column meaning (day, sole, co) is covered by
+    # test_canary_report_daily_breakdown_maps_correctly below.
     fake = _FakeClient(rows=[(10, 3, 7)])
     monkeypatch.setattr(clickhouse_service, "_get_client", lambda: fake)
 
     report = clickhouse_service.get_rule_canary_report("942100", hours=168)
 
-    assert report == {"total_matches": 10, "sole_match_count": 3, "co_matched_count": 7}
+    assert report["total_matches"] == 10
+    assert report["sole_match_count"] == 3
+    assert report["co_matched_count"] == 7
+    # Two queries now: the aggregate totals, then the per-day breakdown.
+    assert len(fake.queries) == 2
     # Searches inside the violations JSON itself, not the top-level rule_id
     # column (which only ever holds ONE selected "primary" rule per request)
     assert "JSONExtractArrayRaw(violations)" in fake.queries[0]
@@ -93,12 +110,32 @@ def test_canary_report_maps_query_result_correctly(monkeypatch):
     assert fake.params[0] == {"rule_id": "942100"}
 
 
+def test_canary_report_daily_breakdown_maps_correctly(monkeypatch):
+    fake = _FakeClient(
+        rows=[(3, 1, 2)],
+        daily_rows=[("2026-08-20", 1, 2), ("2026-08-21", 0, 4)],
+    )
+    monkeypatch.setattr(clickhouse_service, "_get_client", lambda: fake)
+
+    report = clickhouse_service.get_rule_canary_report("942100", hours=168)
+
+    assert report["daily_breakdown"] == [
+        {"date": "2026-08-20", "sole_match_count": 1, "co_matched_count": 2},
+        {"date": "2026-08-21", "sole_match_count": 0, "co_matched_count": 4},
+    ]
+    # Same injection-safe binding as the aggregate query, on the second call.
+    assert "%(rule_id)s" in fake.queries[1]
+    assert "942100" not in fake.queries[1]
+    assert fake.params[1] == {"rule_id": "942100"}
+    assert "GROUP BY day" in fake.queries[1]
+
+
 def test_canary_report_empty_result_defaults_to_zero(monkeypatch):
     fake = _FakeClient(rows=[])
     monkeypatch.setattr(clickhouse_service, "_get_client", lambda: fake)
 
     report = clickhouse_service.get_rule_canary_report("942100", hours=24)
-    assert report == {"total_matches": 0, "sole_match_count": 0, "co_matched_count": 0}
+    assert report == {"total_matches": 0, "sole_match_count": 0, "co_matched_count": 0, "daily_breakdown": []}
 
 
 def test_canary_report_rule_id_survives_injection_attempt(monkeypatch):

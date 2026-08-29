@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Archive, Brain, CheckSquare, Database, Download, FileCode, History, Lock, RotateCcw, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Archive, Brain, CheckSquare, Database, Download, FileCode, History, Lock, RotateCcw, RotateCw, Search, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, Trash2, X } from 'lucide-react';
 import {
   getGeneralSettings, saveGeneralSettings, getLogSettings, saveLogSettings,
   getWafSettings, saveWafSettings,
@@ -47,6 +47,16 @@ const SETTINGS_SECTIONS = {
   customresponse: { label: 'Custom Response Page', tab: 'custom-response' },
   autolearning: { label: 'Auto-Learning', tab: 'auto-learning' },
 };
+
+// The 11 sidebar leaf labels (distinct from SETTINGS_SECTIONS above, which
+// is per-form for dirty-tracking — Hardening's 6 accordion forms all live
+// under one sidebar entry). Backs the sidebar search box's "no matches"
+// empty state.
+const ALL_SETTINGS_LABELS = [
+  'General Setup', 'WAF Engine Policies', 'Log Pipeline', 'Server Hardening',
+  'Positive Security', 'Anti-Defacement', 'Auto-Learning', 'Custom Response',
+  'Security & Danger Zone', 'Activity Log', 'Backups',
+];
 
 export default function Settings({ onLogout }) {
   // General Settings
@@ -158,6 +168,17 @@ export default function Settings({ onLogout }) {
   useEscapeToClose(() => setDangerModal(null), !!dangerModal);
   const [loadingAction, setLoadingAction] = useState(false);
   const [activeSettingTab, setActiveSettingTab] = useState('general');
+  const [settingsSearch, setSettingsSearch] = useState('');
+  // A group/button stays visible if no query is entered, or if ANY of the
+  // labels passed in matches — used both per-button (one label) and per-
+  // group-header (all of that group's labels, so the header only hides
+  // once every one of its members is filtered out too).
+  const matchesSettingsSearch = (...labels) => {
+    const q = settingsSearch.trim().toLowerCase();
+    if (!q) return true;
+    return labels.some((l) => l.toLowerCase().includes(q));
+  };
+  const hasAnySettingsMatch = matchesSettingsSearch(...ALL_SETTINGS_LABELS);
 
   // Unsaved-changes tracking: each form marks its own key dirty on any field
   // change (via the form's onChange, which catches every input inside it —
@@ -1016,43 +1037,103 @@ export default function Settings({ onLogout }) {
 
       <div className="settings-layout" style={{ display: 'flex', gap: '32px', alignItems: 'flex-start' }}>
 
-        {/* Sidebar Navigation */}
+        {/* Sidebar Navigation — grouped into 4 domains instead of one flat
+            list of 11. Every button below is unchanged (same onClick, same
+            icon, same active-state check) — only the grouping/labels are
+            new, so no tab's own behavior is touched by this. A search box
+            filters this same list by label text rather than introducing a
+            second way to navigate — 11 sections is approaching the point
+            where scanning a static list stops being enough. */}
         <div className="settings-sidebar">
-          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.2px', marginBottom: '10px', paddingLeft: '16px' }}>Configuration</div>
+          <div style={{ position: 'relative', marginBottom: '8px' }}>
+            <Search size={14} color="var(--text-muted)" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
+            <input
+              type="text"
+              value={settingsSearch}
+              onChange={(e) => setSettingsSearch(e.target.value)}
+              placeholder="Search settings..."
+              aria-label="Search settings"
+              className="search-input"
+              style={{ width: '100%', paddingLeft: '34px', margin: 0 }}
+            />
+          </div>
 
-          <button onClick={() => setActiveSettingTab('general')} className={`settings-tab-btn ${activeSettingTab === 'general' ? 'active' : ''}`}>
-            <SettingsIcon size={20} /> General Setup
-          </button>
-          <button onClick={() => setActiveSettingTab('waf')} className={`settings-tab-btn ${activeSettingTab === 'waf' ? 'active' : ''}`}>
-            <ShieldCheck size={20} /> WAF Engine Policies
-          </button>
-          <button onClick={() => setActiveSettingTab('logs')} className={`settings-tab-btn ${activeSettingTab === 'logs' ? 'active' : ''}`}>
-            <Database size={20} /> Log Pipeline
-          </button>
-          <button onClick={() => setActiveSettingTab('hardening')} className={`settings-tab-btn ${activeSettingTab === 'hardening' ? 'active' : ''}`}>
-            <Server size={20} /> Server Hardening
-          </button>
-          <button onClick={() => setActiveSettingTab('positive-security')} className={`settings-tab-btn ${activeSettingTab === 'positive-security' ? 'active' : ''}`}>
-            <CheckSquare size={20} /> Positive Security
-          </button>
-          <button onClick={() => setActiveSettingTab('defacement')} className={`settings-tab-btn ${activeSettingTab === 'defacement' ? 'active' : ''}`}>
-            <ShieldAlert size={20} /> Anti-Defacement
-          </button>
-          <button onClick={() => setActiveSettingTab('custom-response')} className={`settings-tab-btn ${activeSettingTab === 'custom-response' ? 'active' : ''}`}>
-            <FileCode size={20} /> Custom Response
-          </button>
-          <button onClick={() => setActiveSettingTab('auto-learning')} className={`settings-tab-btn ${activeSettingTab === 'auto-learning' ? 'active' : ''}`}>
-            <Brain size={20} /> Auto-Learning
-          </button>
-          <button onClick={() => setActiveSettingTab('security')} className={`settings-tab-btn ${activeSettingTab === 'security' ? 'active' : ''}`}>
-            <Lock size={20} /> Security & Danger Zone
-          </button>
-          <button onClick={() => setActiveSettingTab('activity-log')} className={`settings-tab-btn ${activeSettingTab === 'activity-log' ? 'active' : ''}`}>
-            <History size={20} /> Activity Log
-          </button>
-          <button onClick={() => setActiveSettingTab('backups')} className={`settings-tab-btn ${activeSettingTab === 'backups' ? 'active' : ''}`}>
-            <Archive size={20} /> Backups
-          </button>
+          {matchesSettingsSearch('Engine', 'General Setup', 'WAF Engine Policies', 'Log Pipeline') && (
+            <div className="settings-sidebar-group-label" style={{ marginTop: 0 }}>Engine</div>
+          )}
+          {matchesSettingsSearch('General Setup') && (
+            <button onClick={() => setActiveSettingTab('general')} className={`settings-tab-btn ${activeSettingTab === 'general' ? 'active' : ''}`}>
+              <SettingsIcon size={20} /> General Setup
+            </button>
+          )}
+          {matchesSettingsSearch('WAF Engine Policies') && (
+            <button onClick={() => setActiveSettingTab('waf')} className={`settings-tab-btn ${activeSettingTab === 'waf' ? 'active' : ''}`}>
+              <ShieldCheck size={20} /> WAF Engine Policies
+            </button>
+          )}
+          {matchesSettingsSearch('Log Pipeline') && (
+            <button onClick={() => setActiveSettingTab('logs')} className={`settings-tab-btn ${activeSettingTab === 'logs' ? 'active' : ''}`}>
+              <Database size={20} /> Log Pipeline
+            </button>
+          )}
+
+          {matchesSettingsSearch('Hardening', 'Server Hardening') && (
+            <div className="settings-sidebar-group-label">Hardening</div>
+          )}
+          {matchesSettingsSearch('Server Hardening') && (
+            <button onClick={() => setActiveSettingTab('hardening')} className={`settings-tab-btn ${activeSettingTab === 'hardening' ? 'active' : ''}`}>
+              <Server size={20} /> Server Hardening
+            </button>
+          )}
+
+          {matchesSettingsSearch('Detection Tuning', 'Positive Security', 'Anti-Defacement', 'Auto-Learning', 'Custom Response') && (
+            <div className="settings-sidebar-group-label">Detection Tuning</div>
+          )}
+          {matchesSettingsSearch('Positive Security') && (
+            <button onClick={() => setActiveSettingTab('positive-security')} className={`settings-tab-btn ${activeSettingTab === 'positive-security' ? 'active' : ''}`}>
+              <CheckSquare size={20} /> Positive Security
+            </button>
+          )}
+          {matchesSettingsSearch('Anti-Defacement') && (
+            <button onClick={() => setActiveSettingTab('defacement')} className={`settings-tab-btn ${activeSettingTab === 'defacement' ? 'active' : ''}`}>
+              <ShieldAlert size={20} /> Anti-Defacement
+            </button>
+          )}
+          {matchesSettingsSearch('Auto-Learning') && (
+            <button onClick={() => setActiveSettingTab('auto-learning')} className={`settings-tab-btn ${activeSettingTab === 'auto-learning' ? 'active' : ''}`}>
+              <Brain size={20} /> Auto-Learning
+            </button>
+          )}
+          {matchesSettingsSearch('Custom Response') && (
+            <button onClick={() => setActiveSettingTab('custom-response')} className={`settings-tab-btn ${activeSettingTab === 'custom-response' ? 'active' : ''}`}>
+              <FileCode size={20} /> Custom Response
+            </button>
+          )}
+
+          {matchesSettingsSearch('Access & Audit', 'Security & Danger Zone', 'Activity Log', 'Backups') && (
+            <div className="settings-sidebar-group-label">Access &amp; Audit</div>
+          )}
+          {matchesSettingsSearch('Security & Danger Zone') && (
+            <button onClick={() => setActiveSettingTab('security')} className={`settings-tab-btn ${activeSettingTab === 'security' ? 'active' : ''}`}>
+              <Lock size={20} /> Security & Danger Zone
+            </button>
+          )}
+          {matchesSettingsSearch('Activity Log') && (
+            <button onClick={() => setActiveSettingTab('activity-log')} className={`settings-tab-btn ${activeSettingTab === 'activity-log' ? 'active' : ''}`}>
+              <History size={20} /> Activity Log
+            </button>
+          )}
+          {matchesSettingsSearch('Backups') && (
+            <button onClick={() => setActiveSettingTab('backups')} className={`settings-tab-btn ${activeSettingTab === 'backups' ? 'active' : ''}`}>
+              <Archive size={20} /> Backups
+            </button>
+          )}
+
+          {settingsSearch.trim() && !hasAnySettingsMatch && (
+            <div style={{ padding: '16px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+              No settings match "{settingsSearch}".
+            </div>
+          )}
         </div>
 
         {/* Main Content Area */}
@@ -1113,9 +1194,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Live Inbound Stream</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Stream logs dynamically from the backend</span>
                     </div>
-                    <div className={`toggle-switch ${liveUpdates ? 'active' : ''}`} onClick={() => setLiveUpdates(!liveUpdates)}>
+                    <button type="button" role="switch" aria-checked={liveUpdates} aria-label="Live Inbound Stream" className={`toggle-switch ${liveUpdates ? 'active' : ''}`} onClick={() => setLiveUpdates(!liveUpdates)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
                   <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
@@ -1193,9 +1274,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>SecAuditEngine Logging</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Record details of flagged transactions</span>
                     </div>
-                    <div className={`toggle-switch ${auditEnabled ? 'active' : ''}`} onClick={() => setAuditEnabled(!auditEnabled)}>
+                    <button type="button" role="switch" aria-checked={auditEnabled} aria-label="SecAuditEngine Logging" className={`toggle-switch ${auditEnabled ? 'active' : ''}`} onClick={() => setAuditEnabled(!auditEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1211,9 +1292,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Concurrent Multi-Threading</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Non-blocking log processing pipeline</span>
                     </div>
-                    <div className={`toggle-switch ${concurrentLogging ? 'active' : ''}`} onClick={() => setConcurrentLogging(!concurrentLogging)}>
+                    <button type="button" role="switch" aria-checked={concurrentLogging} aria-label="Concurrent Multi-Threading" className={`toggle-switch ${concurrentLogging ? 'active' : ''}`} onClick={() => setConcurrentLogging(!concurrentLogging)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1248,9 +1329,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Strict HTTPS (HSTS)</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Enforce Strict-Transport-Security header</span>
                     </div>
-                    <div className={`toggle-switch ${hstsEnabled ? 'active' : ''}`} onClick={() => setHstsEnabled(!hstsEnabled)}>
+                    <button type="button" role="switch" aria-checked={hstsEnabled} aria-label="Strict HTTPS (HSTS)" className={`toggle-switch ${hstsEnabled ? 'active' : ''}`} onClick={() => setHstsEnabled(!hstsEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <AnimatePresence>
@@ -1276,9 +1357,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Server Cloaking</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Scrub NGINX tokens & Express header disclosures</span>
                     </div>
-                    <div className={`toggle-switch ${serverCloaking ? 'active' : ''}`} onClick={() => setServerCloaking(!serverCloaking)}>
+                    <button type="button" role="switch" aria-checked={serverCloaking} aria-label="Server Cloaking" className={`toggle-switch ${serverCloaking ? 'active' : ''}`} onClick={() => setServerCloaking(!serverCloaking)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1323,9 +1404,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Geo-Block</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no country restrictions until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${geoBlockEnabled ? 'active' : ''}`} onClick={() => setGeoBlockEnabled(!geoBlockEnabled)}>
+                    <button type="button" role="switch" aria-checked={geoBlockEnabled} aria-label="Enable Geo-Block" className={`toggle-switch ${geoBlockEnabled ? 'active' : ''}`} onClick={() => setGeoBlockEnabled(!geoBlockEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <AnimatePresence>
@@ -1379,9 +1460,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Scheduled Sync</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no external feed until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${threatIntelEnabled ? 'active' : ''}`} onClick={() => setThreatIntelEnabled(!threatIntelEnabled)}>
+                    <button type="button" role="switch" aria-checked={threatIntelEnabled} aria-label="Enable Scheduled Sync" className={`toggle-switch ${threatIntelEnabled ? 'active' : ''}`} onClick={() => setThreatIntelEnabled(!threatIntelEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <AnimatePresence>
@@ -1445,9 +1526,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Auto-Block</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — nobody gets auto-blocked until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${autoRepEnabled ? 'active' : ''}`} onClick={() => setAutoRepEnabled(!autoRepEnabled)}>
+                    <button type="button" role="switch" aria-checked={autoRepEnabled} aria-label="Enable Auto-Block" className={`toggle-switch ${autoRepEnabled ? 'active' : ''}`} onClick={() => setAutoRepEnabled(!autoRepEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <AnimatePresence>
@@ -1574,9 +1655,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Login Allowlist</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — login works from anywhere until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${adminAllowlistEnabled ? 'active' : ''}`} onClick={() => setAdminAllowlistEnabled(!adminAllowlistEnabled)}>
+                    <button type="button" role="switch" aria-checked={adminAllowlistEnabled} aria-label="Enable Login Allowlist" className={`toggle-switch ${adminAllowlistEnabled ? 'active' : ''}`} onClick={() => setAdminAllowlistEnabled(!adminAllowlistEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1611,9 +1692,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Malware Scanning</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no uploads are scanned until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${malwareScanEnabled ? 'active' : ''}`} onClick={() => setMalwareScanEnabled(!malwareScanEnabled)}>
+                    <button type="button" role="switch" aria-checked={malwareScanEnabled} aria-label="Enable Malware Scanning" className={`toggle-switch ${malwareScanEnabled ? 'active' : ''}`} onClick={() => setMalwareScanEnabled(!malwareScanEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <AnimatePresence>
@@ -1701,9 +1782,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Positive Security</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no rules are active until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${posSecEnabled ? 'active' : ''}`} onClick={() => setPosSecEnabled(!posSecEnabled)}>
+                    <button type="button" role="switch" aria-checked={posSecEnabled} aria-label="Enable Positive Security" className={`toggle-switch ${posSecEnabled ? 'active' : ''}`} onClick={() => setPosSecEnabled(!posSecEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1773,9 +1854,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Real-time Integrity Monitor</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Revert unauthorized content modifications instantly</span>
                     </div>
-                    <div className={`toggle-switch ${defacementEnabled ? 'active' : ''}`} onClick={() => setDefacementEnabled(!defacementEnabled)}>
+                    <button type="button" role="switch" aria-checked={defacementEnabled} aria-label="Real-time Integrity Monitor" className={`toggle-switch ${defacementEnabled ? 'active' : ''}`} onClick={() => setDefacementEnabled(!defacementEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1867,9 +1948,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Auto-Learning</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — baselines only update when enabled</span>
                     </div>
-                    <div className={`toggle-switch ${autoLearningEnabled ? 'active' : ''}`} onClick={() => setAutoLearningEnabled(!autoLearningEnabled)}>
+                    <button type="button" role="switch" aria-checked={autoLearningEnabled} aria-label="Enable Auto-Learning" className={`toggle-switch ${autoLearningEnabled ? 'active' : ''}`} onClick={() => setAutoLearningEnabled(!autoLearningEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

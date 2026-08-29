@@ -8,7 +8,7 @@ import { NoLogsEmptyState, NoSearchResultsEmptyState } from '../components/Empty
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
 
-export default function LiveLogs({ onMarkFalsePositive }) {
+export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSearch, onConsumeInitialSearch }) {
   const { toast, showToast } = useToast();
   const [logs, setLogs] = useState([]);
   const [total, setTotal] = useState(0);
@@ -28,7 +28,15 @@ export default function LiveLogs({ onMarkFalsePositive }) {
       if (settings.liveUpdates !== undefined) setLiveUpdates(settings.liveUpdates);
     }).catch(err => console.error("Failed to load general settings", err));
   }, []);
-  const [search, setSearch] = useState('');
+  // Seeded once from the command palette's IP search, if that's how this
+  // page was reached (App.jsx remounts this component on every tab switch,
+  // so this only ever applies at that first mount).
+  const [search, setSearch] = useState(initialSearch || '');
+
+  useEffect(() => {
+    if (initialSearch) onConsumeInitialSearch?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [severityFilter, setSeverityFilter] = useState('');
   const [attackFilter, setAttackFilter] = useState('');
   const [trafficTab, setTrafficTab] = useState('all');
@@ -989,6 +997,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
             setActiveLogIndex(-1);
           }}
           onMarkFalsePositive={onMarkFalsePositive}
+          onCreateRule={onCreateRule}
           onNavigate={handleNavigateLog}
           canGoPrev={activeLogIndex > 0}
           canGoNext={activeLogIndex < activeLogList.length - 1}

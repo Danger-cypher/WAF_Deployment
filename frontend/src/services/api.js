@@ -219,6 +219,23 @@ export async function getHealth() {
 }
 
 /**
+ * Last-cycle status of every recurring background task (log retention,
+ * threat-intel sync, canary rollout, etc.) — admin-only. See
+ * heartbeat_registry.py: a task can be "up" at the process level but
+ * silently stopped doing useful work, which this catches and /health alone
+ * doesn't.
+ */
+export async function getBackgroundTasksHealth() {
+  try {
+    const response = await fetch(`${BASE_URL}/health/background-tasks`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch background tasks health:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch paginated, filtered rules list
  */
 export async function getRules(page = 1, size = 15, filters = {}) {
@@ -1810,6 +1827,21 @@ export async function getAlertChannels() {
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch alert channels:", error);
+    throw error;
+  }
+}
+
+/**
+ * Rolling per-channel delivery health (attempts/successes/last outcome),
+ * derived from each channel's real dispatch results across recent alert
+ * history — previously computed on every send and then discarded.
+ */
+export async function getAlertChannelsHealth() {
+  try {
+    const response = await fetch(`${BASE_URL}/alerts/channels/health`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch alert channel delivery health:", error);
     throw error;
   }
 }
