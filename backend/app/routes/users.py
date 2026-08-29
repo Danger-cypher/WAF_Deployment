@@ -17,9 +17,11 @@ from app.models.user_models import (
     UserOut, UserCreate, UserUpdate, AdminPasswordReset,
     ProfileUpdate, SelfPasswordChange, NotificationPreferences,
     MfaStatus, MfaSetupResponse, MfaConfirmRequest, MfaDisableRequest,
+    SessionOut,
 )
 from app.services.user_service import user_service
 from app.services import db_service
+from app.services import session_service
 from app.services.auth import require_admin, require_any_role, verify_password, TokenData
 from app.routes.auth import _issue_session
 from app.utils.audit import log_admin_action
@@ -197,6 +199,28 @@ async def change_my_password(
     return {"message": "Password updated successfully."}
 
 
+@router.get("/users/me/sessions", response_model=List[SessionOut])
+async def list_my_sessions(current_user: TokenData = Depends(require_any_role)):
+    """List the logged-in user's own active sessions (any role) — every
+    device/browser currently holding a valid, non-revoked login for this
+    account. See session_service.py (P1-8 Part B)."""
+    sessions = session_service.list_sessions(current_user.username)
+    for s in sessions:
+        s["is_current"] = s["session_id"] == current_user.session_id
+    return sessions
+
+
+@router.delete("/users/me/sessions/{session_id}")
+async def revoke_my_session(session_id: str, current_user: TokenData = Depends(require_any_role)):
+    """Revoke one of the logged-in user's own sessions (any role) — e.g. a
+    laptop left logged in, or a session opened on a shared machine.
+    Revoking your own CURRENT session is allowed and simply logs you out
+    of it on its next request, same effect as a normal logout."""
+    if not session_service.revoke_session(current_user.username, session_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+    return {"message": "Session revoked."}
+
+
 @router.get("/users/me/notification-preferences", response_model=NotificationPreferences)
 async def get_my_notification_preferences(current_user: TokenData = Depends(require_any_role)):
     """Get the logged-in user's bell-notification mute preferences (any role)"""
@@ -315,3 +339,37 @@ async def admin_disable_user_mfa(user_id: int, current_user: TokenData = Depends
     )
     log_admin_action("user", str(user_id), "admin_disable_mfa", current_user, details={"target_username": target["username"]})
     return {"enabled": False}
+
+
+@router.get("/users/{user_id}/sessions", response_model=List[SessionOut])
+async def list_user_sessions(user_id: int, current_user: TokenData = Depends(require_admin)):
+    """Admin visibility into another account's active sessions (Admin
+    only) — e.g. to check whether a suspicious login is still live before
+    deciding whether to revoke it or the whole account."""
+    target = user_service.get_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    sessions = session_service.list_sessions(target["username"])
+    for s in sessions:
+        s["is_current"] = (
+            target["username"] == current_user.username and s["session_id"] == current_user.session_id
+        )
+    return sessions
+
+
+@router.delete("/users/{user_id}/sessions/{session_id}")
+async def revoke_user_session(
+    user_id: int, session_id: str, current_user: TokenData = Depends(require_admin)
+):
+    """Admin revoke of one specific session on another account (Admin
+    only) — kills that one login without disabling the account or forcing
+    a password reset that would also kill every OTHER session of theirs."""
+    target = user_service.get_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if not session_service.revoke_session(target["username"], session_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+    log_admin_action(
+        "session", session_id, "revoke", current_user, details={"target_username": target["username"]}
+    )
+    return {"message": "Session revoked."}

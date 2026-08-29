@@ -92,3 +92,43 @@ def test_risk_challenge_independent_of_bot_challenge_mode(monkeypatch):
 
     risk_map_start = config.index("map $host $waf_risk_challenge_enabled {")
     assert "default 0;" in config[risk_map_start:risk_map_start + 80]
+
+
+# ---------------------------------------------------------------------------
+# Adaptive per-identity throttle ($waf_adaptive_throttle_enabled) — a third
+# independent toggle (P1-3); layered on top of the native limit_req zones
+# below it in the generated config, never replacing them.
+# ---------------------------------------------------------------------------
+
+def test_adaptive_throttle_enabled_sets_flag(monkeypatch):
+    settings = {**BASE_SETTINGS, "bot_mitigation_action": "Silent Drop", "adaptive_throttle_enabled": True}
+    config = _capture_generated_ddos_config(monkeypatch, settings)
+
+    assert "map $host $waf_adaptive_throttle_enabled {" in config
+    map_start = config.index("map $host $waf_adaptive_throttle_enabled {")
+    assert "default 1;" in config[map_start:map_start + 80]
+
+
+def test_adaptive_throttle_disabled_by_default(monkeypatch):
+    settings = {**BASE_SETTINGS, "bot_mitigation_action": "Silent Drop"}
+    config = _capture_generated_ddos_config(monkeypatch, settings)
+
+    map_start = config.index("map $host $waf_adaptive_throttle_enabled {")
+    assert "default 0;" in config[map_start:map_start + 80]
+
+
+def test_adaptive_throttle_independent_of_other_two_toggles(monkeypatch):
+    settings = {
+        **BASE_SETTINGS, "bot_mitigation_action": "JS Challenge",
+        "risk_challenge_enabled": True, "adaptive_throttle_enabled": False,
+    }
+    config = _capture_generated_ddos_config(monkeypatch, settings)
+
+    bot_start = config.index("map $host $waf_bot_challenge_enabled {")
+    assert "default 1;" in config[bot_start:bot_start + 60]
+
+    risk_start = config.index("map $host $waf_risk_challenge_enabled {")
+    assert "default 1;" in config[risk_start:risk_start + 80]
+
+    throttle_start = config.index("map $host $waf_adaptive_throttle_enabled {")
+    assert "default 0;" in config[throttle_start:throttle_start + 80]

@@ -254,6 +254,24 @@ def init_db():
                 except Exception:
                     pass  # Column already exists — expected on re-init
 
+            # Multi-server load balancing (P1-14, simplest version): extra
+            # backend origins beyond the primary upstream_host/upstream_port,
+            # stored as a JSON array string ('[{"host":..., "port":...}, ...]')
+            # — same "pre-serialized JSON in a TEXT column" idiom already used
+            # for api_schema above, not a child table, since this is small,
+            # single-owner, per-app config with no need for relational
+            # queries across apps. NULL/empty = no extra origins = today's
+            # exact single-origin behavior; nginx_manager.py's
+            # sync_protected_apps_to_nginx() emits one `server host:port ...;`
+            # line per origin (primary + these) into the SAME upstream{} block
+            # that already existed with passive-failover params wired in.
+            try:
+                cursor.execute(
+                    "ALTER TABLE protected_apps ADD COLUMN additional_origins TEXT DEFAULT NULL"
+                )
+            except Exception:
+                pass  # Column already exists — expected on re-init
+
             # Per-app RBAC scoping (item 7): which protected app(s) a
             # non-'admin' 'app_admin' user may view/manage. Keyed by
             # username rather than a numeric user_id — users live in a
@@ -1446,6 +1464,7 @@ def create_protected_app(
     require_auth: int = 0,
     auth_check_type: str = "header",
     auth_header_name: str = "Authorization",
+    additional_origins: str = None,
 ):
     try:
         with get_connection() as conn:
@@ -1454,14 +1473,15 @@ def create_protected_app(
                 INSERT INTO protected_apps
                     (name, domain, upstream_host, upstream_port, protocol, is_active,
                      rate_limit_rps, burst_tolerance, ssl_option, ssl_cert_path, ssl_key_path,
-                     require_auth, auth_check_type, auth_header_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     require_auth, auth_check_type, auth_header_name, additional_origins)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 name, domain.strip().lower(), upstream_host.strip(),
                 upstream_port, protocol.strip().lower(), is_active,
                 rate_limit_rps, burst_tolerance,
                 ssl_option, ssl_cert_path, ssl_key_path,
                 require_auth, auth_check_type, auth_header_name,
+                additional_origins,
             ))
             conn.commit()
             new_id = cursor.lastrowid
@@ -1487,6 +1507,7 @@ def update_protected_app(
     require_auth: int = 0,
     auth_check_type: str = "header",
     auth_header_name: str = "Authorization",
+    additional_origins: str = None,
 ):
     try:
         with get_connection() as conn:
@@ -1498,7 +1519,8 @@ def update_protected_app(
                     ssl_option = ?,
                     ssl_cert_path = COALESCE(?, ssl_cert_path),
                     ssl_key_path  = COALESCE(?, ssl_key_path),
-                    require_auth = ?, auth_check_type = ?, auth_header_name = ?
+                    require_auth = ?, auth_check_type = ?, auth_header_name = ?,
+                    additional_origins = ?
                 WHERE id = ?
             """, (
                 name, domain.strip().lower(), upstream_host.strip(),
@@ -1506,6 +1528,7 @@ def update_protected_app(
                 rate_limit_rps, burst_tolerance,
                 ssl_option, ssl_cert_path, ssl_key_path,
                 require_auth, auth_check_type, auth_header_name,
+                additional_origins,
                 app_id,
             ))
             conn.commit()

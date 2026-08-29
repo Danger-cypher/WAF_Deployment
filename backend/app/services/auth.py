@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import jwt
@@ -8,6 +9,8 @@ from pydantic import BaseModel
 
 from app.config.settings import settings
 
+logger = logging.getLogger(__name__)
+
 # Password hashing is done directly with bcrypt
 # OAuth2 scheme for dependency (kept for Swagger UI docs)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
@@ -16,6 +19,15 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 class TokenData(BaseModel):
     username: Optional[str] = None
     role: Optional[str] = None
+    # Set only when this request was authenticated via an API key (P1-9)
+    # rather than a session cookie/Bearer JWT — additive fields, so every
+    # existing call site that only reads username/role is unaffected.
+    auth_method: Optional[str] = None
+    api_key_id: Optional[int] = None
+    # The session id ("sid") claim from a session JWT (P1-8 Part B) — None
+    # for API-key auth, and also None for a session token minted before
+    # this feature shipped (nothing to revoke individually for those).
+    session_id: Optional[str] = None
 
 
 def verify_password(plain_password, hashed_password):
@@ -49,6 +61,11 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
     HTTP dependency below and the WebSocket handshake (which has no
     Request object to hang a FastAPI Depends() off of)."""
     if not token:
+        # No cookie and no Bearer header at all — logged at debug, not
+        # warning: this is the normal, expected state for an anonymous
+        # visitor hitting a protected route (e.g. every page load before
+        # login), not evidence of anything going wrong.
+        logger.debug("[Auth] No session token present on request")
         return None
 
     try:
@@ -58,10 +75,22 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
         username: str = payload.get("sub")
         role: str = payload.get("role")
         token_version = payload.get("tv")
+        session_id: Optional[str] = payload.get("sid")
         if username is None or role is None:
+            logger.warning("[Auth] Token rejected: missing sub/role claim")
             return None
-        token_data = TokenData(username=username, role=role)
-    except jwt.PyJWTError:
+        token_data = TokenData(username=username, role=role, session_id=session_id)
+    except jwt.PyJWTError as e:
+        # A safe preview, not the full token — length and dot-count reveal
+        # whether this is even JWT-shaped (3 segments) or something else
+        # entirely ended up in this cookie; the first few chars distinguish
+        # "looks like a JWT but is malformed" (starts "eyJ", our base64url
+        # JSON header) from "isn't a JWT at all".
+        preview = token[:40] if isinstance(token, str) else repr(token)[:40]
+        logger.warning(
+            f"[Auth] Token rejected: {e} "
+            f"(len={len(token)}, dots={token.count('.')}, preview={preview!r})"
+        )
         return None
 
     # Verify the account still exists, hasn't been disabled, and its
@@ -72,14 +101,61 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
     from app.services.user_service import user_service
 
     user = user_service.get_by_username(token_data.username)
-    if user is None or not user["enabled"] or user["session_version"] != token_version:
+    if user is None:
+        logger.warning(f"[Auth] Token rejected: user '{token_data.username}' no longer exists")
+        return None
+    if not user["enabled"]:
+        logger.warning(f"[Auth] Token rejected: user '{token_data.username}' is disabled")
+        return None
+    if user["session_version"] != token_version:
+        logger.warning(
+            f"[Auth] Token rejected: session_version mismatch for '{token_data.username}' "
+            f"(token has {token_version}, DB has {user['session_version']})"
+        )
         return None
 
     # Source the role from the live DB record rather than the (now
     # revalidated, but still originally client-held) JWT claim.
     token_data.role = user["role"]
 
+    # Fine-grained per-session revoke (P1-8 Part B), layered ON TOP of the
+    # coarse session_version check above — a token must pass both. Only
+    # applies when the token actually carries a "sid" (a session minted
+    # before this feature existed has none, and skips this check entirely
+    # until it naturally expires — zero-disruption rollout). Runs for both
+    # the HTTP path (get_current_user() below) and the WebSocket handshake
+    # (routes/ws.py calls decode_token() directly), so both benefit from
+    # one implementation.
+    if token_data.session_id:
+        from app.services.session_service import is_session_active
+
+        if not is_session_active(token_data.username, token_data.session_id):
+            logger.warning(
+                f"[Auth] Token rejected: session '{token_data.session_id}' for "
+                f"'{token_data.username}' no longer active (revoked or expired record)"
+            )
+            return None
+
     return token_data
+
+
+def _resolve_api_key(raw_key: str, request: Request) -> Optional[TokenData]:
+    """Resolves an X-API-Key header into a TokenData exactly like a session
+    cookie/Bearer JWT resolves into one, so require_admin/require_any_role/
+    require_app_*_access and every route reading current_user.username or
+    .role keep working unmodified for a key-authenticated caller (P1-9)."""
+    from app.services.api_key_service import api_key_service
+    from app.utils.security import get_client_ip
+
+    record = api_key_service.validate_key(raw_key, client_ip=get_client_ip(request))
+    if record is None:
+        return None
+    return TokenData(
+        username=f"apikey:{record['name']}",
+        role=record["role"],
+        auth_method="api_key",
+        api_key_id=record["id"],
+    )
 
 
 async def get_current_user(request: Request) -> TokenData:
@@ -93,6 +169,16 @@ async def get_current_user(request: Request) -> TokenData:
             token = auth_header.split(" ")[1]
 
     token_data = decode_token(token)
+
+    # 3. Fallback to an API key (P1-9) — a machine credential, independent
+    # of any human account's session/password lifecycle. Only consulted
+    # when there was no valid session cookie/Bearer JWT, so this adds no
+    # extra DB lookup to normal browser traffic.
+    if token_data is None:
+        api_key = request.headers.get("X-API-Key")
+        if api_key:
+            token_data = _resolve_api_key(api_key, request)
+
     if token_data is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -16,6 +16,7 @@ Two verification modes, staged per the SIEM's rollout plan:
     SIEM_JWKS_URL is configured.
 """
 import re
+import ssl
 import logging
 import secrets
 from typing import Any, Dict, Optional
@@ -27,7 +28,10 @@ from app.utils.redis_client import get_global_redis_client
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_PURPOSE = "sso-exchange"
+# Underscore, not hyphen — matches what the SIEM's /waf/sso/login actually
+# mints, confirmed against a real decoded token. The original onboarding
+# doc said "sso-exchange" (hyphen); that was wrong, not this.
+REQUIRED_PURPOSE = "sso_exchange"
 
 # In-process fallback for single-use nonce tracking when Redis is
 # unavailable — mirrors utils/rate_limiter.py's fallback approach. This
@@ -75,11 +79,32 @@ def _consume_nonce(nonce: str, ttl_seconds: int) -> bool:
 # checking "is it None".
 _jwks_client: Optional["jwt.PyJWKClient"] = None
 _jwks_client_url: Optional[str] = None
+_jwks_client_cert: Optional[str] = None
+
+
+def _build_jwks_ssl_context() -> Optional[ssl.SSLContext]:
+    """Builds the SSL context for the JWKS fetch: the system trust store
+    plus the SIEM's edge cert, if configured. Additive, not a replacement
+    — this backend also makes other outbound HTTPS calls (threat-intel
+    feeds), which must keep trusting public CAs regardless of this
+    deployment's SIEM cert. Returns None (i.e. "use urllib's default
+    context") when no SIEM cert is configured, so an unset
+    SIEM_SSO_CA_CERT fails closed against the SIEM's self-signed cert
+    rather than silently trusting it."""
+    if not settings.SIEM_SSO_CA_CERT:
+        return None
+    ctx = ssl.create_default_context()
+    ctx.load_verify_locations(cafile=settings.SIEM_SSO_CA_CERT)
+    return ctx
 
 
 def _get_jwks_client() -> "jwt.PyJWKClient":
-    global _jwks_client, _jwks_client_url
-    if _jwks_client is None or _jwks_client_url != settings.SIEM_JWKS_URL:
+    global _jwks_client, _jwks_client_url, _jwks_client_cert
+    if (
+        _jwks_client is None
+        or _jwks_client_url != settings.SIEM_JWKS_URL
+        or _jwks_client_cert != settings.SIEM_SSO_CA_CERT
+    ):
         _jwks_client = jwt.PyJWKClient(
             settings.SIEM_JWKS_URL,
             cache_keys=True,
@@ -90,8 +115,13 @@ def _get_jwks_client() -> "jwt.PyJWKClient":
             # PyJWKClient.get_signing_key_from_jwt.
             lifespan=3600,
             timeout=5,
+            # PyJWKClient fetches over urllib.request, not `requests` — a
+            # REQUESTS_CA_BUNDLE env var has no effect on this call at
+            # all. Trust is wired explicitly here instead.
+            ssl_context=_build_jwks_ssl_context(),
         )
         _jwks_client_url = settings.SIEM_JWKS_URL
+        _jwks_client_cert = settings.SIEM_SSO_CA_CERT
     return _jwks_client
 
 
@@ -145,7 +175,7 @@ def verify_sso_exchange_token(token: str) -> Dict[str, Any]:
         raise SsoTokenError(f"Token verification failed: {e}")
 
     if claims.get("purpose") != REQUIRED_PURPOSE:
-        raise SsoTokenError("Token purpose is not sso-exchange")
+        raise SsoTokenError("Token purpose is not sso_exchange")
 
     nonce = claims.get("nonce")
     if not nonce or not isinstance(nonce, str):

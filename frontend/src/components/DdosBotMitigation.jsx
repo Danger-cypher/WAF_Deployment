@@ -12,6 +12,7 @@ export default function DdosBotMitigation() {
   const [trustedIps, setTrustedIps] = useState("");
   const [botMitigationAction, setBotMitigationAction] = useState("Silent Drop");
   const [riskChallengeEnabled, setRiskChallengeEnabled] = useState(false);
+  const [adaptiveThrottleEnabled, setAdaptiveThrottleEnabled] = useState(false);
 
   // Advanced Rate Limiting State
   const [advancedRules, setAdvancedRules] = useState([]);
@@ -41,6 +42,7 @@ export default function DdosBotMitigation() {
         if (ddos.trusted_ips !== undefined) setTrustedIps(ddos.trusted_ips.join(', '));
         if (ddos.bot_mitigation_action) setBotMitigationAction(ddos.bot_mitigation_action);
         if (ddos.risk_challenge_enabled !== undefined) setRiskChallengeEnabled(ddos.risk_challenge_enabled);
+        if (ddos.adaptive_throttle_enabled !== undefined) setAdaptiveThrottleEnabled(ddos.adaptive_throttle_enabled);
         if (ddos.advanced_rules !== undefined) setAdvancedRules(ddos.advanced_rules);
       }
     } catch (err) {
@@ -86,6 +88,7 @@ export default function DdosBotMitigation() {
         trusted_ips: ips,
         bot_mitigation_action: botMitigationAction,
         risk_challenge_enabled: riskChallengeEnabled,
+        adaptive_throttle_enabled: adaptiveThrottleEnabled,
         advanced_rules: advancedRules
       });
       showToast("Anti-DDoS & Bot Mitigation settings updated successfully.");
@@ -106,6 +109,7 @@ export default function DdosBotMitigation() {
         trusted_ips: ips,
         bot_mitigation_action: botMitigationAction,
         risk_challenge_enabled: riskChallengeEnabled,
+        adaptive_throttle_enabled: adaptiveThrottleEnabled,
         advanced_rules: updatedRules
       });
       setAdvancedRules(updatedRules);
@@ -258,6 +262,22 @@ export default function DdosBotMitigation() {
               Independent of Mitigation Action above — this serves the same JS-reload interstitial,
               but triggered by the ML risk engine's "worth a second look" band instead of a bad-bot
               User-Agent match. Off by default.
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={adaptiveThrottleEnabled}
+                onChange={(e) => setAdaptiveThrottleEnabled(e.target.checked)}
+              />
+              Tighten rate limit for repeat offenders (adaptive throttle)
+            </label>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+              Independent of the rate limit above — layered on top of it, never replacing it. Once an
+              IP's ML-tracked reputation crosses a threshold (roughly 3 confirmed blocks in 24h), this
+              caps it to a much stricter request rate regardless of the base limit. Off by default.
             </div>
           </div>
 
@@ -479,13 +499,17 @@ export default function DdosBotMitigation() {
                 advancedRules.map((rule) => (
                   <tr key={rule.id}>
                     <td>
-                      <div
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={rule.enabled}
+                        aria-label={`Rate limit rule "${rule.name}" ${rule.enabled ? 'enabled' : 'disabled'}`}
                         className={`toggle-switch ${rule.enabled ? 'active' : ''}`}
                         onClick={() => handleToggleRule(rule.id)}
                         style={{ transform: 'scale(0.85)', margin: 0 }}
                       >
                         <div className="toggle-knob"></div>
-                      </div>
+                      </button>
                     </td>
                     <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{rule.name}</td>
                     <td style={{ color: 'var(--sev-low)', fontWeight: 600 }}>{rule.parameter_type}</td>

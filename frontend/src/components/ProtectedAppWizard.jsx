@@ -25,6 +25,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
     backendHost: '',
     backendPort: '80',
     backendProtocol: 'http',
+    additionalOrigins: [],
     sslOption: 'letsencrypt',
     customCert: null,
     customKey: null,
@@ -64,6 +65,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
         backendHost: existingApp.upstream_host || '',
         backendPort: String(existingApp.upstream_port || '80'),
         backendProtocol: existingApp.protocol || 'http',
+        additionalOrigins: (existingApp.additional_origins || []).map(o => ({ host: o.host, port: String(o.port) })),
         sslOption: existingApp.ssl_option || 'letsencrypt',
         customCert: null,
         customKey: null,
@@ -120,6 +122,9 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
         upstream_host: formData.backendHost,
         upstream_port: parseInt(formData.backendPort, 10),
         protocol: formData.backendProtocol,
+        additional_origins: formData.additionalOrigins
+          .filter(o => o.host.trim() && o.port)
+          .map(o => ({ host: o.host.trim(), port: parseInt(o.port, 10) })),
         // Preserve the app's current enabled/disabled state on edit — this
         // wizard has no control for it, so it must not silently flip a
         // disabled app back on. New apps default to enabled.
@@ -395,10 +400,73 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                   </div>
                 </div>
 
+                <div className="form-group" style={{ marginTop: '12px' }}>
+                  <label>Additional Backend Servers (optional)</label>
+                  <span className="input-hint" style={{ display: 'block', marginBottom: '10px' }}>
+                    Load balancing: traffic round-robins across the primary server above plus any added here,
+                    with automatic failover away from one that starts erroring. All servers share the same
+                    protocol selected above.
+                  </span>
+
+                  {formData.additionalOrigins.map((origin, idx) => (
+                    <div className="form-row" key={idx} style={{ marginBottom: '8px', alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        className="wizard-input"
+                        placeholder="e.g., 10.0.0.2 or backend-2.internal"
+                        value={origin.host}
+                        onChange={(e) => {
+                          const next = [...formData.additionalOrigins];
+                          next[idx] = { ...next[idx], host: e.target.value };
+                          setFormData({ ...formData, additionalOrigins: next });
+                        }}
+                      />
+                      <input
+                        type="number"
+                        className="wizard-input"
+                        placeholder="Port"
+                        style={{ maxWidth: '110px' }}
+                        value={origin.port}
+                        onChange={(e) => {
+                          const next = [...formData.additionalOrigins];
+                          next[idx] = { ...next[idx], port: e.target.value };
+                          setFormData({ ...formData, additionalOrigins: next });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="wizard-btn secondary"
+                        style={{ padding: '8px 14px', flexShrink: 0 }}
+                        onClick={() => {
+                          const next = formData.additionalOrigins.filter((_, i) => i !== idx);
+                          setFormData({ ...formData, additionalOrigins: next });
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+
+                  <button
+                    type="button"
+                    className="wizard-btn secondary"
+                    style={{ padding: '8px 14px' }}
+                    onClick={() => setFormData({
+                      ...formData,
+                      additionalOrigins: [...formData.additionalOrigins, { host: '', port: formData.backendPort }],
+                    })}
+                  >
+                    + Add Backend Server
+                  </button>
+                </div>
+
                 <div className="info-box">
                   <AlertTriangle size={16} />
                   <span>
-                    Traffic flow: User → WAF ({wafServerIP}) → Backend ({formData.backendProtocol}://{formData.backendHost}:{formData.backendPort})
+                    Traffic flow: User → WAF ({wafServerIP}) → Backend ({formData.backendProtocol}://{formData.backendHost}:{formData.backendPort}
+                    {formData.additionalOrigins.filter(o => o.host.trim()).length > 0
+                      ? ` + ${formData.additionalOrigins.filter(o => o.host.trim()).length} more`
+                      : ''})
                   </span>
                 </div>
 

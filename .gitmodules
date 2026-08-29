@@ -1,0 +1,3 @@
+[submodule "configs/nginx/modsec/coreruleset"]
+	path = configs/nginx/modsec/coreruleset
+	url = https://github.com/coreruleset/coreruleset.git

@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     # verified against its live JWKS and flips it into SSO_RS256_TARGETS.
     # Leaving this unset keeps the exchange endpoint on HS256-only.
     SIEM_JWKS_URL: str = ""
+    # Path (inside the container) to the SIEM edge cert's PEM, so the JWKS
+    # fetch trusts it. PyJWKClient fetches over urllib, not `requests`, so
+    # this is loaded into an explicit ssl.SSLContext in services/sso.py
+    # rather than via a REQUESTS_CA_BUNDLE-style env var (that only affects
+    # code using the `requests` library, and wouldn't touch this fetch at
+    # all). Left unset, the JWKS fetch falls back to the system trust
+    # store, which correctly fails closed against a self-signed cert.
+    SIEM_SSO_CA_CERT: str = ""
     # Replay window for the token's single-use `nonce` claim. Comfortably
     # longer than the SIEM's ~120s token TTL + ~60s nbf back-date skew.
     SSO_NONCE_TTL_SECONDS: int = 300

@@ -35,6 +35,7 @@ class RuleCanaryReport(BaseModel):
     total_matches: int
     sole_match_count: int  # this rule was the ONLY match — disabling it would let these through unblocked
     co_matched_count: int  # other rule(s) also matched — safe if this one is disabled
+    daily_breakdown: List[Dict[str, Any]] = []  # per-day sole/co-matched split, for a trend view
 
 
 class RuleCanaryStatus(BaseModel):

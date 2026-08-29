@@ -11,7 +11,15 @@ jobs:
     name: Backend (pytest)
     runs-on: ubuntu-latest
     steps:
+      # test_rule_canary.py exercises rule_manager.py against real CRS rule
+      # IDs (e.g. 901001) parsed from configs/nginx/modsec/coreruleset — a
+      # git submodule actions/checkout doesn't fetch by default. Without
+      # this, rule_manager falls back to its small hardcoded sample set
+      # (which doesn't contain those IDs) and every canary test fails on
+      # "Rule ID ... does not exist in the active OWASP CRS dataset."
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-python@v5
         with:
@@ -25,6 +33,17 @@ jobs:
 
       - name: Run pytest
         working-directory: backend
+        env:
+          # Points rule_manager.py at the submodule actions/checkout just
+          # fetched (see rule_manager.py's comment on RULES_DIR) instead
+          # of the production-only /etc/nginx/... path, which doesn't
+          # exist on this runner.
+          CRS_RULES_DIR: ${{ github.workspace }}/configs/nginx/modsec/coreruleset/rules
+          # Avoids a wall of "Failed to create security audit log
+          # directory /var/log/cybersentinel: [Errno 13] Permission
+          # denied" noise in CI output — harmless (security.py already
+          # fails soft on this), just cleaner logs.
+          SECURITY_AUDIT_LOG_DIR: ${{ runner.temp }}/cybersentinel-audit-log
         run: pytest tests/ -v
 
   ml-waf:

@@ -119,6 +119,23 @@ def ensure_api_discovery_param_names_column() -> None:
         logger.warning(f"ClickHouse api_discovery.param_names migration check failed: {e}")
 
 
+def ensure_alert_history_channel_results_column() -> None:
+    """Idempotent schema migration: adds alert_history.channel_results
+    (String, JSON-serialized) for installs whose table predates per-channel
+    delivery-health tracking. Same pure-addition pattern as
+    ensure_api_discovery_param_names_column above — safe to run every
+    startup, no marker column needed."""
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        client.command(
+            "ALTER TABLE alert_history ADD COLUMN IF NOT EXISTS channel_results String DEFAULT '[]'"
+        )
+    except Exception as e:
+        logger.warning(f"ClickHouse alert_history.channel_results migration check failed: {e}")
+
+
 def reset_fabricated_api_discovery_fields() -> None:
     """
     One-time migration: api_discovery.has_https/content_encoding used to be
@@ -380,10 +397,16 @@ def get_rule_canary_report(rule_id: str, hours: int = 168) -> Dict[str, int]:
     disabling it would let these through unblocked.
     co_matched_count: at least one other rule also matched — still blocked
     even if this one were disabled.
+
+    daily_breakdown: the same sole/co-matched split, bucketed by day across
+    the window — lets the UI show a trend (is the sole-match rate rising or
+    falling?) rather than just the one aggregate number for the whole
+    window, which hides whether that number is steady or was one bad day.
     """
     client = _get_client()
+    empty = {"total_matches": 0, "sole_match_count": 0, "co_matched_count": 0, "daily_breakdown": []}
     if client is None:
-        return {"total_matches": 0, "sole_match_count": 0, "co_matched_count": 0}
+        return empty
 
     matched_expr = (
         "arrayExists(x -> JSONExtractString(x, 'rule_id') = %(rule_id)s, "
@@ -404,14 +427,34 @@ def get_rule_canary_report(rule_id: str, hours: int = 168) -> Dict[str, int]:
             parameters={"rule_id": rule_id},
         )
         row = result.result_rows[0] if result.result_rows else (0, 0, 0)
+
+        daily_result = client.query(
+            f"""
+            SELECT
+                toDate(timestamp) AS day,
+                countIf({matched_expr} AND {count_expr} = 1) AS sole_match_count,
+                countIf({matched_expr} AND {count_expr} > 1) AS co_matched_count
+            FROM waf_events
+            WHERE timestamp >= now() - INTERVAL {int(hours)} HOUR
+            GROUP BY day
+            ORDER BY day ASC
+            """,
+            parameters={"rule_id": rule_id},
+        )
+        daily_breakdown = [
+            {"date": str(r[0]), "sole_match_count": int(r[1]), "co_matched_count": int(r[2])}
+            for r in daily_result.result_rows
+        ]
+
         return {
             "total_matches": int(row[0]),
             "sole_match_count": int(row[1]),
             "co_matched_count": int(row[2]),
+            "daily_breakdown": daily_breakdown,
         }
     except Exception as e:
         logger.error(f"get_rule_canary_report failed for rule {rule_id}: {e}")
-        return {"total_matches": 0, "sole_match_count": 0, "co_matched_count": 0}
+        return empty
 
 
 def query_waf_events(
@@ -646,6 +689,58 @@ def get_waf_event_by_id(log_id: str) -> Optional[Dict]:
         return None
 
 
+# waf_events (ModSecurity's own transaction ID) and ml_events (nginx's
+# $request_id) are independent ID spaces — nothing in this stack threads
+# one into the other (same limitation ml-waf/crs_audit_enrichment.py
+# already documents and works around for its own, offline, SQLite-side
+# join). This is the ClickHouse-side equivalent: both tables' timestamp
+# columns are the same type (DateTime('Asia/Kolkata')), confirmed via
+# DESCRIBE TABLE, so no timezone conversion is needed here — just a
+# bounded window on (client_ip, uri, timestamp). Fuzzy by necessity, not
+# a guaranteed match: two near-simultaneous requests from the same IP to
+# the same URI could rarely mismatch, same accepted tradeoff as the
+# offline job.
+EXPLAIN_MATCH_WINDOW_SECONDS = 3
+
+
+def find_ml_event_near(client_ip: str, uri: str, timestamp: str, window_seconds: int = EXPLAIN_MATCH_WINDOW_SECONDS) -> Optional[Dict]:
+    """Best-effort lookup of the ml_events row (if any) for the same
+    request a waf_events row describes — see the module comment above for
+    why this can't be an exact join. Returns None if ml scoring never ran
+    for this request (e.g. it was blocked natively by ModSecurity before
+    reaching the content-phase /predict call — see ml_decide.lua) or no
+    match falls inside the window."""
+    client = _get_client()
+    if client is None:
+        return None
+    try:
+        result = client.query(
+            """
+            SELECT unique_id, timestamp, crs_score, matched_vars, xgb_prob,
+                   iso_score, threat_score, decision, redis_rep, abuse_score
+            FROM ml_events
+            WHERE remote_addr = %(client_ip)s
+              AND uri = %(uri)s
+              AND timestamp BETWEEN %(ts)s - INTERVAL %(window)s SECOND
+                                AND %(ts)s + INTERVAL %(window)s SECOND
+            ORDER BY abs(dateDiff('second', timestamp, %(ts)s)) ASC
+            LIMIT 1
+            """,
+            parameters={"client_ip": client_ip, "uri": uri, "ts": timestamp, "window": window_seconds},
+        )
+        if not result.result_rows:
+            return None
+        columns = ["unique_id", "timestamp", "crs_score", "matched_vars", "xgb_prob",
+                   "iso_score", "threat_score", "decision", "redis_rep", "abuse_score"]
+        d = dict(zip(columns, result.result_rows[0]))
+        if isinstance(d["timestamp"], datetime):
+            d["timestamp"] = d["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+        return d
+    except Exception as e:
+        logger.error(f"find_ml_event_near failed: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Stats / Aggregation Queries
 # ---------------------------------------------------------------------------
@@ -771,6 +866,35 @@ def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
         ]
     except Exception as e:
         logger.error(f"get_top_ips failed: {e}")
+        raise
+
+
+def get_repeat_offender_ips(threshold: int, hours: int) -> List[str]:
+    """Self-learned IP reputation (P1-7): IPs with at least `threshold`
+    blocked (401/403/406/429) requests in the last `hours` — the
+    server-side HAVING equivalent of get_top_ips above, used by
+    auto_reputation_service's scheduled job rather than a dashboard
+    display, so it returns just the qualifying IP list, not a ranked
+    top-N with country/count for humans to read."""
+    client = _get_client()
+    if client is None:
+        raise RuntimeError("ClickHouse client unavailable")
+    try:
+        result = client.query(
+            f"""
+            SELECT client_ip
+            FROM waf_events
+            WHERE http_code IN {_BLOCKED_HTTP_CODES_SQL}
+              AND client_ip != ''
+              AND timestamp >= now() - INTERVAL %(hours)s HOUR
+            GROUP BY client_ip
+            HAVING count() >= %(threshold)s
+            """,
+            parameters={"hours": hours, "threshold": threshold},
+        )
+        return [row[0] for row in result.result_rows]
+    except Exception as e:
+        logger.error(f"get_repeat_offender_ips failed: {e}")
         raise
 
 
@@ -1600,10 +1724,12 @@ def insert_alert_history(record: Dict[str, Any]) -> bool:
             str(record.get("error_message", "") or ""),
             str(record.get("acknowledged_by", "") or ""),
             ack_at,
+            str(record.get("channel_results", "") or "[]"),
         ]], column_names=[
             "id", "rule_id", "rule_name", "event_type", "severity",
             "channels_notified", "event_data", "message", "status",
             "error_message", "acknowledged_by", "acknowledged_at",
+            "channel_results",
         ])
         return True
     except ClickHouseError as e:
@@ -1646,17 +1772,19 @@ def query_alert_history(
         result = client.query(
             f"""
             SELECT id, rule_id, rule_name, event_type, severity, channels_notified,
-                   event_data, message, status, error_message, acknowledged_by, acknowledged_at, created_at
+                   event_data, message, status, error_message, acknowledged_by, acknowledged_at, created_at,
+                   channel_results
             FROM alert_history
             WHERE {where_clause}
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT {int(limit)} OFFSET {int(offset)}
             """,
             parameters=params,
         )
         columns = [
             "id", "rule_id", "rule_name", "event_type", "severity", "channels_notified",
-            "event_data", "message", "status", "error_message", "acknowledged_by", "acknowledged_at", "created_at"
+            "event_data", "message", "status", "error_message", "acknowledged_by", "acknowledged_at", "created_at",
+            "channel_results",
         ]
         rows = []
         for row in result.result_rows:

@@ -1,12 +1,18 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Archive, Brain, CheckSquare, Database, Download, FileCode, History, Lock, RotateCcw, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Archive, Brain, CheckSquare, Database, Download, FileCode, History, Lock, RotateCcw, RotateCw, Search, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, Trash2, X } from 'lucide-react';
 import {
   getGeneralSettings, saveGeneralSettings, getLogSettings, saveLogSettings,
   getWafSettings, saveWafSettings,
   changeAdminPassword, restartWafEngine, reloadNginxProxy, purgeStatsCache, syncSignatures,
   getHardeningSettings, saveHardeningSettings, getGeoBlockSettings, saveGeoBlockSettings,
   getThreatIntelSettings, saveThreatIntelSettings, syncThreatIntelNow,
+  getAutoReputationSettings, saveAutoReputationSettings, syncAutoReputationNow,
+  getAutoBlockedIps, releaseAutoBlockedIp,
+  getAdminLoginAllowlistSettings, saveAdminLoginAllowlistSettings,
+  getMalwareScanningSettings, saveMalwareScanningSettings, checkMalwareScanningNow,
+  getApiKeys, createApiKey, revokeApiKey,
   getAntiDefacementSettings, saveAntiDefacementSettings,
   getPositiveSecurity, savePositiveSecurity,
   getCustomResponse, saveCustomResponse, getAutoLearning, saveAutoLearning,
@@ -15,11 +21,42 @@ import {
   getBackups, createBackup, restoreBackup, deleteBackup, downloadBackup,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
+import SettingsAccordionCard from '../components/SettingsAccordionCard';
 import Toast from '../components/Toast';
 import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import Button from '../components/Button';
 import { formatLocalTime } from '../utils/helpers';
+
+// One entry per independently-saved form on this page — every tab can hold
+// several (Hardening alone has six accordion sections, each its own form).
+// Backs the unsaved-changes bar: which form got dirty, and which tab to jump
+// to for it.
+const SETTINGS_SECTIONS = {
+  general: { label: 'General', tab: 'general' },
+  waf: { label: 'WAF Engine', tab: 'waf' },
+  logs: { label: 'Log Ingestion', tab: 'logs' },
+  hardening: { label: 'Infrastructure Hardening', tab: 'hardening' },
+  geoblock: { label: 'Geo-Block', tab: 'hardening' },
+  threatintel: { label: 'External Threat-Intel Feed', tab: 'hardening' },
+  autorep: { label: 'Self-Learned IP Reputation', tab: 'hardening' },
+  adminallowlist: { label: 'Admin-Login IP Allowlist', tab: 'hardening' },
+  malwarescan: { label: 'Malware Scanning', tab: 'hardening' },
+  possec: { label: 'Positive Security', tab: 'positive-security' },
+  defacement: { label: 'Anti-Defacement', tab: 'defacement' },
+  customresponse: { label: 'Custom Response Page', tab: 'custom-response' },
+  autolearning: { label: 'Auto-Learning', tab: 'auto-learning' },
+};
+
+// The 11 sidebar leaf labels (distinct from SETTINGS_SECTIONS above, which
+// is per-form for dirty-tracking — Hardening's 6 accordion forms all live
+// under one sidebar entry). Backs the sidebar search box's "no matches"
+// empty state.
+const ALL_SETTINGS_LABELS = [
+  'General Setup', 'WAF Engine Policies', 'Log Pipeline', 'Server Hardening',
+  'Positive Security', 'Anti-Defacement', 'Auto-Learning', 'Custom Response',
+  'Security & Danger Zone', 'Activity Log', 'Backups',
+];
 
 export default function Settings({ onLogout }) {
   // General Settings
@@ -68,6 +105,34 @@ export default function Settings({ onLogout }) {
   const [threatIntelStatus, setThreatIntelStatus] = useState(null);
   const [threatIntelSyncing, setThreatIntelSyncing] = useState(false);
 
+  // Self-Learned IP Reputation (P1-7) — auto-blocks repeat WAF-block
+  // offenders from this deployment's own traffic. Separate Redis key
+  // namespace from both the manual blacklist and the threat-intel feed
+  // above; individual per-IP TTL'd entries, not a CIDR set.
+  const [autoRepEnabled, setAutoRepEnabled] = useState(false);
+  const [autoRepThreshold, setAutoRepThreshold] = useState(50);
+  const [autoRepWindowHours, setAutoRepWindowHours] = useState(1);
+  const [autoRepTtlHours, setAutoRepTtlHours] = useState(24);
+  const [autoRepIntervalMinutes, setAutoRepIntervalMinutes] = useState(15);
+  const [autoRepStatus, setAutoRepStatus] = useState(null);
+  const [autoRepSyncing, setAutoRepSyncing] = useState(false);
+  const [adminAllowlistEnabled, setAdminAllowlistEnabled] = useState(false);
+  const [adminAllowlistNetworks, setAdminAllowlistNetworks] = useState("");
+  const [malwareScanEnabled, setMalwareScanEnabled] = useState(false);
+  const [malwareScanFailMode, setMalwareScanFailMode] = useState('open');
+  const [malwareScanTimeout, setMalwareScanTimeout] = useState(5);
+  const [malwareScanStatus, setMalwareScanStatus] = useState(null);
+  const [malwareScanChecking, setMalwareScanChecking] = useState(false);
+  const [apiKeys, setApiKeys] = useState([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyRole, setNewKeyRole] = useState('analyst');
+  const [newKeyExpiresDays, setNewKeyExpiresDays] = useState('');
+  const [creatingApiKey, setCreatingApiKey] = useState(false);
+  const [revealedApiKey, setRevealedApiKey] = useState(null);
+  const [autoBlockedIps, setAutoBlockedIps] = useState([]);
+  const [autoBlockedIpsLoading, setAutoBlockedIpsLoading] = useState(false);
+
   // Anti-Defacement Settings
   const [defacementEnabled, setDefacementEnabled] = useState(true);
   const [defacementFiles, setDefacementFiles] = useState("");
@@ -103,6 +168,31 @@ export default function Settings({ onLogout }) {
   useEscapeToClose(() => setDangerModal(null), !!dangerModal);
   const [loadingAction, setLoadingAction] = useState(false);
   const [activeSettingTab, setActiveSettingTab] = useState('general');
+  const [settingsSearch, setSettingsSearch] = useState('');
+  // A group/button stays visible if no query is entered, or if ANY of the
+  // labels passed in matches — used both per-button (one label) and per-
+  // group-header (all of that group's labels, so the header only hides
+  // once every one of its members is filtered out too).
+  const matchesSettingsSearch = (...labels) => {
+    const q = settingsSearch.trim().toLowerCase();
+    if (!q) return true;
+    return labels.some((l) => l.toLowerCase().includes(q));
+  };
+  const hasAnySettingsMatch = matchesSettingsSearch(...ALL_SETTINGS_LABELS);
+
+  // Unsaved-changes tracking: each form marks its own key dirty on any field
+  // change (via the form's onChange, which catches every input inside it —
+  // no per-field wiring needed) and clears it once its own save succeeds.
+  // Sections stay independent on purpose — there's no "save all", since each
+  // form validates and applies separately.
+  const [dirtySections, setDirtySections] = useState({});
+  const markDirty = (key) => setDirtySections((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+  const clearDirty = (key) => setDirtySections((prev) => {
+    if (!prev[key]) return prev;
+    const next = { ...prev };
+    delete next[key];
+    return next;
+  });
   // Previously a failed initial load only did console.error, leaving every
   // tab showing hardcoded defaults with zero visible signal that they don't
   // reflect real WAF config — an admin could edit and save right over real
@@ -112,13 +202,16 @@ export default function Settings({ onLogout }) {
   const fetchSettings = async () => {
     setSettingsLoadError('');
     try {
-        const [gen, logs, waf, hardening, geoBlock, threatIntel, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
+        const [gen, logs, waf, hardening, geoBlock, threatIntel, autoRep, adminLoginAllowlist, malwareScan, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
           getGeneralSettings(),
           getLogSettings(),
           getWafSettings(),
           getHardeningSettings(),
           getGeoBlockSettings(),
           getThreatIntelSettings(),
+          getAutoReputationSettings(),
+          getAdminLoginAllowlistSettings(),
+          getMalwareScanningSettings(),
           getAntiDefacementSettings(),
           getPositiveSecurity(),
           getCustomResponse(),
@@ -159,6 +252,24 @@ export default function Settings({ onLogout }) {
           if (threatIntel.sync_interval_hours !== undefined) setThreatIntelIntervalHours(threatIntel.sync_interval_hours);
           setThreatIntelStatus(threatIntel);
         }
+        if (autoRep) {
+          if (autoRep.enabled !== undefined) setAutoRepEnabled(autoRep.enabled);
+          if (autoRep.block_threshold !== undefined) setAutoRepThreshold(autoRep.block_threshold);
+          if (autoRep.window_hours !== undefined) setAutoRepWindowHours(autoRep.window_hours);
+          if (autoRep.block_ttl_hours !== undefined) setAutoRepTtlHours(autoRep.block_ttl_hours);
+          if (autoRep.sync_interval_minutes !== undefined) setAutoRepIntervalMinutes(autoRep.sync_interval_minutes);
+          setAutoRepStatus(autoRep);
+        }
+        if (adminLoginAllowlist) {
+          if (adminLoginAllowlist.enabled !== undefined) setAdminAllowlistEnabled(adminLoginAllowlist.enabled);
+          if (adminLoginAllowlist.allowed_networks !== undefined) setAdminAllowlistNetworks(adminLoginAllowlist.allowed_networks.join(', '));
+        }
+        if (malwareScan) {
+          if (malwareScan.enabled !== undefined) setMalwareScanEnabled(malwareScan.enabled);
+          if (malwareScan.fail_mode) setMalwareScanFailMode(malwareScan.fail_mode);
+          if (malwareScan.scan_timeout_seconds !== undefined) setMalwareScanTimeout(malwareScan.scan_timeout_seconds);
+          setMalwareScanStatus(malwareScan);
+        }
         if (defacement) {
           if (defacement.enabled !== undefined) setDefacementEnabled(defacement.enabled);
           if (defacement.monitored_files !== undefined) setDefacementFiles(defacement.monitored_files.join(', '));
@@ -197,6 +308,7 @@ export default function Settings({ onLogout }) {
         logsPerPage,
         liveUpdates
       });
+      clearDirty('general');
       showToast("General preferences saved successfully.");
     } catch (err) {
       showToast(err.message || "Failed to save general settings.", "error");
@@ -214,6 +326,7 @@ export default function Settings({ onLogout }) {
         detectionMode,
         paranoiaLevel
       });
+      clearDirty('waf');
       showToast("WAF core policies updated successfully.");
     } catch (err) {
       showToast(err.message || "Failed to save WAF settings.", "error");
@@ -237,6 +350,7 @@ export default function Settings({ onLogout }) {
         ip_blacklist: blacklist,
         ip_whitelist: whitelist
       });
+      clearDirty('hardening');
       showToast("Hardening & Server Cloaking policies updated and applied to NGINX.");
     } catch (err) {
       showToast("Failed to update hardening settings: " + (err.message || "Unknown error"), "error");
@@ -255,6 +369,7 @@ export default function Settings({ onLogout }) {
         mode: geoBlockMode,
         countries,
       });
+      clearDirty('geoblock');
       showToast("Geo-Block policy updated.");
     } catch (err) {
       showToast("Failed to update geo-block settings: " + (err.message || "Unknown error"), "error");
@@ -272,6 +387,7 @@ export default function Settings({ onLogout }) {
         sync_interval_hours: parseInt(threatIntelIntervalHours) || 24,
       });
       setThreatIntelStatus(saved);
+      clearDirty('threatintel');
       showToast("Threat-intel feed settings updated.");
     } catch (err) {
       showToast("Failed to update threat-intel settings: " + (err.message || "Unknown error"), "error");
@@ -294,6 +410,161 @@ export default function Settings({ onLogout }) {
     }
   };
 
+  const handleFetchAutoBlockedIps = async () => {
+    setAutoBlockedIpsLoading(true);
+    try {
+      const ips = await getAutoBlockedIps();
+      setAutoBlockedIps(ips);
+    } catch (err) {
+      showToast("Failed to load auto-blocked IPs: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setAutoBlockedIpsLoading(false);
+    }
+  };
+
+  const handleSaveAutoReputation = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const saved = await saveAutoReputationSettings({
+        enabled: autoRepEnabled,
+        block_threshold: parseInt(autoRepThreshold) || 50,
+        window_hours: parseInt(autoRepWindowHours) || 1,
+        block_ttl_hours: parseInt(autoRepTtlHours) || 24,
+        sync_interval_minutes: parseInt(autoRepIntervalMinutes) || 15,
+      });
+      setAutoRepStatus(saved);
+      clearDirty('autorep');
+      showToast("Self-learned IP reputation settings updated.");
+    } catch (err) {
+      showToast("Failed to update auto-reputation settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleSyncAutoReputationNow = async () => {
+    setAutoRepSyncing(true);
+    try {
+      const result = await syncAutoReputationNow();
+      showToast(`Auto-reputation sync complete — ${result.count} IP(s) auto-blocked.`);
+      const refreshed = await getAutoReputationSettings();
+      setAutoRepStatus(refreshed);
+      handleFetchAutoBlockedIps();
+    } catch (err) {
+      showToast("Auto-reputation sync failed: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setAutoRepSyncing(false);
+    }
+  };
+
+  const handleReleaseAutoBlockedIp = async (ip) => {
+    try {
+      await releaseAutoBlockedIp(ip);
+      showToast(`${ip} released from auto-block.`);
+      handleFetchAutoBlockedIps();
+    } catch (err) {
+      showToast(`Failed to release ${ip}: ` + (err.message || "Unknown error"), "error");
+    }
+  };
+
+  const handleSaveAdminLoginAllowlist = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const networks = adminAllowlistNetworks.split(',').map(ip => ip.trim()).filter(ip => ip);
+      const saved = await saveAdminLoginAllowlistSettings({
+        enabled: adminAllowlistEnabled,
+        allowed_networks: networks,
+      });
+      setAdminAllowlistNetworks(saved.allowed_networks.join(', '));
+      clearDirty('adminallowlist');
+      showToast("Admin-login IP allowlist updated.");
+    } catch (err) {
+      // Includes the backend's self-lockout guard message when an admin
+      // tries to enable a list that excludes their own current IP.
+      showToast("Failed to update admin-login allowlist: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleSaveMalwareScanning = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const saved = await saveMalwareScanningSettings({
+        enabled: malwareScanEnabled,
+        fail_mode: malwareScanFailMode,
+        scan_timeout_seconds: parseInt(malwareScanTimeout, 10) || 5,
+      });
+      setMalwareScanStatus(saved);
+      clearDirty('malwarescan');
+      showToast("Malware scanning settings updated.");
+    } catch (err) {
+      showToast("Failed to update malware scanning settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleCheckMalwareScanningNow = async () => {
+    setMalwareScanChecking(true);
+    try {
+      const result = await checkMalwareScanningNow();
+      setMalwareScanStatus(result);
+      showToast(
+        result.last_check_status === "ok"
+          ? "ClamAV is reachable."
+          : "ClamAV is unreachable — see status below."
+      );
+    } catch (err) {
+      showToast("Failed to check ClamAV connectivity: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setMalwareScanChecking(false);
+    }
+  };
+
+  const fetchApiKeys = async () => {
+    setApiKeysLoading(true);
+    try {
+      const keys = await getApiKeys();
+      setApiKeys(keys || []);
+    } catch (err) {
+      showToast("Failed to load API keys: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setApiKeysLoading(false);
+    }
+  };
+
+  const handleCreateApiKey = async (e) => {
+    e.preventDefault();
+    setCreatingApiKey(true);
+    try {
+      const payload = { name: newKeyName, role: newKeyRole };
+      if (newKeyExpiresDays) payload.expires_in_days = parseInt(newKeyExpiresDays);
+      const created = await createApiKey(payload);
+      setRevealedApiKey(created);
+      setNewKeyName('');
+      setNewKeyExpiresDays('');
+      fetchApiKeys();
+    } catch (err) {
+      showToast("Failed to create API key: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setCreatingApiKey(false);
+    }
+  };
+
+  const handleRevokeApiKey = async (id) => {
+    try {
+      await revokeApiKey(id);
+      showToast("API key revoked.");
+      fetchApiKeys();
+    } catch (err) {
+      showToast("Failed to revoke API key: " + (err.message || "Unknown error"), "error");
+    }
+  };
+
   const handleSaveDefacement = async (e) => {
     e.preventDefault();
     setLoadingAction(true);
@@ -304,6 +575,7 @@ export default function Settings({ onLogout }) {
         monitored_files: files,
         check_interval_seconds: parseInt(checkInterval) || 5
       });
+      clearDirty('defacement');
       showToast("Web Anti-Defacement policies updated successfully.");
     } catch (err) {
       showToast("Failed to update Anti-Defacement settings: " + (err.message || "Unknown error"), "error");
@@ -336,6 +608,7 @@ export default function Settings({ onLogout }) {
         allowed_content_types: contentTypes,
         restricted_extensions: extensions,
       });
+      clearDirty('possec');
       showToast(
         posSecEnabled
           ? "Positive Security policy updated and applied to protected apps."
@@ -353,6 +626,7 @@ export default function Settings({ onLogout }) {
     setLoadingAction(true);
     try {
       await saveCustomResponse({ html_content: customResponseHtml });
+      clearDirty('customresponse');
       showToast("Custom block page saved and will be served on the next blocked request.");
     } catch (err) {
       showToast("Failed to save custom response page: " + (err.message || "Unknown error"), "error");
@@ -370,6 +644,7 @@ export default function Settings({ onLogout }) {
         learning_period: autoLearningPeriod,
         confidence_threshold: parseInt(autoLearningThreshold) || 90,
       });
+      clearDirty('autolearning');
       showToast(
         autoLearningEnabled
           ? "Auto-Learning enabled — baseline tuning will use the configured window."
@@ -452,6 +727,22 @@ export default function Settings({ onLogout }) {
   useEffect(() => {
     if (activeSettingTab === 'backups') {
       const timer = setTimeout(() => fetchBackups(), 0);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSettingTab]);
+
+  useEffect(() => {
+    if (activeSettingTab === 'security') {
+      const timer = setTimeout(() => fetchApiKeys(), 0);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSettingTab]);
+
+  useEffect(() => {
+    if (activeSettingTab === 'hardening') {
+      const timer = setTimeout(() => handleFetchAutoBlockedIps(), 0);
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -582,6 +873,7 @@ export default function Settings({ onLogout }) {
         concurrentLogging,
         retention
       });
+      clearDirty('logs');
       showToast("Log ingestion configurations successfully updated.");
     } catch (err) {
       showToast(err.message || "Failed to update log settings.", "error");
@@ -645,6 +937,53 @@ export default function Settings({ onLogout }) {
       {/* Toast Alert overlay */}
       <Toast toast={toast} />
 
+      {/* Unsaved-changes bar — each form here saves independently (no "save
+          all"), so this is awareness, not another save action: which
+          section(s) have edits sitting uncommitted, and a one-click jump to
+          them if the admin isn't already looking at that tab. */}
+      {createPortal(
+        <AnimatePresence>
+          {Object.keys(dirtySections).length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 16 }}
+              transition={{ duration: 0.2 }}
+              style={{
+                position: 'fixed', left: '50%', bottom: '24px', transform: 'translateX(-50%)',
+                zIndex: 500, maxWidth: 'min(680px, calc(100vw - 48px))',
+                display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap',
+                padding: '10px 16px', borderRadius: '10px',
+                background: 'var(--warning-bg)', border: '1px solid var(--warning-glow)',
+                boxShadow: '0 10px 30px rgba(0,0,0,0.35)',
+              }}
+            >
+              <AlertTriangle size={16} color="var(--warning-color)" style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--warning-color)', whiteSpace: 'nowrap' }}>
+                Unsaved changes:
+              </span>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {Object.keys(dirtySections).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setActiveSettingTab(SETTINGS_SECTIONS[key]?.tab || key)}
+                    style={{
+                      fontSize: '11px', fontWeight: 600, padding: '3px 10px', borderRadius: '999px',
+                      background: 'var(--surface-hover)', color: 'var(--text-primary)',
+                      border: '1px solid var(--warning-glow)', cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {SETTINGS_SECTIONS[key]?.label || key}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
+
       {/* Danger Modal confirmation prompt */}
       <AnimatePresence>
         {dangerModal && (
@@ -698,43 +1037,103 @@ export default function Settings({ onLogout }) {
 
       <div className="settings-layout" style={{ display: 'flex', gap: '32px', alignItems: 'flex-start' }}>
 
-        {/* Sidebar Navigation */}
+        {/* Sidebar Navigation — grouped into 4 domains instead of one flat
+            list of 11. Every button below is unchanged (same onClick, same
+            icon, same active-state check) — only the grouping/labels are
+            new, so no tab's own behavior is touched by this. A search box
+            filters this same list by label text rather than introducing a
+            second way to navigate — 11 sections is approaching the point
+            where scanning a static list stops being enough. */}
         <div className="settings-sidebar">
-          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.2px', marginBottom: '10px', paddingLeft: '16px' }}>Configuration</div>
+          <div style={{ position: 'relative', marginBottom: '8px' }}>
+            <Search size={14} color="var(--text-muted)" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
+            <input
+              type="text"
+              value={settingsSearch}
+              onChange={(e) => setSettingsSearch(e.target.value)}
+              placeholder="Search settings..."
+              aria-label="Search settings"
+              className="search-input"
+              style={{ width: '100%', paddingLeft: '34px', margin: 0 }}
+            />
+          </div>
 
-          <button onClick={() => setActiveSettingTab('general')} className={`settings-tab-btn ${activeSettingTab === 'general' ? 'active' : ''}`}>
-            <SettingsIcon size={20} /> General Setup
-          </button>
-          <button onClick={() => setActiveSettingTab('waf')} className={`settings-tab-btn ${activeSettingTab === 'waf' ? 'active' : ''}`}>
-            <ShieldCheck size={20} /> WAF Engine Policies
-          </button>
-          <button onClick={() => setActiveSettingTab('logs')} className={`settings-tab-btn ${activeSettingTab === 'logs' ? 'active' : ''}`}>
-            <Database size={20} /> Log Pipeline
-          </button>
-          <button onClick={() => setActiveSettingTab('hardening')} className={`settings-tab-btn ${activeSettingTab === 'hardening' ? 'active' : ''}`}>
-            <Server size={20} /> Server Hardening
-          </button>
-          <button onClick={() => setActiveSettingTab('positive-security')} className={`settings-tab-btn ${activeSettingTab === 'positive-security' ? 'active' : ''}`}>
-            <CheckSquare size={20} /> Positive Security
-          </button>
-          <button onClick={() => setActiveSettingTab('defacement')} className={`settings-tab-btn ${activeSettingTab === 'defacement' ? 'active' : ''}`}>
-            <ShieldAlert size={20} /> Anti-Defacement
-          </button>
-          <button onClick={() => setActiveSettingTab('custom-response')} className={`settings-tab-btn ${activeSettingTab === 'custom-response' ? 'active' : ''}`}>
-            <FileCode size={20} /> Custom Response
-          </button>
-          <button onClick={() => setActiveSettingTab('auto-learning')} className={`settings-tab-btn ${activeSettingTab === 'auto-learning' ? 'active' : ''}`}>
-            <Brain size={20} /> Auto-Learning
-          </button>
-          <button onClick={() => setActiveSettingTab('security')} className={`settings-tab-btn ${activeSettingTab === 'security' ? 'active' : ''}`}>
-            <Lock size={20} /> Security & Danger Zone
-          </button>
-          <button onClick={() => setActiveSettingTab('activity-log')} className={`settings-tab-btn ${activeSettingTab === 'activity-log' ? 'active' : ''}`}>
-            <History size={20} /> Activity Log
-          </button>
-          <button onClick={() => setActiveSettingTab('backups')} className={`settings-tab-btn ${activeSettingTab === 'backups' ? 'active' : ''}`}>
-            <Archive size={20} /> Backups
-          </button>
+          {matchesSettingsSearch('Engine', 'General Setup', 'WAF Engine Policies', 'Log Pipeline') && (
+            <div className="settings-sidebar-group-label" style={{ marginTop: 0 }}>Engine</div>
+          )}
+          {matchesSettingsSearch('General Setup') && (
+            <button onClick={() => setActiveSettingTab('general')} className={`settings-tab-btn ${activeSettingTab === 'general' ? 'active' : ''}`}>
+              <SettingsIcon size={20} /> General Setup
+            </button>
+          )}
+          {matchesSettingsSearch('WAF Engine Policies') && (
+            <button onClick={() => setActiveSettingTab('waf')} className={`settings-tab-btn ${activeSettingTab === 'waf' ? 'active' : ''}`}>
+              <ShieldCheck size={20} /> WAF Engine Policies
+            </button>
+          )}
+          {matchesSettingsSearch('Log Pipeline') && (
+            <button onClick={() => setActiveSettingTab('logs')} className={`settings-tab-btn ${activeSettingTab === 'logs' ? 'active' : ''}`}>
+              <Database size={20} /> Log Pipeline
+            </button>
+          )}
+
+          {matchesSettingsSearch('Hardening', 'Server Hardening') && (
+            <div className="settings-sidebar-group-label">Hardening</div>
+          )}
+          {matchesSettingsSearch('Server Hardening') && (
+            <button onClick={() => setActiveSettingTab('hardening')} className={`settings-tab-btn ${activeSettingTab === 'hardening' ? 'active' : ''}`}>
+              <Server size={20} /> Server Hardening
+            </button>
+          )}
+
+          {matchesSettingsSearch('Detection Tuning', 'Positive Security', 'Anti-Defacement', 'Auto-Learning', 'Custom Response') && (
+            <div className="settings-sidebar-group-label">Detection Tuning</div>
+          )}
+          {matchesSettingsSearch('Positive Security') && (
+            <button onClick={() => setActiveSettingTab('positive-security')} className={`settings-tab-btn ${activeSettingTab === 'positive-security' ? 'active' : ''}`}>
+              <CheckSquare size={20} /> Positive Security
+            </button>
+          )}
+          {matchesSettingsSearch('Anti-Defacement') && (
+            <button onClick={() => setActiveSettingTab('defacement')} className={`settings-tab-btn ${activeSettingTab === 'defacement' ? 'active' : ''}`}>
+              <ShieldAlert size={20} /> Anti-Defacement
+            </button>
+          )}
+          {matchesSettingsSearch('Auto-Learning') && (
+            <button onClick={() => setActiveSettingTab('auto-learning')} className={`settings-tab-btn ${activeSettingTab === 'auto-learning' ? 'active' : ''}`}>
+              <Brain size={20} /> Auto-Learning
+            </button>
+          )}
+          {matchesSettingsSearch('Custom Response') && (
+            <button onClick={() => setActiveSettingTab('custom-response')} className={`settings-tab-btn ${activeSettingTab === 'custom-response' ? 'active' : ''}`}>
+              <FileCode size={20} /> Custom Response
+            </button>
+          )}
+
+          {matchesSettingsSearch('Access & Audit', 'Security & Danger Zone', 'Activity Log', 'Backups') && (
+            <div className="settings-sidebar-group-label">Access &amp; Audit</div>
+          )}
+          {matchesSettingsSearch('Security & Danger Zone') && (
+            <button onClick={() => setActiveSettingTab('security')} className={`settings-tab-btn ${activeSettingTab === 'security' ? 'active' : ''}`}>
+              <Lock size={20} /> Security & Danger Zone
+            </button>
+          )}
+          {matchesSettingsSearch('Activity Log') && (
+            <button onClick={() => setActiveSettingTab('activity-log')} className={`settings-tab-btn ${activeSettingTab === 'activity-log' ? 'active' : ''}`}>
+              <History size={20} /> Activity Log
+            </button>
+          )}
+          {matchesSettingsSearch('Backups') && (
+            <button onClick={() => setActiveSettingTab('backups')} className={`settings-tab-btn ${activeSettingTab === 'backups' ? 'active' : ''}`}>
+              <Archive size={20} /> Backups
+            </button>
+          )}
+
+          {settingsSearch.trim() && !hasAnySettingsMatch && (
+            <div style={{ padding: '16px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+              No settings match "{settingsSearch}".
+            </div>
+          )}
         </div>
 
         {/* Main Content Area */}
@@ -769,7 +1168,7 @@ export default function Settings({ onLogout }) {
                 </div>
                 <div className="settings-section-subtitle">Configure dashboard behavior and real-time updates.</div>
 
-                <form onSubmit={handleSaveGeneral} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveGeneral} onChange={() => markDirty('general')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Dashboard Refresh Interval</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={refreshInterval} onChange={(e) => setRefreshInterval(e.target.value)}>
@@ -795,9 +1194,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Live Inbound Stream</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Stream logs dynamically from the backend</span>
                     </div>
-                    <div className={`toggle-switch ${liveUpdates ? 'active' : ''}`} onClick={() => setLiveUpdates(!liveUpdates)}>
+                    <button type="button" role="switch" aria-checked={liveUpdates} aria-label="Live Inbound Stream" className={`toggle-switch ${liveUpdates ? 'active' : ''}`} onClick={() => setLiveUpdates(!liveUpdates)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
                   <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
@@ -816,7 +1215,7 @@ export default function Settings({ onLogout }) {
                 </div>
                 <div className="settings-section-subtitle">Manage CyberSentinel Engine ruleset behaviors and blocking modes.</div>
 
-                <form onSubmit={handleSaveWAF} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveWAF} onChange={() => markDirty('waf')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>SecRuleEngine Posture</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={secRuleEngine} onChange={(e) => setSecRuleEngine(e.target.value)}>
@@ -869,15 +1268,15 @@ export default function Settings({ onLogout }) {
                 </div>
                 <div className="settings-section-subtitle">Configure SecAuditEngine and log retention policies.</div>
 
-                <form onSubmit={handleSaveLogs} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveLogs} onChange={() => markDirty('logs')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>SecAuditEngine Logging</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Record details of flagged transactions</span>
                     </div>
-                    <div className={`toggle-switch ${auditEnabled ? 'active' : ''}`} onClick={() => setAuditEnabled(!auditEnabled)}>
+                    <button type="button" role="switch" aria-checked={auditEnabled} aria-label="SecAuditEngine Logging" className={`toggle-switch ${auditEnabled ? 'active' : ''}`} onClick={() => setAuditEnabled(!auditEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -893,9 +1292,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Concurrent Multi-Threading</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Non-blocking log processing pipeline</span>
                     </div>
-                    <div className={`toggle-switch ${concurrentLogging ? 'active' : ''}`} onClick={() => setConcurrentLogging(!concurrentLogging)}>
+                    <button type="button" role="switch" aria-checked={concurrentLogging} aria-label="Concurrent Multi-Threading" className={`toggle-switch ${concurrentLogging ? 'active' : ''}`} onClick={() => setConcurrentLogging(!concurrentLogging)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -920,21 +1319,19 @@ export default function Settings({ onLogout }) {
 
             {activeSettingTab === 'hardening' && (
               <motion.div key="hardening" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
-                <div className="settings-section-title">
-                  <Server size={20} color="var(--sev-low)" />
-                  Infrastructure Hardening
-                </div>
-                <div className="settings-section-subtitle">Manage HSTS, server cloaking, and IP restrictions.</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <SettingsAccordionCard icon={Server} title="Infrastructure Hardening" status={hstsEnabled ? 'HSTS On' : 'HSTS Off'} tone={hstsEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>Manage HSTS, server cloaking, and IP restrictions.</div>
 
-                <form onSubmit={handleSaveHardening} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveHardening} onChange={() => markDirty('hardening')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Strict HTTPS (HSTS)</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Enforce Strict-Transport-Security header</span>
                     </div>
-                    <div className={`toggle-switch ${hstsEnabled ? 'active' : ''}`} onClick={() => setHstsEnabled(!hstsEnabled)}>
+                    <button type="button" role="switch" aria-checked={hstsEnabled} aria-label="Strict HTTPS (HSTS)" className={`toggle-switch ${hstsEnabled ? 'active' : ''}`} onClick={() => setHstsEnabled(!hstsEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <AnimatePresence>
@@ -960,9 +1357,9 @@ export default function Settings({ onLogout }) {
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Server Cloaking</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Scrub NGINX tokens & Express header disclosures</span>
                     </div>
-                    <div className={`toggle-switch ${serverCloaking ? 'active' : ''}`} onClick={() => setServerCloaking(!serverCloaking)}>
+                    <button type="button" role="switch" aria-checked={serverCloaking} aria-label="Server Cloaking" className={`toggle-switch ${serverCloaking ? 'active' : ''}`} onClick={() => setServerCloaking(!serverCloaking)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -993,25 +1390,23 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+                </SettingsAccordionCard>
 
-                <div className="settings-section-title" style={{ marginTop: '32px' }}>
-                  <ShieldAlert size={20} color="var(--sev-low)" />
-                  Geo-Block
-                </div>
-                <div className="settings-section-subtitle">
+                <SettingsAccordionCard icon={ShieldAlert} title="Geo-Block" status={geoBlockEnabled ? 'Active' : 'Off'} tone={geoBlockEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
                   Allow or deny traffic by country. Requires GeoIP2 to be enabled (Settings loads with it
                   active in this deployment) — otherwise this has no effect.
                 </div>
 
-                <form onSubmit={handleSaveGeoBlock} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveGeoBlock} onChange={() => markDirty('geoblock')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Geo-Block</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no country restrictions until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${geoBlockEnabled ? 'active' : ''}`} onClick={() => setGeoBlockEnabled(!geoBlockEnabled)}>
+                    <button type="button" role="switch" aria-checked={geoBlockEnabled} aria-label="Enable Geo-Block" className={`toggle-switch ${geoBlockEnabled ? 'active' : ''}`} onClick={() => setGeoBlockEnabled(!geoBlockEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <AnimatePresence>
@@ -1050,26 +1445,24 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+                </SettingsAccordionCard>
 
-                <div className="settings-section-title" style={{ marginTop: '32px' }}>
-                  <ShieldAlert size={20} color="var(--sev-low)" />
-                  External Threat-Intel Feed
-                </div>
-                <div className="settings-section-subtitle">
+                <SettingsAccordionCard icon={ShieldAlert} title="External Threat-Intel Feed" status={threatIntelEnabled ? 'Active' : 'Off'} tone={threatIntelEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
                   Pulls Spamhaus DROP + EDROP (free, no API key) on a schedule into a dedicated
                   blacklist Redis key — separate from the manual IP blacklist above, so a sync
                   can never overwrite your own entries. Your manual whitelist always overrides it.
                 </div>
 
-                <form onSubmit={handleSaveThreatIntel} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveThreatIntel} onChange={() => markDirty('threatintel')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Scheduled Sync</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no external feed until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${threatIntelEnabled ? 'active' : ''}`} onClick={() => setThreatIntelEnabled(!threatIntelEnabled)}>
+                    <button type="button" role="switch" aria-checked={threatIntelEnabled} aria-label="Enable Scheduled Sync" className={`toggle-switch ${threatIntelEnabled ? 'active' : ''}`} onClick={() => setThreatIntelEnabled(!threatIntelEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <AnimatePresence>
@@ -1115,6 +1508,247 @@ export default function Settings({ onLogout }) {
                     </button>
                   </div>
                 </form>
+                </SettingsAccordionCard>
+
+                <SettingsAccordionCard icon={ShieldAlert} title="Self-Learned IP Reputation" status={autoRepEnabled ? `${autoBlockedIps.length} IPs blocked` : 'Off'} tone={autoRepEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
+                  Watches this deployment's own traffic (not a third-party feed) for IPs racking up
+                  enough blocked requests to count as proven repeat offenders, and auto-blocks them —
+                  a self-tuning defense that improves with your own traffic. Separate Redis key from
+                  the manual blacklist and the threat-intel feed above; each auto-block self-expires
+                  on its own TTL rather than growing a permanent list, and never overrides your manual
+                  whitelist.
+                </div>
+
+                <form onSubmit={handleSaveAutoReputation} onChange={() => markDirty('autorep')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Auto-Block</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — nobody gets auto-blocked until enabled</span>
+                    </div>
+                    <button type="button" role="switch" aria-checked={autoRepEnabled} aria-label="Enable Auto-Block" className={`toggle-switch ${autoRepEnabled ? 'active' : ''}`} onClick={() => setAutoRepEnabled(!autoRepEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </button>
+                  </div>
+
+                  <AnimatePresence>
+                    {autoRepEnabled && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingBottom: '10px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Threshold (requests)</label>
+                            <input
+                              type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
+                              value={autoRepThreshold} onChange={(e) => setAutoRepThreshold(e.target.value)}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Window (hours)</label>
+                            <input
+                              type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
+                              value={autoRepWindowHours} onChange={(e) => setAutoRepWindowHours(e.target.value)}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Duration (hours)</label>
+                            <input
+                              type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
+                              value={autoRepTtlHours} onChange={(e) => setAutoRepTtlHours(e.target.value)}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Sync Interval (minutes)</label>
+                            <input
+                              type="number" min="5" className="settings-input" style={{ fontSize: '14px' }}
+                              value={autoRepIntervalMinutes} onChange={(e) => setAutoRepIntervalMinutes(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', paddingBottom: '10px' }}>
+                          An IP with {autoRepThreshold}+ blocked requests in the last {autoRepWindowHours}h gets
+                          auto-blocked for {autoRepTtlHours}h, checked every {autoRepIntervalMinutes} minutes.
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {autoRepStatus && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      Last sync: {autoRepStatus.last_sync_at ? formatLocalTime(autoRepStatus.last_sync_at) : 'never'}
+                      {autoRepStatus.last_sync_status === 'success' && ` — ${autoRepStatus.last_sync_count} IP(s) auto-blocked`}
+                      {autoRepStatus.last_sync_status === 'error' && ` — failed: ${autoRepStatus.last_sync_error || 'unknown error'}`}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '4px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      Apply Auto-Reputation Changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSyncAutoReputationNow}
+                      disabled={autoRepSyncing}
+                      className="action-btn-inspect"
+                    >
+                      {autoRepSyncing ? 'Syncing...' : 'Sync Now'}
+                    </button>
+                  </div>
+                </form>
+
+                <div style={{ marginTop: '20px', maxWidth: '600px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+                    Currently Auto-Blocked ({autoBlockedIps.length})
+                  </div>
+                  {autoBlockedIpsLoading ? (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Loading...</div>
+                  ) : autoBlockedIps.length === 0 ? (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>No IPs currently auto-blocked.</div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                      {autoBlockedIps.map((entry) => (
+                        <tr key={entry.ip} style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
+                          <td style={{ padding: '6px 0', fontFamily: 'monospace' }}>{entry.ip}</td>
+                          <td style={{ padding: '6px 8px', color: 'var(--text-secondary)' }}>
+                            expires in {Math.max(0, Math.round(entry.ttl_seconds / 60))}m
+                          </td>
+                          <td style={{ padding: '6px 0', textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleReleaseAutoBlockedIp(entry.ip)}
+                              className="action-btn-inspect"
+                              style={{ padding: '3px 10px', fontSize: '11px' }}
+                            >
+                              Release
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody></table>
+                  )}
+                </div>
+                </SettingsAccordionCard>
+
+                <SettingsAccordionCard icon={Lock} title="Admin-Login IP Allowlist" status={adminAllowlistEnabled ? 'Active' : 'Off'} tone={adminAllowlistEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
+                  Restricts the dashboard's own login (and MFA step) to specific IPs/CIDRs — separate
+                  from the Global IP Whitelist/Blacklist above, which gates all site traffic. Even a
+                  stolen valid password can't reach a live session from outside this list. Applies to
+                  every account (admin, analyst, and app-scoped admins) uniformly.
+                </div>
+
+                <div style={{
+                  display: 'flex', gap: '10px', background: 'var(--sev-low-bg)',
+                  border: '1px solid var(--sev-low-border)', borderRadius: '10px',
+                  padding: '14px 16px', marginBottom: '20px', maxWidth: '600px',
+                }}>
+                  <AlertTriangle size={16} color="var(--sev-low)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                    The server refuses to enable this if your own current IP isn't in the list below —
+                    there's no other admin-facing way back in once every login is blocked. Add your
+                    own IP or CIDR first.
+                  </span>
+                </div>
+
+                <form onSubmit={handleSaveAdminLoginAllowlist} onChange={() => markDirty('adminallowlist')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Login Allowlist</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — login works from anywhere until enabled</span>
+                    </div>
+                    <button type="button" role="switch" aria-checked={adminAllowlistEnabled} aria-label="Enable Login Allowlist" className={`toggle-switch ${adminAllowlistEnabled ? 'active' : ''}`} onClick={() => setAdminAllowlistEnabled(!adminAllowlistEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Allowed IPs / CIDRs (Comma separated)</label>
+                    <textarea
+                      className="settings-input"
+                      style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
+                      value={adminAllowlistNetworks}
+                      onChange={(e) => setAdminAllowlistNetworks(e.target.value)}
+                      placeholder="203.0.113.5, 10.0.0.0/24"
+                    />
+                  </div>
+
+                  <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      {loadingAction ? 'Applying...' : 'Apply Login Allowlist'}
+                    </button>
+                  </div>
+                </form>
+                </SettingsAccordionCard>
+
+                <SettingsAccordionCard icon={ShieldAlert} title="Malware Scanning" status={malwareScanEnabled ? 'Active' : 'Off'} tone={malwareScanEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
+                  Scans uploaded files with ClamAV before they reach a protected app's backend
+                  (or the dashboard's own certificate upload). A defense-in-depth layer on top of
+                  the WAF's existing rule-based protections, not a replacement for them.
+                </div>
+
+                <form onSubmit={handleSaveMalwareScanning} onChange={() => markDirty('malwarescan')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Malware Scanning</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no uploads are scanned until enabled</span>
+                    </div>
+                    <button type="button" role="switch" aria-checked={malwareScanEnabled} aria-label="Enable Malware Scanning" className={`toggle-switch ${malwareScanEnabled ? 'active' : ''}`} onClick={() => setMalwareScanEnabled(!malwareScanEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </button>
+                  </div>
+
+                  <AnimatePresence>
+                    {malwareScanEnabled && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingBottom: '10px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>If ClamAV is unreachable</label>
+                            <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={malwareScanFailMode} onChange={(e) => setMalwareScanFailMode(e.target.value)}>
+                              <option value="open">Allow uploads through unscanned (recommended)</option>
+                              <option value="closed">Block all uploads until it recovers</option>
+                            </select>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Scan Timeout (seconds)</label>
+                            <input
+                              type="number" min="1" max="60" className="settings-input" style={{ fontSize: '14px' }}
+                              value={malwareScanTimeout} onChange={(e) => setMalwareScanTimeout(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {malwareScanStatus && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      ClamAV status: {' '}
+                      <strong style={{ color: malwareScanStatus.last_check_status === 'ok' ? 'var(--success-color)' : 'var(--danger-color)' }}>
+                        {malwareScanStatus.last_check_status === 'ok' ? 'Reachable'
+                          : malwareScanStatus.last_check_status === 'degraded' ? 'Unreachable'
+                          : 'Never checked'}
+                      </strong>
+                      {malwareScanStatus.last_check_at && ` — last checked ${formatLocalTime(malwareScanStatus.last_check_at)}`}
+                      {malwareScanStatus.last_check_error && ` (${malwareScanStatus.last_check_error})`}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '4px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      Apply Malware Scanning Changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCheckMalwareScanningNow}
+                      disabled={malwareScanChecking}
+                      className="action-btn-inspect"
+                    >
+                      {malwareScanChecking ? 'Checking...' : 'Check Connection Now'}
+                    </button>
+                  </div>
+                </form>
+                </SettingsAccordionCard>
+                </div>
               </motion.div>
             )}
 
@@ -1142,15 +1776,15 @@ export default function Settings({ onLogout }) {
                   </span>
                 </div>
 
-                <form onSubmit={handleSavePositiveSecurity} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSavePositiveSecurity} onChange={() => markDirty('possec')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Positive Security</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no rules are active until enabled</span>
                     </div>
-                    <div className={`toggle-switch ${posSecEnabled ? 'active' : ''}`} onClick={() => setPosSecEnabled(!posSecEnabled)}>
+                    <button type="button" role="switch" aria-checked={posSecEnabled} aria-label="Enable Positive Security" className={`toggle-switch ${posSecEnabled ? 'active' : ''}`} onClick={() => setPosSecEnabled(!posSecEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1214,15 +1848,15 @@ export default function Settings({ onLogout }) {
                 </div>
                 <div className="settings-section-subtitle">Real-time integrity monitoring for critical assets.</div>
 
-                <form onSubmit={handleSaveDefacement} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveDefacement} onChange={() => markDirty('defacement')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Real-time Integrity Monitor</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Revert unauthorized content modifications instantly</span>
                     </div>
-                    <div className={`toggle-switch ${defacementEnabled ? 'active' : ''}`} onClick={() => setDefacementEnabled(!defacementEnabled)}>
+                    <button type="button" role="switch" aria-checked={defacementEnabled} aria-label="Real-time Integrity Monitor" className={`toggle-switch ${defacementEnabled ? 'active' : ''}`} onClick={() => setDefacementEnabled(!defacementEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1271,7 +1905,7 @@ export default function Settings({ onLogout }) {
                   anywhere in the page to include the block's transaction ID, useful for support requests.
                 </div>
 
-                <form onSubmit={handleSaveCustomResponse} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '700px' }}>
+                <form onSubmit={handleSaveCustomResponse} onChange={() => markDirty('customresponse')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '700px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Page HTML</label>
                     <textarea
@@ -1308,15 +1942,15 @@ export default function Settings({ onLogout }) {
                   real usage, reducing false positives without loosening genuine protections.
                 </div>
 
-                <form onSubmit={handleSaveAutoLearning} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveAutoLearning} onChange={() => markDirty('autolearning')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Auto-Learning</span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — baselines only update when enabled</span>
                     </div>
-                    <div className={`toggle-switch ${autoLearningEnabled ? 'active' : ''}`} onClick={() => setAutoLearningEnabled(!autoLearningEnabled)}>
+                    <button type="button" role="switch" aria-checked={autoLearningEnabled} aria-label="Enable Auto-Learning" className={`toggle-switch ${autoLearningEnabled ? 'active' : ''}`} onClick={() => setAutoLearningEnabled(!autoLearningEnabled)}>
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1472,6 +2106,115 @@ export default function Settings({ onLogout }) {
                       </button>
                     </div>
                   </form>
+
+                  {/* API Keys */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                      <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>API Keys</div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                        Machine credentials for scripts, CI/CD, or external tools to call this API without an
+                        interactive login. Each key carries the same admin/analyst role permissions as a
+                        dashboard account, independent of any user's password or session.
+                      </div>
+                    </div>
+
+                    {revealedApiKey && (
+                      <div style={{ background: 'var(--sev-low-bg)', border: '1px solid var(--sev-low-border)', borderRadius: '10px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                          Key "{revealedApiKey.name}" created — copy it now, it will not be shown again.
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <code style={{ flex: 1, fontSize: '12px', background: 'var(--surface-subtle)', padding: '8px 10px', borderRadius: '6px', wordBreak: 'break-all' }}>
+                            {revealedApiKey.api_key}
+                          </code>
+                          <button
+                            type="button"
+                            className="action-btn-inspect"
+                            style={{ padding: '6px 12px', fontSize: '12px', flexShrink: 0 }}
+                            onClick={() => {
+                              navigator.clipboard.writeText(revealedApiKey.api_key);
+                              showToast("Copied to clipboard.");
+                            }}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setRevealedApiKey(null)}
+                          className="action-btn-inspect"
+                          style={{ alignSelf: 'flex-start', padding: '4px 10px', fontSize: '11px' }}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleCreateApiKey} style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '2 1 160px' }}>
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Key Name</label>
+                        <input
+                          type="text" className="settings-input" value={newKeyName}
+                          onChange={(e) => setNewKeyName(e.target.value)}
+                          placeholder="CI/CD pipeline" required
+                        />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 140px' }}>
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Role</label>
+                        <select className="filter-select" style={{ padding: '10px' }} value={newKeyRole} onChange={(e) => setNewKeyRole(e.target.value)}>
+                          <option value="analyst">Analyst (read-only)</option>
+                          <option value="admin">Admin (full access)</option>
+                        </select>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 110px' }}>
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Expires (days)</label>
+                        <input
+                          type="number" min="1" className="settings-input" value={newKeyExpiresDays}
+                          onChange={(e) => setNewKeyExpiresDays(e.target.value)}
+                          placeholder="Never"
+                        />
+                      </div>
+                      <button type="submit" disabled={creatingApiKey} className="modal-btn primary" style={{ padding: '10px 18px', fontSize: '13px' }}>
+                        {creatingApiKey ? 'Creating...' : 'Create Key'}
+                      </button>
+                    </form>
+
+                    {apiKeysLoading ? (
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Loading...</div>
+                    ) : apiKeys.length === 0 ? (
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>No API keys created yet.</div>
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                        {apiKeys.map((k) => (
+                          <tr key={k.id} style={{ borderBottom: '1px solid var(--surface-subtle)', opacity: k.enabled ? 1 : 0.5 }}>
+                            <td style={{ padding: '8px 0' }}>
+                              <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{k.name}</div>
+                              <div style={{ fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{k.key_prefix}…</div>
+                            </td>
+                            <td style={{ padding: '8px', color: 'var(--text-secondary)' }}>{k.role}</td>
+                            <td style={{ padding: '8px', color: 'var(--text-secondary)' }}>
+                              {!k.enabled ? 'revoked' : k.expires_at ? `expires ${formatLocalTime(k.expires_at)}` : 'never expires'}
+                            </td>
+                            <td style={{ padding: '8px', color: 'var(--text-secondary)' }}>
+                              {k.last_used_at ? `used ${formatLocalTime(k.last_used_at)}` : 'never used'}
+                            </td>
+                            <td style={{ padding: '8px 0', textAlign: 'right' }}>
+                              {k.enabled && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRevokeApiKey(k.id)}
+                                  className="action-btn-inspect"
+                                  style={{ padding: '3px 10px', fontSize: '11px', color: 'var(--danger-color)' }}
+                                >
+                                  Revoke
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody></table>
+                    )}
+                  </div>
 
                   {/* Danger Zone */}
                   <div style={{ background: 'linear-gradient(135deg, var(--danger-bg) 0%, rgba(0, 0, 0, 0) 100%)', border: '1px solid var(--danger-border)', borderRadius: '16px', padding: '24px' }}>

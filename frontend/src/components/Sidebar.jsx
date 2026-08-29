@@ -1,9 +1,6 @@
 import React from 'react';
-import {
-  LayoutDashboard, Activity, ShieldCheck, ShieldAlert, AlertTriangle, Brain, FileText,
-  Globe, BarChart2, Bell, Code, Users, Settings as SettingsIcon, ChevronRight, ChevronLeft,
-  Clock, LogOut,
-} from 'lucide-react';
+import { ChevronRight, ChevronLeft, Clock, LogOut } from 'lucide-react';
+import { getNavGroups } from '../navigation';
 
 export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRole, collapsed, setCollapsed, recentThreats = 0 }) {
   const [currentTime, setCurrentTime] = React.useState(new Date());
@@ -14,44 +11,7 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
   }, []);
 
   const isAdmin = userRole === 'admin';
-
-  const navGroups = [
-    {
-      label: 'MONITORING',
-      items: [
-        { id: 'overview',  label: 'Overview',        icon: LayoutDashboard },
-        { id: 'events',    label: 'Security Events',  icon: Activity, badge: recentThreats > 0 ? recentThreats : null },
-      ]
-    },
-    {
-      label: 'PROTECTION',
-      items: [
-        { id: 'protection',      label: 'Protection Status', icon: ShieldCheck },
-        { id: 'false_positives', label: 'False Positives',   icon: ShieldAlert },
-        { id: 'exceptions',      label: 'Exceptions',        icon: AlertTriangle },
-      ]
-    },
-    {
-      label: 'ANALYSIS',
-      items: [
-        { id: 'ml_engine',      label: 'AI / ML Engine',    icon: Brain },
-        { id: 'rules',          label: 'WAF Rules',          icon: FileText },
-        { id: 'api_protection', label: 'API Protection',     icon: Globe },
-        { id: 'reports',        label: 'Security Reports',   icon: BarChart2 },
-      ]
-    },
-    {
-      label: 'SYSTEM',
-      items: [
-        { id: 'integrations',    label: 'Alerts & Integrations', icon: Bell },
-        ...(isAdmin ? [
-          { id: 'virtual_patching', label: 'Virtual Patching', icon: Code, adminOnly: true },
-          { id: 'users',            label: 'User Management',  icon: Users, adminOnly: true },
-          { id: 'settings',         label: 'Settings',          icon: SettingsIcon, adminOnly: true },
-        ] : []),
-      ]
-    }
-  ];
+  const navGroups = getNavGroups(isAdmin);
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronLeft;
 
@@ -99,8 +59,8 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
                   <Icon size={16} />
                   <span>{item.label}</span>
                   {/* Threat count badge */}
-                  {item.badge && !collapsed && (
-                    <span className="nav-badge">{item.badge > 99 ? '99+' : item.badge}</span>
+                  {item.hasBadge && recentThreats > 0 && !collapsed && (
+                    <span className="nav-badge">{recentThreats > 99 ? '99+' : recentThreats}</span>
                   )}
                   {/* Admin-only amber badge */}
                   {item.adminOnly && !collapsed && (

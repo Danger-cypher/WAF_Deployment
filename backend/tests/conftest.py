@@ -10,6 +10,7 @@ This keeps every test running against a throwaway SQLite file instead of
 the real users.db.
 """
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -19,10 +20,27 @@ from fastapi.testclient import TestClient
 
 from app.services.user_service import UserService
 import app.services.user_service as user_service_module
+import app.services.session_service as session_service_module
 import app.routes.auth as auth_route
 import app.routes.users as users_route
 import app.routes.sso as sso_route
 from app.main import app as fastapi_app
+
+
+@pytest.fixture(autouse=True)
+def _no_real_redis_for_sessions(monkeypatch):
+    """session_service.py (P1-8 Part B) talks to Redis for per-session
+    revoke. Without this, if Redis happens to be reachable from wherever
+    the suite runs, every login here would write real session:* keys into
+    it — the same test-pollution risk already solved for ClickHouse
+    elsewhere (see alert_db_service test isolation). Defaults every test
+    to a clean, fast "Redis unavailable" state (fail-open — see
+    session_service.py's module docstring — so logins/auth still work
+    exactly as before this feature existed); tests that need to exercise
+    real session behavior explicitly override `_client` via their own
+    fake-Redis fixture in test_sessions.py, which runs after this one."""
+    monkeypatch.setattr(session_service_module, "_client", None)
+    monkeypatch.setattr(session_service_module, "_client_checked_at", time.monotonic())
 
 
 @pytest.fixture

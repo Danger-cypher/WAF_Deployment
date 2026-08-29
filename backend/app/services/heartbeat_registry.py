@@ -50,10 +50,16 @@ EXPECTED_TASKS: Dict[str, float] = {
     "auto_learning": 6 * 3600,
     "threat_intel": 24 * 3600,  # configurable at runtime; this is a display default
     "canary_rollout": 6 * 3600,
+    "auto_reputation": 15 * 60,
     # The one heartbeat here whose "error" status means "the condition it
     # watches is unhealthy", not "this task's own cycle failed" — see
     # redis_degraded_monitor.py's own docstring for why.
     "waf_redis_degraded": 60,
+    # Same "error means unhealthy condition, not a failed cycle" shape as
+    # waf_redis_degraded above — reports ClamAV reachability, not just
+    # whether the monitor's own loop is still running. See
+    # malware_scan_service.py.
+    "malware_scan_monitor": 60,
 }
 
 # A task is "stale" once it's gone this many multiples of its own

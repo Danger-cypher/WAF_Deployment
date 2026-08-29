@@ -14,7 +14,7 @@ from fastapi import APIRouter, Query, Depends, HTTPException
 from typing import Optional
 
 from app.models.response_models import PaginatedLogs, PaginatedGroupedLogs
-from app.models.log_model import LogEntry
+from app.models.log_model import LogEntry, ExplainBlockResponse, MlSubScoreDetail
 from app.services.auth import require_any_role, require_admin, TokenData
 from app.services import clickhouse_service
 from app.services.log_reader import list_newest_log_files, _row_to_log_entry
@@ -124,6 +124,44 @@ async def get_log_by_id(
     if row is None:
         raise HTTPException(status_code=404, detail="Log entry not found")
     return _row_to_log_entry(row)
+
+
+@router.get("/logs/{log_id}/explain", response_model=ExplainBlockResponse)
+async def explain_log_by_id(
+    log_id: str,
+    current_user: TokenData = Depends(require_any_role),
+):
+    """
+    Unified "why was this blocked" view (P1-13): merges this transaction's
+    ModSecurity rule-match record with whatever ML scoring happened for
+    the same request, if any. waf_events and ml_events don't share a
+    request ID, so the match is a best-effort (client_ip, uri, timestamp
+    within 3s) fuzzy join — see clickhouse_service.find_ml_event_near.
+    A missing ml_event is common and expected, not a bug: most blocked
+    requests are stopped by ModSecurity natively before ever reaching the
+    content-phase /predict call (see ml_decide.lua).
+    """
+    row = await asyncio.to_thread(clickhouse_service.get_waf_event_by_id, log_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Log entry not found")
+    waf_event = _row_to_log_entry(row)
+
+    ml_row = await asyncio.to_thread(
+        clickhouse_service.find_ml_event_near, waf_event.client_ip, waf_event.uri, waf_event.timestamp
+    )
+    if ml_row:
+        ml_event = MlSubScoreDetail(**ml_row)
+        note = "Matched to an ML scoring event within a 3-second window of this transaction."
+    else:
+        ml_event = None
+        note = (
+            "No ML scoring event found for this request — most likely because "
+            "ModSecurity blocked it natively before it ever reached ML scoring "
+            "(expected for most blocked requests), or the request happened outside "
+            "the 3-second match window."
+        )
+
+    return ExplainBlockResponse(waf_event=waf_event, ml_event=ml_event, ml_match_note=note)
 
 
 @router.get("/debug/logs")

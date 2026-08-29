@@ -33,6 +33,45 @@ class AlertDatabaseService:
         conn.row_factory = sqlite3.Row
         return conn
     
+    def _migrate_alert_channels_syslog_type(self, cursor: sqlite3.Cursor) -> None:
+        """
+        Widens alert_channels.channel_type's CHECK constraint to allow
+        'syslog' (P1-12), for databases created before that channel type
+        existed. `CREATE TABLE IF NOT EXISTS` above is a no-op against an
+        already-existing table, so an existing install's table still has
+        the old CHECK(...'pagerduty')) baked in — SQLite has no ALTER TABLE
+        for modifying a CHECK constraint in place, so this is the standard
+        rebuild-and-copy migration: rename, recreate with the wider
+        constraint, copy every row across, drop the old table. Idempotent
+        — checks sqlite_master's stored SQL text for 'syslog' first, so
+        this is a no-op on every run after the first (or on a fresh
+        install, which already has the wide constraint from CREATE TABLE).
+        """
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='alert_channels'")
+        row = cursor.fetchone()
+        existing_sql = row[0] if row else ""
+        if not existing_sql or "syslog" in existing_sql:
+            return
+
+        logger.info("Migrating alert_channels.channel_type CHECK constraint to allow 'syslog'.")
+        cursor.execute("ALTER TABLE alert_channels RENAME TO alert_channels_old")
+        cursor.execute("""
+            CREATE TABLE alert_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                channel_type TEXT NOT NULL CHECK(channel_type IN ('email', 'slack', 'webhook', 'pagerduty', 'syslog')),
+                config TEXT NOT NULL,
+                enabled BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO alert_channels (id, name, channel_type, config, enabled, created_at, updated_at)
+            SELECT id, name, channel_type, config, enabled, created_at, updated_at FROM alert_channels_old
+        """)
+        cursor.execute("DROP TABLE alert_channels_old")
+
     def _init_database(self):
         """Initialize database schema if not exists"""
         conn = self._get_connection()
@@ -44,14 +83,15 @@ class AlertDatabaseService:
                 CREATE TABLE IF NOT EXISTS alert_channels (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
-                    channel_type TEXT NOT NULL CHECK(channel_type IN ('email', 'slack', 'webhook', 'pagerduty')),
+                    channel_type TEXT NOT NULL CHECK(channel_type IN ('email', 'slack', 'webhook', 'pagerduty', 'syslog')),
                     config TEXT NOT NULL,
                     enabled BOOLEAN DEFAULT 1,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+            self._migrate_alert_channels_syslog_type(cursor)
+
             # Create alert_rules table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS alert_rules (
@@ -89,10 +129,20 @@ class AlertDatabaseService:
                     acknowledged_by TEXT,
                     acknowledged_at DATETIME,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    channel_results TEXT DEFAULT '[]',
                     FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
                 )
             """)
-            
+
+            # Migration: channel_results column for installs whose alert_history
+            # predates per-channel delivery-health tracking. CREATE TABLE IF NOT
+            # EXISTS above is a no-op against an existing table, same as the
+            # created_by migration in db_service.py.
+            try:
+                cursor.execute("ALTER TABLE alert_history ADD COLUMN channel_results TEXT DEFAULT '[]'")
+            except Exception:
+                pass  # Column already exists — expected on fresh installs
+
             # Create alert_aggregations table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS alert_aggregations (
@@ -359,22 +409,24 @@ class AlertDatabaseService:
     def create_alert_history(self, rule_id: int, rule_name: str, event_type: str,
                             severity: str, channels_notified: List[str],
                             event_data: Dict[str, Any], message: str,
-                            status: str, error_message: str = None) -> int:
+                            status: str, error_message: str = None,
+                            channel_results: List[Dict[str, Any]] = None) -> int:
         """Create alert history entry"""
+        channel_results = channel_results or []
         new_id = 0
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             cursor.execute("""
-                INSERT INTO alert_history 
-                (rule_id, rule_name, event_type, severity, channels_notified, 
-                 event_data, message, status, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (rule_id, rule_name, event_type, severity, 
+                INSERT INTO alert_history
+                (rule_id, rule_name, event_type, severity, channels_notified,
+                 event_data, message, status, error_message, channel_results)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (rule_id, rule_name, event_type, severity,
                   json.dumps(channels_notified), json.dumps(event_data),
-                  message, status, error_message))
-            
+                  message, status, error_message, json.dumps(channel_results)))
+
             conn.commit()
             new_id = cursor.lastrowid
         except Exception as e:
@@ -396,9 +448,10 @@ class AlertDatabaseService:
                 "error_message": error_message or "",
                 "acknowledged_by": "",
                 "acknowledged_at": None,
+                "channel_results": json.dumps(channel_results),
             }
             clickhouse_service.insert_alert_history(record)
-            
+
         return new_id
     
     def get_alert_history(self, limit: int = 100, offset: int = 0,
@@ -420,6 +473,10 @@ class AlertDatabaseService:
                         d["event_data"] = json.loads(d["event_data"])
                     except Exception:
                         pass
+                    try:
+                        d["channel_results"] = json.loads(d.get("channel_results") or "[]")
+                    except Exception:
+                        d["channel_results"] = []
                 return res
 
         conn = self._get_connection()
@@ -445,17 +502,64 @@ class AlertDatabaseService:
                 query += " AND created_at <= ?"
                 params.append(end_date.isoformat())
             
-            # Get paginated results
-            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            # Get paginated results. Tiebreak on id too — created_at has only
+            # second resolution, so a burst of alerts within the same second
+            # (a real scenario, not just a test artifact) would otherwise
+            # sort ambiguously, undermining get_channel_delivery_health's
+            # "rows come back newest-first" assumption for which attempt is
+            # actually the most recent per channel.
+            query += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
             params.extend([limit, offset])
             
             cursor.execute(query, params)
             results = [self._row_to_dict(row) for row in cursor.fetchall()]
-            
+
             return results
         finally:
             conn.close()
-    
+
+    def get_channel_delivery_health(self, sample_size: int = 500) -> List[Dict[str, Any]]:
+        """
+        Per-channel delivery health, derived from each channel's own
+        per-attempt results (see AlertDispatcher.dispatch) across the most
+        recent `sample_size` alert_history rows — reuses get_alert_history
+        rather than a new aggregation query on either backing store, since
+        at this data volume (an admin dashboard's alert history, not a
+        high-throughput event stream) scanning a bounded recent batch in
+        Python is simpler and just as correct as SQL-side aggregation on
+        two different databases would be.
+
+        Rows written before this field existed have channel_results == []
+        and simply don't contribute attempts for whichever channels they
+        notified — there's no way to retroactively know their per-channel
+        outcome, only the collapsed channels_notified/error_message that
+        already existed.
+        """
+        rows = self.get_alert_history(limit=sample_size)
+
+        by_channel: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            for result in (row.get("channel_results") or []):
+                name = result.get("channel_name")
+                if not name:
+                    continue
+                entry = by_channel.setdefault(name, {
+                    "channel_name": name, "attempts": 0, "successes": 0,
+                    "last_attempt_at": None, "last_success": None, "last_error": None,
+                })
+                entry["attempts"] += 1
+                if result.get("success"):
+                    entry["successes"] += 1
+                # Rows are already ordered newest-first (get_alert_history
+                # sorts by created_at DESC) — the first row touching a given
+                # channel is that channel's most recent attempt.
+                if entry["last_attempt_at"] is None:
+                    entry["last_attempt_at"] = row.get("created_at")
+                    entry["last_success"] = bool(result.get("success"))
+                    entry["last_error"] = result.get("error")
+
+        return list(by_channel.values())
+
     def acknowledge_alert(self, alert_id: int, acknowledged_by: str) -> bool:
         """Mark alert as acknowledged"""
         ch_ok = False
@@ -679,7 +783,7 @@ class AlertDatabaseService:
         result = dict(row)
         
         # Parse JSON fields
-        for field in ['config', 'conditions', 'channels', 'channels_notified', 'event_data']:
+        for field in ['config', 'conditions', 'channels', 'channels_notified', 'event_data', 'channel_results']:
             if field in result and result[field]:
                 try:
                     result[field] = json.loads(result[field])

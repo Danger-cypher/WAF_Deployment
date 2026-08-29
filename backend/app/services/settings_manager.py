@@ -56,6 +56,18 @@ DEFAULT_SETTINGS = {
         "ip_blacklist": [],
         "ip_whitelist": [],
     },
+    # Distinct from hardening.ip_whitelist/ip_blacklist above, which gates
+    # ALL site traffic through nginx/ml_check.lua. This one gates only the
+    # dashboard's own /auth/login (and /auth/login/mfa) endpoints — an
+    # attacker with stolen valid credentials still can't reach the login
+    # form's success path from outside the allowed network. Disabled by
+    # default so a fresh install/upgrade never locks anyone out
+    # unexpectedly; the settings route also refuses to enable this with a
+    # list that doesn't include the requester's own current IP.
+    "admin_login_allowlist": {
+        "enabled": False,
+        "allowed_networks": [],
+    },
     "geo_block": {
         "enabled": False,
         "mode": "deny",
@@ -68,6 +80,36 @@ DEFAULT_SETTINGS = {
         "last_sync_count": 0,
         "last_sync_status": "never_run",
         "last_sync_error": None,
+    },
+    "auto_reputation": {
+        "enabled": False,
+        # An IP with >= this many blocked requests (HTTP 401/403/406/429)
+        # in the rolling window below gets auto-blocked.
+        "block_threshold": 50,
+        "window_hours": 1,
+        # How long an auto-block lasts before it self-expires (Redis TTL) —
+        # self-correcting by design, not a permanent list that only grows.
+        "block_ttl_hours": 24,
+        "sync_interval_minutes": 15,
+        "last_sync_at": None,
+        "last_sync_count": 0,
+        "last_sync_status": "never_run",
+        "last_sync_error": None,
+    },
+    "malware_scanning": {
+        "enabled": False,
+        # What happens to an upload when ClamAV is unreachable or a scan
+        # times out — "open" (allow through unscanned) or "closed" (block
+        # every upload until the scanner recovers). See
+        # malware_scan_service.py's module docstring for the reasoning;
+        # "open" is the default so enabling this feature can never itself
+        # become a new way for a transient scanner outage to take down
+        # every protected app's uploads.
+        "fail_mode": "open",
+        "scan_timeout_seconds": 5,
+        "last_check_status": "never_run",
+        "last_check_at": None,
+        "last_check_error": None,
     },
     "anti_defacement": {
         "enabled": False,
@@ -295,6 +337,16 @@ class SettingsManager:
         self.save_settings(self.settings)
         return self.settings["hardening"]
 
+    def get_admin_login_allowlist(self) -> Dict[str, Any]:
+        return self.settings.get(
+            "admin_login_allowlist", DEFAULT_SETTINGS["admin_login_allowlist"]
+        )
+
+    def update_admin_login_allowlist(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["admin_login_allowlist"] = data
+        self.save_settings(self.settings)
+        return self.settings["admin_login_allowlist"]
+
     def get_geo_block(self) -> Dict[str, Any]:
         return self.settings.get("geo_block", DEFAULT_SETTINGS["geo_block"])
 
@@ -310,6 +362,22 @@ class SettingsManager:
         self.settings["threat_intel"] = data
         self.save_settings(self.settings)
         return self.settings["threat_intel"]
+
+    def get_auto_reputation(self) -> Dict[str, Any]:
+        return self.settings.get("auto_reputation", DEFAULT_SETTINGS["auto_reputation"])
+
+    def update_auto_reputation(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["auto_reputation"] = data
+        self.save_settings(self.settings)
+        return self.settings["auto_reputation"]
+
+    def get_malware_scanning(self) -> Dict[str, Any]:
+        return self.settings.get("malware_scanning", DEFAULT_SETTINGS["malware_scanning"])
+
+    def update_malware_scanning(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["malware_scanning"] = data
+        self.save_settings(self.settings)
+        return self.settings["malware_scanning"]
 
     def get_anti_defacement(self) -> Dict[str, Any]:
         return self.settings.get("anti_defacement", DEFAULT_SETTINGS["anti_defacement"])

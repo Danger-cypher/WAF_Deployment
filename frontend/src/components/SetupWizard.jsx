@@ -131,12 +131,16 @@ const SetupWizard = ({ onComplete }) => {
                       <Zap size={18} color={setupData.enableProtection ? 'var(--success-color)' : 'var(--text-secondary)'} />
                       <span>Enable Protection Immediately</span>
                     </div>
-                    <div
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={setupData.enableProtection}
+                      aria-label="Enable Protection Immediately"
                       className={`toggle-switch ${setupData.enableProtection ? 'active' : ''}`}
                       onClick={() => setSetupData({ ...setupData, enableProtection: !setupData.enableProtection })}
                     >
                       <div className="toggle-knob"></div>
-                    </div>
+                    </button>
                   </div>
                 </div>
               </motion.div>

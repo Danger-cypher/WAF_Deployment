@@ -39,6 +39,12 @@ server {
     ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;
     ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;
 
+    # Only sent from here — the one server{} on this host that actually
+    # terminates TLS. See nginx.conf's global headers block for why this
+    # must never be global (it would poison the browser's HSTS cache for
+    # the whole host and break the plain-HTTP :3020 SSO landing page).
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
     resolver 127.0.0.11 valid=30s ipv6=off;
 
     modsecurity_rules_file /etc/nginx/modsec/positive-security.conf;

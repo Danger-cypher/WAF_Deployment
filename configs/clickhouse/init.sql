@@ -226,7 +226,8 @@ CREATE TABLE IF NOT EXISTS cybersentinel.alert_history
     error_message       String DEFAULT '',
     acknowledged_by     String DEFAULT '',
     acknowledged_at     Nullable(DateTime),
-    created_at          DateTime DEFAULT now()
+    created_at          DateTime DEFAULT now(),
+    channel_results     String DEFAULT '[]'
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(created_at)

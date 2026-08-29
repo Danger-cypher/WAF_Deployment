@@ -56,6 +56,9 @@ services:
       - ./scripts:/app/scripts:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
+      # SIEM SSO — RS256/JWKS phase: the SIEM's edge cert, trusted for the
+      # JWKS fetch only (see SIEM_SSO_CA_CERT / services/sso.py).
+      - ./configs/certs:/app/certs:ro
     expose:
       - "8000"
     environment:
@@ -72,12 +75,15 @@ services:
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
       WAF_SSO_SECRET: ${WAF_SSO_SECRET:-}
       SIEM_JWKS_URL: ${SIEM_JWKS_URL:-}
+      SIEM_SSO_CA_CERT: ${SIEM_SSO_CA_CERT:-}
       INTERNAL_ALERT_TRIGGER_KEY: ${INTERNAL_ALERT_TRIGGER_KEY}
       CLICKHOUSE_HOST: waf-clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLAMAV_HOST: waf-clamav
+      CLAMAV_PORT: 3310
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -89,6 +95,12 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      # Not service_healthy: clamav's virus-DB load can take minutes, and
+      # AV scanning is designed to fail open when unreachable (see
+      # malware_scan_service.py) — the backend must not be blocked from
+      # starting just because clamd is still warming up.
+      clamav:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -156,6 +168,54 @@ services:
         reservations:
           cpus: ${ML_CPU_RESERVE:-1}
           memory: ${ML_MEM_RESERVE:-512M}
+    networks:
+      - waf-network
+
+  # ClamAV daemon — malware scanning for file uploads (P1-10). Scanned via
+  # ModSecurity's @inspectFile operator (openresty container, protected-app
+  # traffic — see configs/nginx/modsec/) and directly from the backend (the
+  # dashboard's own cert-upload endpoint). Kept as its own sidecar rather
+  # than installed into openresty/backend directly: clamd needs its full
+  # virus-definition database resident in memory (~1-1.5GB) and its own
+  # freshclam auto-updater running continuously — bundling that into either
+  # of those images would bloat them and couple an independent, frequently-
+  # updated dependency to unrelated rebuild/restart cycles.
+  clamav:
+    image: clamav/clamav:stable
+    container_name: waf-clamav
+    restart: unless-stopped
+    expose:
+      - "3310"   # clamd TCP (INSTREAM protocol) — internal network only, never published to the host
+    environment:
+      # No mail-server integration needed — milter is ClamAV's Sendmail/
+      # Postfix content-filter mode, unrelated to our INSTREAM-over-TCP use.
+      CLAMAV_NO_MILTERD: "true"
+    volumes:
+      - clamav_data:/var/lib/clamav
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      # clamdcheck.sh ships in the official image and PINGs the local
+      # clamd over its configured socket — the same check freshclam/clamd
+      # itself uses to confirm the daemon is actually serving, not just
+      # that the process is alive.
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # The virus-definition DB load (first boot) plus freshclam's initial
+      # sync can genuinely take several minutes — a short start_period
+      # would flap the container as "unhealthy" during completely normal
+      # startup.
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: ${CLAMAV_CPU_LIMIT:-2}
+          memory: ${CLAMAV_MEM_LIMIT:-2G}
+        reservations:
+          cpus: ${CLAMAV_CPU_RESERVE:-0.5}
+          memory: ${CLAMAV_MEM_RESERVE:-1.5G}
     networks:
       - waf-network
 
@@ -266,6 +326,9 @@ services:
         condition: service_healthy
       frontend:
         condition: service_healthy
+      # Not service_healthy — same reasoning as the backend service above.
+      clamav:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3020/api/health"]
       interval: 30s
@@ -353,4 +416,6 @@ volumes:
   clickhouse_data:
     driver: local
   clickhouse_logs:
+    driver: local
+  clamav_data:
     driver: local

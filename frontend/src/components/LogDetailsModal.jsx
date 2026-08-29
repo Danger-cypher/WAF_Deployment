@@ -1,17 +1,44 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check } from 'lucide-react';
+import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check, ChevronUp, ChevronDown, Ban } from 'lucide-react';
 import { formatLocalTime } from '../utils/helpers';
 import HighlightedJson from './JsonViewer';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { getLogExplain } from '../services/api';
 
-export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive }) {
+/**
+ * Slide-out drawer for inspecting a single WAF event, opened from Events.jsx.
+ * Uses the same .log-drawer-* pattern as MLLogDrawer.jsx (opened from the
+ * ML Engine page) instead of the old centered .modal-overlay — the event
+ * list stays visible behind the dimmed drawer rather than being replaced by
+ * it, and Up/Down lets an analyst step through a triage queue without
+ * closing and reopening for every row.
+ */
+export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive, onCreateRule, onNavigate, canGoPrev, canGoNext }) {
+  const [activeTab, setActiveTab] = useState('details');
   const [copied, setCopied] = useState(false);
   const [showReqHeaders, setShowReqHeaders] = useState(false);
   const [showResHeaders, setShowResHeaders] = useState(false);
-  const [showRawJson, setShowRawJson] = useState(false);
+  const [showExplain, setShowExplain] = useState(false);
+  const [explainData, setExplainData] = useState(null);
+  const [explainLoading, setExplainLoading] = useState(false);
+  const [explainError, setExplainError] = useState('');
 
   useEscapeToClose(onClose, isOpen);
+
+  useEffect(() => {
+    if (!isOpen || !onNavigate) return;
+    const handleKeyDown = (e) => {
+      // Ignore navigation while focus is inside a text field (e.g. a future
+      // in-drawer search box) so arrow keys behave normally there.
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'ArrowUp' && canGoPrev) { e.preventDefault(); onNavigate('prev'); }
+      else if (e.key === 'ArrowDown' && canGoNext) { e.preventDefault(); onNavigate('next'); }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onNavigate, canGoPrev, canGoNext]);
 
   useEffect(() => {
     if (copied) {
@@ -23,13 +50,28 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
   useEffect(() => {
     if (isOpen) {
       const timer = setTimeout(() => {
+        setActiveTab('details');
         setShowReqHeaders(false);
         setShowResHeaders(false);
-        setShowRawJson(false);
+        setShowExplain(false);
+        setExplainData(null);
+        setExplainError('');
       }, 0);
       return () => clearTimeout(timer);
     }
-  }, [isOpen]);
+  }, [isOpen, log?.id]);
+
+  useEffect(() => {
+    if (showExplain && !explainData && !explainLoading && log?.id) {
+      setExplainLoading(true);
+      setExplainError('');
+      getLogExplain(log.id)
+        .then(setExplainData)
+        .catch((err) => setExplainError(err.message || 'Failed to load explain data'))
+        .finally(() => setExplainLoading(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showExplain]);
 
   if (!isOpen || !log) return null;
 
@@ -48,33 +90,19 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
   }
   if (hostname) targetApp += ' · ' + hostname;
 
-  // Collect OWASP tags from raw_log
-  const owaspTags = [];
-  try {
-    const msgs = log.raw_log?.transaction?.messages || [];
-    msgs.forEach(m => {
-      (m.details?.tags || []).forEach(tag => {
-        if (!owaspTags.includes(tag) && tag !== 'OWASP_CRS') owaspTags.push(tag);
-      });
-    });
-  } catch {
-    // ignore malformed raw_log
-  }
-
-  const sectionStyle = { marginBottom: '14px' };
   const collapsibleHeader = (label, count, open, toggle) => (
     <div
       onClick={toggle}
       style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '10px 14px', background: 'var(--surface-subtle)',
-        border: '1px solid var(--glass-border)',
-        borderRadius: open ? '6px 6px 0 0' : '6px',
+        padding: '10px 14px', background: 'var(--cyan-bg)',
+        border: '1px solid var(--cyan-bg)',
+        borderRadius: open ? '10px 10px 0 0' : '10px',
         cursor: 'pointer', userSelect: 'none',
       }}
     >
       <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{label}{count !== undefined ? ` (${count})` : ''}</span>
-      <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>{open ? '▼' : '►'}</span>
+      <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{open ? '▼' : '►'}</span>
     </div>
   );
 
@@ -105,181 +133,264 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
   };
 
   return createPortal(
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '680px' }}>
-        <div className="modal-header">
-          <div className="modal-title">
-            <AlertIcon size={20} color="var(--danger-color)" />
-            <span>Inspection: Log Transaction ID: <span style={{ fontFamily: 'monospace', color: 'var(--sev-low)' }}>{log.id}</span></span>
+    <div className="log-drawer-overlay" onClick={onClose}>
+      <div className="log-drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="log-drawer-header">
+          <div className="log-drawer-title">
+            <AlertIcon size={18} color="var(--danger-color)" />
+            Inspection: Log Transaction
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
+              {log.id}
+            </span>
           </div>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close log details">
-            <X size={18} />
-          </button>
-        </div>
-        <div className="modal-body" style={{ maxHeight: '80vh', overflowY: 'auto' }}>
-
-          {/* Metadata Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '8px', border: '1px solid var(--surface-hover)' }}>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Timestamp</div>
-              <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{formatLocalTime(log.timestamp)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Attacker IP</div>
-              <div style={{ fontSize: '14px', fontWeight: 500, fontFamily: 'monospace', color: 'var(--sev-low)', marginTop: '4px' }}>{log.client_ip}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Attack Vector</div>
-              <div style={{ fontSize: '14px', marginTop: '4px' }}>
-                <span className={`severity-badge severity-${(log.severity || 'low').toLowerCase()}`} style={{ marginRight: '8px' }}>
-                  {log.severity}
-                </span>
-                {log.attack_type}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Country</div>
-              <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Globe size={14} color="var(--sev-low)" />
-                <span>{log.country || 'Unknown'}</span>
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Source ASN / Org</div>
-              <div style={{ fontSize: '14px', fontWeight: 500, fontFamily: 'monospace', color: 'var(--sev-low)', marginTop: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={log.source_asn_org}>
-                {log.source_asn_org || 'Unknown'}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>HTTP Response</div>
-              <div style={{ fontSize: '14px', fontFamily: 'monospace', fontWeight: 700, color: 'var(--danger-color)', marginTop: '4px' }}>{log.http_code || '403'}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Target Application</div>
-              <div style={{ fontSize: '13px', color: 'var(--success-color)', fontWeight: 500, marginTop: '4px' }}>{targetApp}</div>
-            </div>
-            <div style={{ gridColumn: 'span 2' }}>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Requested URI</div>
-              <div style={{ fontSize: '13px', fontFamily: 'monospace', color: 'var(--danger-color)', wordBreak: 'break-all', marginTop: '4px' }}>
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, marginRight: '6px' }}>{log.method}</span>
-                {log.uri}
-              </div>
-            </div>
-          </div>
-
-          {/* ── User-Agent ── */}
-          {userAgent && (
-            <div style={{ ...sectionStyle, background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 14px' }}>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '6px' }}>🌐 User-Agent (Client Tool / Browser)</div>
-              <div style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--sev-low)', wordBreak: 'break-all' }}>{userAgent}</div>
-              {(userAgent.toLowerCase().includes('sqlmap') || userAgent.toLowerCase().includes('nikto') || userAgent.toLowerCase().includes('nmap') || userAgent.toLowerCase().includes('dirbuster') || userAgent.toLowerCase().includes('burp')) && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '6px', background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: '4px', padding: '2px 8px', fontSize: '11px', color: 'var(--sev-high)', fontWeight: 600 }}>⚠ Known Attack Tool Detected</span>
-              )}
-            </div>
-          )}
-
-          {/* ── Referer ── */}
-          {referer && (
-            <div style={{ ...sectionStyle, background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px 14px' }}>
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '6px' }}>🔗 Referer (Attack Origin Page)</div>
-              <div style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--success-color)', wordBreak: 'break-all' }}>{referer}</div>
-            </div>
-          )}
-
-          {/* ── Request Headers ── */}
-          <div style={sectionStyle}>
-            {collapsibleHeader('Request Headers', Object.keys(reqHeaders).length, showReqHeaders, () => setShowReqHeaders(!showReqHeaders))}
-            {showReqHeaders && (
-              <div style={{ background: 'var(--inset-bg)', padding: '12px', border: '1px solid var(--surface-hover)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
-                {Object.keys(reqHeaders).length === 0 ? (
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>No request headers recorded.</div>
-                ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
-                    {Object.entries(reqHeaders)
-                      .map(([k, v]) => (
-                        <tr key={k} style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
-                          <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
-                          <td style={{ color: 'var(--text-primary)', padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
-                        </tr>
-                      ))}
-                  </tbody></table>
-                )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {onNavigate && (
+              <div style={{ display: 'flex', border: '1px solid var(--surface-strong)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                <button
+                  className="log-drawer-close"
+                  onClick={() => onNavigate('prev')}
+                  disabled={!canGoPrev}
+                  aria-label="Previous event"
+                  title="Previous event (↑)"
+                  style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--surface-strong)', opacity: canGoPrev ? 1 : 0.35, cursor: canGoPrev ? 'pointer' : 'default' }}
+                >
+                  <ChevronUp size={16} />
+                </button>
+                <button
+                  className="log-drawer-close"
+                  onClick={() => onNavigate('next')}
+                  disabled={!canGoNext}
+                  aria-label="Next event"
+                  title="Next event (↓)"
+                  style={{ borderRadius: 0, border: 'none', opacity: canGoNext ? 1 : 0.35, cursor: canGoNext ? 'pointer' : 'default' }}
+                >
+                  <ChevronDown size={16} />
+                </button>
               </div>
             )}
+            {onMarkFalsePositive && (
+              <button
+                className="pagination-btn"
+                onClick={() => onMarkFalsePositive(log)}
+                style={{ padding: '3px 10px', fontSize: '11px', borderColor: 'rgba(16, 185, 129, 0.4)', background: 'rgba(16, 185, 129, 0.05)', color: 'var(--success-color)' }}
+              >
+                <ShieldCheck size={13} color="var(--success-color)" />
+                <span>Mark as FP</span>
+              </button>
+            )}
+            {onCreateRule && (
+              <button
+                className="pagination-btn"
+                onClick={() => onCreateRule(log)}
+                title="Jump to Virtual Patching with this event's IP/URI pre-filled"
+                style={{ padding: '3px 10px', fontSize: '11px', borderColor: 'var(--danger-border)', background: 'var(--danger-bg)', color: 'var(--danger-color)' }}
+              >
+                <Ban size={13} color="var(--danger-color)" />
+                <span>Create Rule</span>
+              </button>
+            )}
+            <button className="log-drawer-close" onClick={onClose} aria-label="Close log details">
+              <X size={16} />
+            </button>
           </div>
+        </div>
 
-          {/* ── Response Headers ── */}
-          <div style={sectionStyle}>
-            {collapsibleHeader('Response Headers', Object.keys(log.response_headers || {}).length, showResHeaders, () => setShowResHeaders(!showResHeaders))}
-            {showResHeaders && (
-              <div style={{ background: 'var(--inset-bg)', padding: '12px', border: '1px solid var(--surface-hover)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', maxHeight: '200px', overflowY: 'auto' }}>
-                {Object.keys(log.response_headers || {}).length === 0 ? (
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>
-                    No response headers recorded.
-                    {log.http_code && (log.http_code.startsWith('4') || log.http_code.startsWith('5')) && (
-                      <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>ℹ️ Blocked requests (HTTP {log.http_code}) may not log backend response headers.</div>
+        <div className="log-drawer-tabs">
+          <span className={`log-drawer-tab ${activeTab === 'details' ? 'active' : ''}`} onClick={() => setActiveTab('details')}>Event Details</span>
+          <span className={`log-drawer-tab ${activeTab === 'raw' ? 'active' : ''}`} onClick={() => setActiveTab('raw')}>Raw Audit Log</span>
+        </div>
+
+        <div className="log-drawer-body">
+          {activeTab === 'details' ? (
+            <>
+              {/* Metadata */}
+              <div>
+                <div className="drawer-section-title">Request Metadata</div>
+                <div className="drawer-info-grid">
+                  <div className="drawer-info-cell">
+                    <div className="drawer-info-label">Timestamp</div>
+                    <div className="drawer-info-value" style={{ fontSize: '12px' }}>{formatLocalTime(log.timestamp)}</div>
+                  </div>
+                  <div className="drawer-info-cell">
+                    <div className="drawer-info-label">Attacker IP</div>
+                    <div className="drawer-info-value" style={{ color: 'var(--accent-color)' }}>{log.client_ip}</div>
+                  </div>
+                  <div className="drawer-info-cell">
+                    <div className="drawer-info-label">Attack Vector</div>
+                    <div className="drawer-info-value" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'inherit' }}>
+                      <span className={`severity-badge severity-${(log.severity || 'low').toLowerCase()}`}>{log.severity}</span>
+                      {log.attack_type}
+                    </div>
+                  </div>
+                  <div className="drawer-info-cell">
+                    <div className="drawer-info-label">Country</div>
+                    <div className="drawer-info-value" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Globe size={13} color="var(--accent-color)" />
+                      {log.country || 'Unknown'}
+                    </div>
+                  </div>
+                  <div className="drawer-info-cell">
+                    <div className="drawer-info-label">Source ASN / Org</div>
+                    <div className="drawer-info-value" style={{ color: 'var(--accent-color)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={log.source_asn_org}>
+                      {log.source_asn_org || 'Unknown'}
+                    </div>
+                  </div>
+                  <div className="drawer-info-cell">
+                    <div className="drawer-info-label">HTTP Response</div>
+                    <div className="drawer-info-value" style={{ color: 'var(--danger-color)' }}>{log.http_code || '403'}</div>
+                  </div>
+                  <div className="drawer-info-cell" style={{ gridColumn: 'span 2' }}>
+                    <div className="drawer-info-label">Target Application</div>
+                    <div className="drawer-info-value" style={{ color: 'var(--success-color)', fontFamily: 'inherit' }}>{targetApp}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* URI */}
+              <div>
+                <div className="drawer-section-title">Requested URI</div>
+                <div className="drawer-code-block" style={{ color: 'var(--danger-color)' }}>
+                  <span style={{ color: 'var(--text-muted)', fontWeight: 700, marginRight: '6px' }}>{log.method}</span>
+                  {log.uri}
+                </div>
+              </div>
+
+              {/* User-Agent */}
+              {userAgent && (
+                <div>
+                  <div className="drawer-section-title">User-Agent (Client Tool / Browser)</div>
+                  <div className="drawer-code-block" style={{ color: 'var(--accent-color)' }}>
+                    {userAgent}
+                    {(userAgent.toLowerCase().includes('sqlmap') || userAgent.toLowerCase().includes('nikto') || userAgent.toLowerCase().includes('nmap') || userAgent.toLowerCase().includes('dirbuster') || userAgent.toLowerCase().includes('burp')) && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '8px', background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: '4px', padding: '2px 8px', fontSize: '11px', color: 'var(--sev-high)', fontWeight: 600 }}>⚠ Known Attack Tool Detected</div>
                     )}
                   </div>
-                ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
-                    {Object.entries(log.response_headers || {}).map(([k, v]) => (
-                      <tr key={k} style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
-                        <td style={{ color: 'var(--text-secondary)', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
-                        <td style={{ color: 'var(--text-primary)', padding: '5px 8px', fontFamily: 'monospace', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
-                      </tr>
-                    ))}
-                  </tbody></table>
+                </div>
+              )}
+
+              {/* Referer */}
+              {referer && (
+                <div>
+                  <div className="drawer-section-title">Referer (Attack Origin Page)</div>
+                  <div className="drawer-code-block" style={{ color: 'var(--success-color)' }}>{referer}</div>
+                </div>
+              )}
+
+              {/* Request Headers */}
+              <div>
+                {collapsibleHeader('Request Headers', Object.keys(reqHeaders).length, showReqHeaders, () => setShowReqHeaders(!showReqHeaders))}
+                {showReqHeaders && (
+                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid var(--cyan-bg)', borderTop: 'none', borderBottomLeftRadius: '10px', borderBottomRightRadius: '10px', maxHeight: '200px', overflowY: 'auto' }}>
+                    {Object.keys(reqHeaders).length === 0 ? (
+                      <div style={{ color: 'var(--text-muted)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>No request headers recorded.</div>
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                        {Object.entries(reqHeaders).map(([k, v]) => (
+                          <tr key={k} style={{ borderBottom: '1px solid var(--cyan-bg)' }}>
+                            <td style={{ color: 'var(--text-muted)', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
+                            <td style={{ color: 'var(--text-primary)', padding: '5px 8px', fontFamily: 'var(--font-mono)', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
+                          </tr>
+                        ))}
+                      </tbody></table>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
 
-
-          {/* ── Raw JSON (collapsed by default) ── */}
-          <div style={{ marginBottom: '8px' }}>
-            <div
-              onClick={() => setShowRawJson(!showRawJson)}
-              style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '10px 14px',
-                background: 'var(--surface-subtle)',
-                border: '1px solid var(--border-color)',
-                borderRadius: showRawJson ? '6px 6px 0 0' : '6px',
-                cursor: 'pointer', userSelect: 'none',
-              }}
-            >
-              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Raw Audit Log (JSON)</span>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                {onMarkFalsePositive && (
-                  <button
-                    className="pagination-btn"
-                    onClick={(e) => { e.stopPropagation(); onMarkFalsePositive(log); }}
-                    style={{ padding: '3px 8px', fontSize: '11px', borderColor: 'rgba(16, 185, 129, 0.4)', background: 'rgba(16, 185, 129, 0.05)', color: 'var(--success-color)' }}
-                  >
-                    <ShieldCheck size={13} color="var(--success-color)" />
-                    <span>Mark as FP</span>
-                  </button>
+              {/* Response Headers */}
+              <div>
+                {collapsibleHeader('Response Headers', Object.keys(log.response_headers || {}).length, showResHeaders, () => setShowResHeaders(!showResHeaders))}
+                {showResHeaders && (
+                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid var(--cyan-bg)', borderTop: 'none', borderBottomLeftRadius: '10px', borderBottomRightRadius: '10px', maxHeight: '200px', overflowY: 'auto' }}>
+                    {Object.keys(log.response_headers || {}).length === 0 ? (
+                      <div style={{ color: 'var(--text-muted)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>
+                        No response headers recorded.
+                        {log.http_code && (log.http_code.startsWith('4') || log.http_code.startsWith('5')) && (
+                          <div style={{ marginTop: '6px', fontSize: '11px', opacity: 0.8 }}>ℹ️ Blocked requests (HTTP {log.http_code}) may not log backend response headers.</div>
+                        )}
+                      </div>
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
+                        {Object.entries(log.response_headers || {}).map(([k, v]) => (
+                          <tr key={k} style={{ borderBottom: '1px solid var(--cyan-bg)' }}>
+                            <td style={{ color: 'var(--text-muted)', padding: '5px 0', fontWeight: 600, width: '30%', verticalAlign: 'top', wordBreak: 'break-all' }}>{k}</td>
+                            <td style={{ color: 'var(--text-primary)', padding: '5px 8px', fontFamily: 'var(--font-mono)', wordBreak: 'break-all', verticalAlign: 'top' }}>{v}</td>
+                          </tr>
+                        ))}
+                      </tbody></table>
+                    )}
+                  </div>
                 )}
-                <button
-                  className="pagination-btn"
-                  onClick={(e) => { e.stopPropagation(); handleCopy(); }}
-                  style={{ padding: '3px 8px', fontSize: '11px' }}
-                >
+              </div>
+
+              {/* Explain This Block (ML correlation) */}
+              <div>
+                {collapsibleHeader('Why Was This Blocked? (ML Correlation)', undefined, showExplain, () => setShowExplain(!showExplain))}
+                {showExplain && (
+                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px', border: '1px solid var(--cyan-bg)', borderTop: 'none', borderBottomLeftRadius: '10px', borderBottomRightRadius: '10px' }}>
+                    {explainLoading && (
+                      <div style={{ color: 'var(--text-muted)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>Loading...</div>
+                    )}
+                    {explainError && (
+                      <div style={{ color: 'var(--danger-color)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>{explainError}</div>
+                    )}
+                    {explainData && !explainData.ml_event && (
+                      <div style={{ color: 'var(--text-muted)', fontSize: '12px', padding: '4px 0' }}>{explainData.ml_match_note}</div>
+                    )}
+                    {explainData && explainData.ml_event && (
+                      <>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>{explainData.ml_match_note}</div>
+                        <div className="drawer-ml-grid">
+                          <div className="drawer-ml-cell">
+                            <div className="drawer-ml-label">Blended Threat Score</div>
+                            <div className="drawer-ml-value">{explainData.ml_event.threat_score?.toFixed(3)}</div>
+                          </div>
+                          <div className="drawer-ml-cell">
+                            <div className="drawer-ml-label">XGBoost Probability</div>
+                            <div className="drawer-ml-value">{explainData.ml_event.xgb_prob?.toFixed(3)}</div>
+                          </div>
+                          <div className="drawer-ml-cell">
+                            <div className="drawer-ml-label">CRS Anomaly Score</div>
+                            <div className="drawer-ml-value">{explainData.ml_event.crs_score}</div>
+                          </div>
+                          <div className="drawer-ml-cell">
+                            <div className="drawer-ml-label">Isolation Forest</div>
+                            <div className="drawer-ml-value">{explainData.ml_event.iso_score?.toFixed(3)}</div>
+                          </div>
+                          <div className="drawer-ml-cell">
+                            <div className="drawer-ml-label">IP Reputation</div>
+                            <div className="drawer-ml-value" style={{ fontSize: '14px' }}>{explainData.ml_event.redis_rep}</div>
+                          </div>
+                          <div className="drawer-ml-cell">
+                            <div className="drawer-ml-label">ML Decision</div>
+                            <div className="drawer-ml-value" style={{ fontSize: '14px', color: 'var(--danger-color)' }}>{explainData.ml_event.decision}</div>
+                          </div>
+                        </div>
+                        {explainData.ml_event.matched_vars && (
+                          <div style={{ marginTop: '10px' }}>
+                            <div className="drawer-info-label" style={{ marginBottom: '4px' }}>Matched Variables</div>
+                            <div className="drawer-code-block" style={{ fontSize: '11px' }}>{explainData.ml_event.matched_vars}</div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div className="drawer-section-title" style={{ marginBottom: 0 }}>Raw Audit Log (JSON)</div>
+                <button className="pagination-btn" onClick={handleCopy}
+                  style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', margin: 0 }}>
                   {copied ? <Check size={13} color="var(--success-color)" /> : <Copy size={13} />}
                   <span>{copied ? 'Copied!' : 'Copy JSON'}</span>
                 </button>
-                <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{showRawJson ? '▼' : '►'}</span>
               </div>
+              <HighlightedJson json={log.raw_log || log} />
             </div>
-            {showRawJson && (
-              <div style={{ border: '1px solid var(--border-color)', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', overflow: 'hidden' }}>
-                <HighlightedJson json={log.raw_log || log} />
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="modal-footer">
-          <button className="modal-btn secondary" onClick={onClose}>Close</button>
+          )}
         </div>
       </div>
     </div>,

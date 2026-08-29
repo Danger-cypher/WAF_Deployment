@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { Users, Plus, Trash2, KeyRound, X, ShieldCheck, ShieldAlert, Power, Smartphone, Server } from 'lucide-react';
-import { listUsers, createUser, updateUser, resetUserPassword, deleteUser, adminDisableUserMfa, getProtectedApps } from '../services/api';
+import { Users, Plus, Trash2, KeyRound, X, ShieldCheck, ShieldAlert, Power, Smartphone, Server, Monitor } from 'lucide-react';
+import { listUsers, createUser, updateUser, resetUserPassword, deleteUser, adminDisableUserMfa, getProtectedApps, getUserSessions, revokeUserSession } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import Button from './Button';
@@ -228,6 +228,73 @@ function ResetPasswordModal({ user, onClose, showToast }) {
   );
 }
 
+function SessionsModal({ user, onClose, showToast }) {
+  const [sessions, setSessions] = useState(null);
+  const [revokingId, setRevokingId] = useState(null);
+
+  const loadSessions = () => {
+    getUserSessions(user.id)
+      .then(setSessions)
+      .catch((err) => showToast('Failed to load sessions: ' + (err.message || 'Unknown error'), 'error'));
+  };
+
+  useEffect(() => { loadSessions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRevoke = async (sessionId) => {
+    setRevokingId(sessionId);
+    try {
+      await revokeUserSession(user.id, sessionId);
+      showToast('Session revoked.');
+      loadSessions();
+    } catch (err) {
+      showToast('Failed to revoke session: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
+  return (
+    <ModalShell title={`Active Sessions — ${user.username}`} onClose={onClose}>
+      {sessions === null ? (
+        <div style={{ padding: '12px 0', color: 'var(--text-secondary)', fontSize: '13px' }}>Loading…</div>
+      ) : sessions.length === 0 ? (
+        <div style={{ padding: '12px 0', color: 'var(--text-secondary)', fontSize: '13px' }}>No active sessions.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {sessions.map((s) => (
+            <div
+              key={s.session_id}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
+                padding: '8px 10px', borderRadius: 'var(--radius-sm)',
+                background: 'var(--surface-subtle)',
+                border: s.is_current ? '1px solid var(--accent-border)' : '1px solid transparent',
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                  {s.ip}{s.is_current && <span style={{ color: 'var(--accent-color)', marginLeft: '6px', fontSize: '11px' }}>(you, right now)</span>}
+                </span>
+                <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {s.user_agent} · last used {s.last_seen_at ? s.last_seen_at.replace('T', ' ').split('.')[0] : 'unknown'}
+                </span>
+              </div>
+              <Button
+                variant="danger" size="sm"
+                loading={revokingId === s.session_id}
+                onClick={() => handleRevoke(s.session_id)}
+                style={{ flexShrink: 0 }}
+              >
+                Revoke
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </ModalShell>
+  );
+}
+
 export default function UserManagement({ currentUsername }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -237,6 +304,7 @@ export default function UserManagement({ currentUsername }) {
   const [showCreate, setShowCreate] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
   const [appAccessTarget, setAppAccessTarget] = useState(null);
+  const [sessionsTarget, setSessionsTarget] = useState(null);
   const [busyId, setBusyId] = useState(null);
 
   const fetchUsers = useCallback(async () => {
@@ -406,6 +474,11 @@ export default function UserManagement({ currentUsername }) {
                         />
                       )}
                       <Button
+                        variant="ghost" size="sm" icon={Monitor}
+                        title="View / revoke active sessions"
+                        onClick={() => setSessionsTarget(u)}
+                      />
+                      <Button
                         variant="ghost" size="sm" icon={KeyRound}
                         title="Reset password"
                         onClick={() => setResetTarget(u)}
@@ -450,6 +523,9 @@ export default function UserManagement({ currentUsername }) {
         )}
         {appAccessTarget && (
           <AppAccessModal user={appAccessTarget} onClose={() => setAppAccessTarget(null)} onSaved={fetchUsers} showToast={showToast} />
+        )}
+        {sessionsTarget && (
+          <SessionsModal user={sessionsTarget} onClose={() => setSessionsTarget(null)} showToast={showToast} />
         )}
       </AnimatePresence>
 

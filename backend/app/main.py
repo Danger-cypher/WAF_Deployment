@@ -24,6 +24,8 @@ from app.routes import (
     alerts,
     system,
     users,
+    api_keys,
+    virtual_patches,
     ws,
     auto_learning as auto_learning_route,
 )
@@ -56,6 +58,7 @@ async def lifespan(app: FastAPI):
         logger.info("ClickHouse is available — using as primary log store")
         clickhouse_service.reset_fabricated_api_discovery_fields()
         clickhouse_service.ensure_api_discovery_param_names_column()
+        clickhouse_service.ensure_alert_history_channel_results_column()
     else:
         logger.warning(
             "ClickHouse is NOT available at startup. "
@@ -142,10 +145,22 @@ async def lifespan(app: FastAPI):
     from app.services.redis_degraded_monitor import start_redis_degraded_monitor
     redis_degraded_task = asyncio.create_task(start_redis_degraded_monitor())
 
+    # Start the self-learned IP reputation scheduler background task
+    # (auto-blocks repeat WAF-block offenders from this deployment's own
+    # traffic, on top of the admin blacklist and the external threat-intel feed)
+    from app.services.auto_reputation_service import start_auto_reputation_service
+    auto_reputation_task = asyncio.create_task(start_auto_reputation_service())
+
     # Start the external threat-intel feed sync background task (Spamhaus
     # DROP/EDROP -> Redis, disabled by default via Settings)
     from app.services.threat_intel_service import start_threat_intel_service
     threat_intel_task = asyncio.create_task(start_threat_intel_service())
+
+    # Start the malware-scanning ClamAV health monitor background task
+    # (P1-10, disabled by default via Settings) — surfaces a ClamAV outage
+    # through the same heartbeat/alerting pipeline as waf_redis_degraded.
+    from app.services.malware_scan_service import start_malware_scan_monitor
+    malware_scan_task = asyncio.create_task(start_malware_scan_monitor())
 
     # Start the heartbeat watchdog — checks whether the background tasks
     # above are actually still cycling, and alerts on the transition into
@@ -203,6 +218,13 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    # Cancel the self-learned IP reputation scheduler task
+    auto_reputation_task.cancel()
+    try:
+        await auto_reputation_task
+    except asyncio.CancelledError:
+        pass
+
     # Cancel the API discovery task
     api_discovery_task.cancel()
     try:
@@ -214,6 +236,13 @@ async def lifespan(app: FastAPI):
     threat_intel_task.cancel()
     try:
         await threat_intel_task
+    except asyncio.CancelledError:
+        pass
+
+    # Cancel the malware-scanning monitor task
+    malware_scan_task.cancel()
+    try:
+        await malware_scan_task
     except asyncio.CancelledError:
         pass
 
@@ -332,8 +361,19 @@ async def add_security_headers(request, call_next):
     try:
         hardening = _get_hardening_cached()
 
-        # 1. HSTS Header
-        if hardening.get("hsts_enabled", True):
+        # 1. HSTS Header — only over an actually-HTTPS request. HSTS is
+        # host-scoped, not port-scoped: sending it on a plain-HTTP
+        # response (e.g. this backend also serves the HTTP-only :3020
+        # admin dashboard used for SIEM SSO) gets it cached by the
+        # browser for the whole host from that response alone, then
+        # every subsequent request to *any* port on this host — including
+        # the HTTP-only one — gets silently force-upgraded to HTTPS and
+        # hangs. Same bug class as nginx.conf's global add_header, fixed
+        # separately there; this is this app's own independent source of
+        # the same header and needs the same scheme check. Mirrors the
+        # is_secure pattern in routes/auth.py's _issue_session().
+        is_https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+        if is_https and hardening.get("hsts_enabled", True):
             max_age = hardening.get("hsts_max_age", 31536000)
             response.headers["Strict-Transport-Security"] = (
                 f"max-age={max_age}; includeSubDomains; preload"
@@ -387,6 +427,8 @@ app.include_router(alerts.router, tags=["Alerts"], dependencies=csrf_deps)
 app.include_router(alerts.trigger_router, tags=["Alerts"])
 app.include_router(system.router, tags=["System"], prefix="/system", dependencies=csrf_deps)
 app.include_router(users.router, tags=["Users"], dependencies=csrf_deps)
+app.include_router(api_keys.router, tags=["API Keys"], dependencies=csrf_deps)
+app.include_router(virtual_patches.router, tags=["Virtual Patches"], dependencies=csrf_deps)
 app.include_router(auto_learning_route.router, tags=["Auto-Learning"], dependencies=csrf_deps)
 # No csrf_deps: the WebSocket handshake has no Request object for the
 # double-submit CSRF check to inspect. Auth is instead done inside the

@@ -10,6 +10,7 @@ import SsoCallback from './components/SsoCallback';
 import Sidebar from './components/Sidebar';
 import NotificationBell from './components/NotificationBell';
 import AccountMenu from './components/AccountMenu';
+import CommandPalette from './components/CommandPalette';
 
 import './index.css';
 
@@ -28,9 +29,13 @@ const ThreatAnalytics = lazy(() => import('./pages/Overview'));
 const ProtectionSection = lazy(() => import('./pages/ProtectionSection'));
 const LiveLogs = lazy(() => import('./pages/Events'));
 const MLAnalytics = lazy(() => import('./pages/MLEngine'));
-const FalsePositives = lazy(() => import('./pages/FalsePositives'));
+// False Positives and Exceptions used to be two top-level tabs; they're now
+// sub-tabs of one page (FalsePositivesExceptions) — see that file. Their
+// modules are still referenced here separately, but only for their
+// named-export modals (FlagFpModal / CreateExceptionModal), which stay
+// global overlays independent of which sub-tab is active.
+const FalsePositivesExceptions = lazy(() => import('./pages/FalsePositivesExceptions'));
 const FlagFpModal = lazy(() => import('./pages/FalsePositives').then((m) => ({ default: m.FlagFpModal })));
-const Exceptions = lazy(() => import('./pages/Exceptions'));
 const CreateExceptionModal = lazy(() => import('./pages/Exceptions').then((m) => ({ default: m.CreateExceptionModal })));
 const Rules = lazy(() => import('./pages/Rules'));
 const ApiProtection = lazy(() => import('./pages/ApiProtection'));
@@ -54,7 +59,6 @@ const TAB_ROUTES = {
   ml_engine:        '/ml-engine',
   // Former Advanced sub-tabs — now direct routes
   false_positives:  '/false-positives',
-  exceptions:       '/exceptions',
   rules:            '/rules',
   api_protection:   '/api-protection',
   reports:          '/reports',
@@ -63,9 +67,14 @@ const TAB_ROUTES = {
   users:            '/users',
   settings:         '/settings',
 };
-const ROUTE_TABS = Object.fromEntries(
-  Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab])
-);
+const ROUTE_TABS = {
+  ...Object.fromEntries(Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab])),
+  // Exceptions was its own top-level tab/route before it became a sub-tab
+  // of false_positives — kept as an incoming alias so an old bookmark or a
+  // browser-history back-nav still lands somewhere real instead of falling
+  // through to the '/exceptions not found → overview' default below.
+  '/exceptions': 'false_positives',
+};
 function getTabFromPath() {
   const path = window.location.pathname;
   return ROUTE_TABS[path] || 'overview';
@@ -90,6 +99,16 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isAlertHistoryModalOpen, setIsAlertHistoryModalOpen] = useState(false);
   const [, setAdvancedInitialTab] = useState('false_positives');
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  // Set by the command palette when it resolves an IP/rule search to a
+  // target tab — the target page reads it once as its initial search value
+  // (via the initialSearch prop below) then calls onConsumeInitialSearch to
+  // clear it, so a later, ordinary visit to that tab doesn't inherit it.
+  const [pendingSearch, setPendingSearch] = useState(null);
+  // Same one-time-handoff shape as pendingSearch above, for "Create Rule
+  // from This Event" (Events drawer -> Virtual Patching, pre-filled with
+  // the real IP/URI/User-Agent from whichever event it was opened from).
+  const [pendingRuleContext, setPendingRuleContext] = useState(null);
 
   // Wrapper that syncs tab state + URL together
   const setActiveTab = (tabId) => {
@@ -108,18 +127,47 @@ function App() {
       setActiveTabState(tab);
     };
     window.addEventListener('popstate', onPopState);
-    // Replace the current history entry with proper state so back works from page 1
-    window.history.replaceState(
-      { tab: activeTab },
-      '',
-      TAB_ROUTES[activeTab] || '/dashboard'
-    );
+
+    // SsoCallback owns the URL on this route until its own token exchange
+    // finishes (see the matching guard on the bootstrap effect below) —
+    // this effect runs first (declared earlier in this component, and
+    // React fires a component's own effects in declaration order), so an
+    // unconditional replaceState here rewrote the URL to /dashboard
+    // *before* that other effect ever got to check the pathname itself,
+    // silently defeating its guard. That let its getCurrentUser()
+    // bootstrap race the in-flight SSO exchange, 401, and force a logout
+    // loop before the exchange could complete. Skip only the replaceState
+    // — the popstate listener itself is harmless to register regardless,
+    // and skipping it too would leave the browser back/forward buttons
+    // silently broken for the rest of an SSO-originated session (this
+    // effect has an empty deps array, so it never runs again to fix that
+    // once the app has genuinely navigated to /dashboard).
+    if (window.location.pathname !== '/auth/sso') {
+      // Replace the current history entry with proper state so back works from page 1
+      window.history.replaceState(
+        { tab: activeTab },
+        '',
+        TAB_ROUTES[activeTab] || '/dashboard'
+      );
+    }
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   const handleTriggerMarkFp = (log) => {
     setLogToFlag(log);
     setIsFpModalOpen(true);
+  };
+
+  const handleCreateRuleFromLog = (log) => {
+    const reqHeaders = log.request_headers || {};
+    setPendingRuleContext({
+      client_ip: log.client_ip || '',
+      uri: log.uri || '',
+      user_agent: reqHeaders['User-Agent'] || reqHeaders['user-agent'] || '',
+      rule_id: log.rule_id || '',
+      attack_type: log.attack_type || '',
+    });
+    setActiveTab('virtual_patching');
   };
 
   const handleTriggerCreateException = (log) => {
@@ -216,6 +264,29 @@ function App() {
     }
   }, [activeTab, userRole]);
 
+  // Command palette: Ctrl/Cmd+K from anywhere while authenticated.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAuthenticated]);
+
+  const handlePaletteSearchIp = (ip) => {
+    setPendingSearch({ tab: 'events', value: ip });
+    setActiveTab('events');
+  };
+
+  const handlePaletteSearchRule = (ruleId) => {
+    setPendingSearch({ tab: 'rules', value: ruleId });
+    setActiveTab('rules');
+  };
+
   if (window.location.pathname === '/auth/sso') {
     return (
       <SsoCallback
@@ -268,11 +339,10 @@ function App() {
             <span className="siem-breadcrumb-sep">■</span>
             <span className="siem-breadcrumb">
               {activeTab === 'overview' && 'Security Overview'}
-              {activeTab === 'protection' && 'Protection Status'}
+              {activeTab === 'protection' && 'Apps & DDoS Shield'}
               {activeTab === 'events' && 'Security Events'}
               {activeTab === 'ml_engine' && 'AI / ML Engine'}
-              {activeTab === 'false_positives' && 'False Positives'}
-              {activeTab === 'exceptions' && 'WAF Exceptions'}
+              {activeTab === 'false_positives' && 'False Positives & Exceptions'}
               {activeTab === 'rules' && 'WAF Rules & CRS'}
               {activeTab === 'api_protection' && 'API Protection'}
               {activeTab === 'reports' && 'Security Reports'}
@@ -285,7 +355,7 @@ function App() {
           <div className="siem-topbar-right">
             {/* WAF Active status badge */}
             <div className="siem-status-badge active">
-              <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981' }} />
+              <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--success-color)', boxShadow: '0 0 6px var(--success-glow)' }} />
               WAF Active
             </div>
             <NotificationBell
@@ -313,9 +383,9 @@ function App() {
         >
         <Suspense fallback={<TabLoadingFallback />}>
           {/* Overview Tab */}
-          {activeTab === 'overview' && <ThreatAnalytics key="overview" />}
+          {activeTab === 'overview' && <ThreatAnalytics key="overview" userRole={userRole} />}
 
-          {/* Protection Status Tab */}
+          {/* Apps & DDoS Shield Tab (id: 'protection') — Virtual Hosts (protected apps, SSL, LB) + DDoS/Bot sub-tabs */}
           {activeTab === 'protection' && (
             <ProtectionSection
               key="protection"
@@ -325,21 +395,33 @@ function App() {
           )}
           
           {/* Security Events Tab */}
-          {activeTab === 'events' && <LiveLogs key="events" onMarkFalsePositive={handleTriggerMarkFp} />}
+          {activeTab === 'events' && (
+            <LiveLogs
+              key="events"
+              onMarkFalsePositive={handleTriggerMarkFp}
+              onCreateRule={userRole === 'admin' ? handleCreateRuleFromLog : undefined}
+              initialSearch={pendingSearch?.tab === 'events' ? pendingSearch.value : undefined}
+              onConsumeInitialSearch={() => setPendingSearch(null)}
+            />
+          )}
           
           {/* AI/ML Engine Tab */}
           {activeTab === 'ml_engine' && <MLAnalytics key="ml_engine" />}
 
-          {/* False Positives Tab */}
+          {/* False Positives & Exceptions Tab (id: 'false_positives') — merged, see FalsePositivesExceptions.jsx */}
           {activeTab === 'false_positives' && (
-            <FalsePositives key="false_positives" userRole={userRole} onCreateException={handleTriggerCreateException} />
+            <FalsePositivesExceptions key="false_positives" userRole={userRole} onCreateException={handleTriggerCreateException} />
           )}
 
-          {/* Exceptions Tab */}
-          {activeTab === 'exceptions' && <Exceptions key="exceptions" />}
-
           {/* WAF Rules Tab */}
-          {activeTab === 'rules' && <Rules key="rules" userRole={userRole} />}
+          {activeTab === 'rules' && (
+            <Rules
+              key="rules"
+              userRole={userRole}
+              initialSearch={pendingSearch?.tab === 'rules' ? pendingSearch.value : undefined}
+              onConsumeInitialSearch={() => setPendingSearch(null)}
+            />
+          )}
 
           {/* API Protection Tab */}
           {activeTab === 'api_protection' && <ApiProtection key="api_protection" />}
@@ -352,7 +434,12 @@ function App() {
 
           {/* Virtual Patching (Custom Rules) Tab - Admin only */}
           {activeTab === 'virtual_patching' && userRole === 'admin' && (
-            <CustomRulesEditor key="virtual_patching" userRole={userRole} />
+            <CustomRulesEditor
+              key="virtual_patching"
+              userRole={userRole}
+              initialLogContext={pendingRuleContext}
+              onConsumeInitialLogContext={() => setPendingRuleContext(null)}
+            />
           )}
 
           {/* User Management Tab - Admin only */}
@@ -430,6 +517,15 @@ function App() {
             </Suspense>
           )}
         </AnimatePresence>
+
+        <CommandPalette
+          isOpen={isPaletteOpen}
+          onClose={() => setIsPaletteOpen(false)}
+          isAdmin={userRole === 'admin'}
+          onNavigate={setActiveTab}
+          onSearchIp={handlePaletteSearchIp}
+          onSearchRule={handlePaletteSearchRule}
+        />
 
         <AnimatePresence>
           {globalSuccessMsg && (

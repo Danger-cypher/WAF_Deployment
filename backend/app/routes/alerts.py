@@ -10,6 +10,7 @@ from app.models.alert_models import (
     AlertChannelCreate, AlertChannelUpdate, AlertChannel,
     AlertRuleCreate, AlertRuleUpdate, AlertRule,
     AlertHistory, AlertStats, TestAlertRequest, TestAlertResponse,
+    ChannelDeliveryHealth,
 )
 from app.services.alert_db_service import AlertDatabaseService
 from app.services.alert_manager import alert_manager
@@ -81,6 +82,25 @@ async def get_channels(enabled_only: bool = False, current_user: TokenData = Dep
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve channels."
+        )
+
+
+@router.get("/alerts/channels/health", response_model=List[ChannelDeliveryHealth])
+async def get_channels_health(current_user: TokenData = Depends(require_any_role)):
+    """
+    Rolling per-channel delivery health (attempts/successes/last outcome),
+    derived from each channel's own dispatch results across recent alert
+    history — see AlertDatabaseService.get_channel_delivery_health. Must be
+    registered before /alerts/channels/{channel_id} — otherwise "health"
+    matches that route's int channel_id and 422s.
+    """
+    try:
+        return db.get_channel_delivery_health()
+    except Exception as e:
+        logger.error(f"Error computing channel delivery health: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compute channel delivery health."
         )
 
 
@@ -320,6 +340,8 @@ async def get_history(
                 l["channels_notified"] = json.loads(l["channels_notified"])
             if isinstance(l["event_data"], str):
                 l["event_data"] = json.loads(l["event_data"])
+            if isinstance(l.get("channel_results"), str):
+                l["channel_results"] = json.loads(l["channel_results"] or "[]")
         return logs
     except Exception as e:
         logger.error(f"Error fetching alert history: {e}")
