@@ -246,13 +246,13 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="protected-app-wizard" onClick={(e) => e.stopPropagation()}>
-        
+      <div className="protected-app-wizard" role="dialog" aria-modal="true" aria-labelledby="app-wizard-title" onClick={(e) => e.stopPropagation()}>
+
         {/* Header */}
         <div className="wizard-header">
           <div className="wizard-title">
             <Shield size={24} color="var(--teal-color)" />
-            <span>{existingApp ? 'Edit' : 'Add'} Protected Application</span>
+            <span id="app-wizard-title">{existingApp ? 'Edit' : 'Add'} Protected Application</span>
           </div>
           
           {/* Progress Steps */}
@@ -297,8 +297,8 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 </p>
 
                 <div className="form-group">
-                  <label>Application Name</label>
-                  <input
+                  <label htmlFor="paw-app-name">Application Name</label>
+                  <input id="paw-app-name"
                     type="text"
                     className="wizard-input"
                     placeholder="e.g., Production API"
@@ -309,8 +309,8 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 </div>
 
                 <div className="form-group">
-                  <label>Public Domain</label>
-                  <input
+                  <label htmlFor="paw-public-domain">Public Domain</label>
+                  <input id="paw-public-domain"
                     type="text"
                     className="wizard-input"
                     placeholder="e.g., api.example.com"
@@ -322,8 +322,8 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
 
                 <div className="form-row">
                   <div className="form-group">
-                    <label>Rate Limit (Req/s)</label>
-                    <input
+                    <label htmlFor="paw-rate-limit">Rate Limit (Req/s)</label>
+                    <input id="paw-rate-limit"
                       type="number"
                       className="wizard-input"
                       placeholder="50"
@@ -333,8 +333,8 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                   </div>
 
                   <div className="form-group">
-                    <label>Burst Tolerance</label>
-                    <input
+                    <label htmlFor="paw-burst-tolerance">Burst Tolerance</label>
+                    <input id="paw-burst-tolerance"
                       type="number"
                       className="wizard-input"
                       placeholder="100"
@@ -364,8 +364,8 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 </p>
 
                 <div className="form-group">
-                  <label>Backend Server IP or Hostname</label>
-                  <input
+                  <label htmlFor="paw-backend-host">Backend Server IP or Hostname</label>
+                  <input id="paw-backend-host"
                     type="text"
                     className="wizard-input"
                     placeholder="e.g., 192.168.1.100 or backend.internal"
@@ -377,8 +377,8 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
 
                 <div className="form-row">
                   <div className="form-group">
-                    <label>Backend Port</label>
-                    <input
+                    <label htmlFor="paw-backend-port">Backend Port</label>
+                    <input id="paw-backend-port"
                       type="number"
                       className="wizard-input"
                       placeholder="80"
@@ -388,8 +388,8 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                   </div>
 
                   <div className="form-group">
-                    <label>Backend Protocol</label>
-                    <select
+                    <label htmlFor="paw-backend-protocol">Backend Protocol</label>
+                    <select id="paw-backend-protocol"
                       className="wizard-input"
                       value={formData.backendProtocol}
                       onChange={(e) => setFormData({ ...formData, backendProtocol: e.target.value })}
@@ -414,6 +414,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                         type="text"
                         className="wizard-input"
                         placeholder="e.g., 10.0.0.2 or backend-2.internal"
+                        aria-label={`Additional backend server ${idx + 1} host`}
                         value={origin.host}
                         onChange={(e) => {
                           const next = [...formData.additionalOrigins];
@@ -425,6 +426,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                         type="number"
                         className="wizard-input"
                         placeholder="Port"
+                        aria-label={`Additional backend server ${idx + 1} port`}
                         style={{ maxWidth: '110px' }}
                         value={origin.port}
                         onChange={(e) => {
@@ -488,8 +490,9 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 {formData.requireAuth && (
                   <div className="form-row">
                     <div className="form-group">
-                      <label>Check For</label>
+                      <label htmlFor="paw-auth-check-type">Check For</label>
                       <select
+                        id="paw-auth-check-type"
                         className="wizard-input"
                         value={formData.authCheckType}
                         onChange={(e) => setFormData({ ...formData, authCheckType: e.target.value })}
@@ -499,8 +502,9 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                       </select>
                     </div>
                     <div className="form-group">
-                      <label>{formData.authCheckType === 'cookie' ? 'Cookie Name' : 'Header Name'}</label>
+                      <label htmlFor="paw-auth-header-name">{formData.authCheckType === 'cookie' ? 'Cookie Name' : 'Header Name'}</label>
                       <input
+                        id="paw-auth-header-name"
                         type="text"
                         className="wizard-input"
                         placeholder={formData.authCheckType === 'cookie' ? 'session_id' : 'Authorization'}

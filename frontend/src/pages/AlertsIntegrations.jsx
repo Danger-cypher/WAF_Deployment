@@ -383,12 +383,12 @@ export default function AlertsIntegrations({ userRole }) {
                 <h4 style={{ margin: 0, fontSize: '14px', color: 'var(--sev-low)' }}>{channelForm.id ? 'Edit Notification Integration' : 'Add New Notification Integration'}</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Connection Name</label>
-                    <input className="settings-input" type="text" placeholder="e.g. SOC Team Slack" required value={channelForm.name} onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })} />
+                    <label htmlFor="ai-channel-name" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Connection Name</label>
+                    <input id="ai-channel-name" className="settings-input" type="text" placeholder="e.g. SOC Team Slack" required value={channelForm.name} onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })} />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Connector Type</label>
-                    <select className="settings-input" style={{ width: '100%' }} value={channelForm.channel_type} onChange={(e) => {
+                    <label htmlFor="ai-channel-type" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Connector Type</label>
+                    <select id="ai-channel-type" className="settings-input" style={{ width: '100%' }} value={channelForm.channel_type} onChange={(e) => {
                       const newType = e.target.value;
                       let defaultCfg;
                       if (newType === 'email') defaultCfg = { smtp_host: "smtp.office365.com", smtp_port: 587, username: "alerts@yourcompany.com", password: "YOUR_PASSWORD_HERE", from_addr: "alerts@yourcompany.com", to_addrs: ["soc@yourcompany.com"], use_tls: true, use_ssl: false };
@@ -407,7 +407,7 @@ export default function AlertsIntegrations({ userRole }) {
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Configuration Payload (JSON)</label>
+                  <label htmlFor="ai-channel-config" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Configuration Payload (JSON)</label>
                   {channelForm.channel_type === 'syslog' && (
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                       Gets every matching event immediately — unlike the other channel types above,
@@ -416,6 +416,7 @@ export default function AlertsIntegrations({ userRole }) {
                     </div>
                   )}
                   <textarea
+                    id="ai-channel-config"
                     key={channelForm.channel_type}
                     className="settings-input"
                     required
@@ -513,12 +514,12 @@ export default function AlertsIntegrations({ userRole }) {
                 <h4 style={{ margin: 0, fontSize: '14px', color: 'var(--sev-low)' }}>{editingRuleId != null ? 'Edit Incident Alerting Rule' : 'Create Incident Alerting Rule'}</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
-                    <input className="settings-input" type="text" placeholder="e.g. Critical Threat Event" required value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} />
+                    <label htmlFor="ai-rule-name" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
+                    <input id="ai-rule-name" className="settings-input" type="text" placeholder="e.g. Critical Threat Event" required value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Event Type</label>
-                    <select className="settings-input" style={{ width: '100%' }} value={ruleForm.event_type} onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}>
+                    <label htmlFor="ai-rule-event-type" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Event Type</label>
+                    <select id="ai-rule-event-type" className="settings-input" style={{ width: '100%' }} value={ruleForm.event_type} onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}>
                       <option value="attack_detected">Attack Detected (WAF)</option>
                       <option value="high_threat_score">High Anomaly Threat Score</option>
                       <option value="ml_anomaly">ML Engine Anomaly Event</option>
@@ -527,8 +528,8 @@ export default function AlertsIntegrations({ userRole }) {
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Severity Level</label>
-                    <select className="settings-input" style={{ width: '100%' }} value={ruleForm.severity} onChange={(e) => setRuleForm({ ...ruleForm, severity: e.target.value })}>
+                    <label htmlFor="ai-rule-severity" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Severity Level</label>
+                    <select id="ai-rule-severity" className="settings-input" style={{ width: '100%' }} value={ruleForm.severity} onChange={(e) => setRuleForm({ ...ruleForm, severity: e.target.value })}>
                       <option value="critical">Critical</option>
                       <option value="high">High</option>
                       <option value="medium">Medium</option>
@@ -537,8 +538,8 @@ export default function AlertsIntegrations({ userRole }) {
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON (Optional)</label>
-                    <textarea className="settings-input" style={{ minHeight: '90px', fontSize: '11px', fontFamily: 'monospace' }} placeholder='e.g. {"threat_score_gt": 80}' value={conditionsText} onChange={(e) => {
+                    <label htmlFor="ai-rule-conditions" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON (Optional)</label>
+                    <textarea id="ai-rule-conditions" className="settings-input" style={{ minHeight: '90px', fontSize: '11px', fontFamily: 'monospace' }} placeholder='e.g. {"threat_score_gt": 80}' value={conditionsText} onChange={(e) => {
                       setConditionsText(e.target.value);
                       try {
                         const conds = e.target.value.trim() ? JSON.parse(e.target.value) : {};
@@ -565,13 +566,13 @@ export default function AlertsIntegrations({ userRole }) {
                     </div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Throttle Cooldown (Minutes)</label>
-                    <input className="settings-input" type="number" min="1" value={ruleForm.throttle_minutes} onChange={(e) => setRuleForm({ ...ruleForm, throttle_minutes: parseInt(e.target.value) || 5 })} />
+                    <label htmlFor="ai-rule-throttle" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Throttle Cooldown (Minutes)</label>
+                    <input id="ai-rule-throttle" className="settings-input" type="number" min="1" value={ruleForm.throttle_minutes} onChange={(e) => setRuleForm({ ...ruleForm, throttle_minutes: parseInt(e.target.value) || 5 })} />
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Routing Targets (Channel IDs, comma-separated e.g. 1, 2)</label>
-                  <input className="settings-input" type="text" placeholder="Enter channel numeric IDs..." value={channelsText} onChange={(e) => {
+                  <label htmlFor="ai-rule-channels" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Routing Targets (Channel IDs, comma-separated e.g. 1, 2)</label>
+                  <input id="ai-rule-channels" className="settings-input" type="text" placeholder="Enter channel numeric IDs..." value={channelsText} onChange={(e) => {
                     setChannelsText(e.target.value);
                     const ids = e.target.value.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x));
                     setRuleForm({ ...ruleForm, channels: ids });

@@ -134,9 +134,9 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
 
   return createPortal(
     <div className="log-drawer-overlay" onClick={onClose}>
-      <div className="log-drawer" onClick={(e) => e.stopPropagation()}>
+      <div className="log-drawer" role="dialog" aria-modal="true" aria-labelledby="log-details-drawer-title" onClick={(e) => e.stopPropagation()}>
         <div className="log-drawer-header">
-          <div className="log-drawer-title">
+          <div className="log-drawer-title" id="log-details-drawer-title">
             <AlertIcon size={18} color="var(--danger-color)" />
             Inspection: Log Transaction
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>

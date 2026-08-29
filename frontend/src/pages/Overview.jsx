@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Activity, AlertTriangle as AlertTriangleIcon, Code, Database, Globe, Lock, ShieldAlert,
-  CheckCircle2, XCircle, AlertCircle,
+  CheckCircle2, XCircle, AlertCircle, ShieldCheck, History, ArrowRight,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import {
   getStats, getTimeline, getAttackTypes, getTopIPs, getTopRules, getSeverityDistribution,
-  getGeneralSettings, getHealth, getBackgroundTasksHealth,
+  getGeneralSettings, getHealth, getBackgroundTasksHealth, getAuditLog,
 } from '../services/api';
 import { NoTrafficEmptyState, FetchErrorState } from '../components/EmptyStates';
 
@@ -118,7 +118,7 @@ function HealthChip({ label, ok, neutral = false, okLabel = 'Healthy', downLabel
   );
 }
 
-export default function ThreatAnalytics({ userRole }) {
+export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
   const [stats, setStats] = useState({
     total_requests: 0,
     total_blocked: 0,
@@ -159,7 +159,23 @@ export default function ThreatAnalytics({ userRole }) {
   // the KPI cards.
   const [health, setHealth] = useState(null);
   const [backgroundHealth, setBackgroundHealth] = useState(null);
+  // "What changed" — the last few admin actions (GET /settings/audit-log
+  // is require_admin, so this only ever fetches for admins), reusing the
+  // same audit trail Settings > Activity Log already reads. Answers
+  // "what's different since I last looked," which the KPI cards alone
+  // don't — they're just current totals, not a diff.
+  const [recentChanges, setRecentChanges] = useState([]);
   const isAdmin = userRole === 'admin';
+
+  // Date.now() can't be called during render (React's purity rule) since it
+  // isn't a function of props/state — capture it as state instead, ticked
+  // periodically, so "what changed"'s relative timestamps ("2m ago") still
+  // advance without the render itself reading the live clock.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const [showFlash, setShowFlash] = useState(false);
   const [activeVectorIndex, setActiveVectorIndex] = useState(null);
@@ -278,6 +294,9 @@ export default function ThreatAnalytics({ userRole }) {
       getHealth().then(setHealth).catch(err => console.error("Failed to fetch health status", err));
       if (isAdmin) {
         getBackgroundTasksHealth().then(setBackgroundHealth).catch(err => console.error("Failed to fetch background task health", err));
+        getAuditLog(1, 5, null, 24)
+          .then(res => setRecentChanges(res?.data || []))
+          .catch(err => console.error("Failed to fetch recent changes", err));
       }
     };
     const timer = setTimeout(fetchHealth, 0);
@@ -335,6 +354,65 @@ export default function ThreatAnalytics({ userRole }) {
 
   const maxIP = topIPs[0]?.count || 1;
 
+  // Posture: derived only from real, already-fetched current data — no
+  // invented trend/spike threshold. "Degraded" is a hard fact (a core
+  // service reporting down); "Active Threats" is a hard fact too (at
+  // least one Critical-severity event in the current window), not a
+  // guess about whether that count is unusually high.
+  const criticalCount = severityDistribution.find(s => s.name === 'Critical')?.value || 0;
+  const downServices = health ? [
+    health.redis_connected === false && 'Redis',
+    health.clickhouse_connected === false && 'ClickHouse',
+    health.db_initialized === false && 'Database',
+  ].filter(Boolean) : [];
+  const backgroundStale = isAdmin && backgroundHealth && !backgroundHealth.all_healthy
+    ? Object.values(backgroundHealth.tasks || {}).filter(t => t.stale).length
+    : 0;
+
+  let posture = null; // 'protected' | 'attention' | 'degraded'
+  if (health) {
+    if (downServices.length > 0 || backgroundStale > 0) posture = 'degraded';
+    else if (criticalCount > 0) posture = 'attention';
+    else posture = 'protected';
+  }
+
+  const POSTURE = {
+    protected: {
+      icon: ShieldCheck, color: 'var(--success-color)', bg: 'var(--success-bg)',
+      label: 'Protected',
+      detail: 'All systems healthy, no critical-severity events in the current window.',
+    },
+    attention: {
+      icon: AlertTriangleIcon, color: 'var(--sev-high)', bg: 'var(--sev-high-bg, var(--danger-bg))',
+      label: 'Active Threats',
+      detail: `${criticalCount} critical-severity event${criticalCount === 1 ? '' : 's'} blocked in the current window.`,
+    },
+    degraded: {
+      icon: XCircle, color: 'var(--danger-color)', bg: 'var(--danger-bg)',
+      label: 'Degraded',
+      detail: [
+        downServices.length > 0 ? `${downServices.join(', ')} unreachable` : null,
+        backgroundStale > 0 ? `${backgroundStale} background task${backgroundStale === 1 ? '' : 's'} stale` : null,
+      ].filter(Boolean).join(' · '),
+    },
+  }[posture];
+
+  const timeAgo = (rawString) => {
+    if (!rawString) return '';
+    // Same UTC-normalization as formatLocalTime in utils/helpers.js — the
+    // backend sends space-separated "YYYY-MM-DD HH:MM:SS" with no
+    // timezone marker (implicitly UTC), not real ISO 8601.
+    const cleanStr = String(rawString).trim().replace('T', ' ').replace('Z', '');
+    const date = new Date(cleanStr + 'Z');
+    if (isNaN(date.getTime())) return '';
+    const mins = Math.round((now - date.getTime()) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.round(hrs / 24)}d ago`;
+  };
+
   return (
     <motion.div
       className="dashboard-grid animate-fade-in"
@@ -342,6 +420,52 @@ export default function ThreatAnalytics({ userRole }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
     >
+      {/* Posture banner — leads with a single state instead of making the
+          admin infer it from six KPI numbers. Same "only once real data
+          exists" guard as the health strip below. */}
+      {POSTURE && (
+        <div style={{
+          gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '12px',
+          padding: '14px 18px', borderRadius: 'var(--radius-lg, 12px)',
+          background: POSTURE.bg, border: `1px solid ${POSTURE.color}`,
+        }}>
+          <POSTURE.icon size={22} color={POSTURE.color} style={{ flexShrink: 0 }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+            <span style={{ fontSize: '15px', fontWeight: 700, color: POSTURE.color }}>{POSTURE.label}</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{POSTURE.detail}</span>
+          </div>
+        </div>
+      )}
+
+      {/* "What changed" — the last few admin actions, admin-only (the
+          endpoint itself is require_admin). Answers "what's different
+          since I last looked," which raw current-state KPIs can't. */}
+      {isAdmin && recentChanges.length > 0 && (
+        <div className="glass-panel" style={{ gridColumn: '1 / -1', padding: '10px 18px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '14px', fontSize: '12px' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.05em', flexShrink: 0 }}>
+            <History size={13} /> What Changed
+          </span>
+          {recentChanges.slice(0, 3).map((entry) => (
+            <span key={entry.id} style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+              <strong style={{ color: 'var(--text-primary)' }}>{entry.username}</strong> {entry.action} {entry.entity_type} #{entry.entity_id}
+              <span style={{ color: 'var(--text-muted)' }}> · {timeAgo(entry.timestamp)}</span>
+            </span>
+          ))}
+          {onNavigateToActivityLog && (
+            <button
+              onClick={onNavigateToActivityLog}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto', flexShrink: 0,
+                background: 'transparent', border: 'none', color: 'var(--accent-color)', fontSize: '11px',
+                fontWeight: 600, cursor: 'pointer', padding: 0,
+              }}
+            >
+              View full history <ArrowRight size={12} />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Config-health rollup — a single compact strip, not another wall of
           cards (six KPI cards below already cover traffic; this is purely
           "is the platform itself healthy"). Only rendered once the first

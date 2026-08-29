@@ -178,13 +178,14 @@ export default function DdosBotMitigation() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>L7 Rate Limit (RPS)</label>
+              <label htmlFor="ddos-l7-rate-limit" style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>L7 Rate Limit (RPS)</label>
               <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{rateLimitRps} req/s</span>
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
               Maximum requests per second allowed per client IP before dropping.
             </div>
             <input
+              id="ddos-l7-rate-limit"
               type="range" min="10" max="500"
               value={rateLimitRps} onChange={(e) => setRateLimitRps(parseInt(e.target.value))}
               style={{ width: '100%', accentColor: 'var(--accent-color)' }}
@@ -193,13 +194,14 @@ export default function DdosBotMitigation() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Burst Tolerance</label>
+              <label htmlFor="ddos-burst-tolerance" style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Burst Tolerance</label>
               <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{burstTolerance} requests</span>
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
               Number of excessive requests allowed in a burst before rate limit applies.
             </div>
             <input
+              id="ddos-burst-tolerance"
               type="range" min="10" max="1000"
               value={burstTolerance} onChange={(e) => setBurstTolerance(parseInt(e.target.value))}
               style={{ width: '100%', accentColor: 'var(--accent-color)' }}
@@ -207,11 +209,12 @@ export default function DdosBotMitigation() {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Trusted IP Allowlist</label>
+            <label htmlFor="ddos-trusted-ips" style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Trusted IP Allowlist</label>
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
               Comma-separated IPs or subnets that bypass all WAF rules (e.g., 10.0.0.1, 192.168.1.0/24).
             </div>
             <textarea
+              id="ddos-trusted-ips"
               className="search-input"
               style={{ width: '100%', height: '60px', resize: 'vertical', fontSize: '12px', fontFamily: 'monospace' }}
               placeholder="Enter trusted IPs..."
@@ -221,11 +224,12 @@ export default function DdosBotMitigation() {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Mitigation Action</label>
+            <label htmlFor="ddos-mitigation-action" style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>Mitigation Action</label>
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
               Action to take when suspicious automation is detected.
             </div>
             <select
+              id="ddos-mitigation-action"
               className="search-input"
               style={{ width: '100%', fontSize: '12px' }}
               value={botMitigationAction}
@@ -386,8 +390,9 @@ export default function DdosBotMitigation() {
             <form onSubmit={handleAddRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
+                  <label htmlFor="ddos-new-rule-name" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
                   <input
+                    id="ddos-new-rule-name"
                     type="text"
                     className="search-input"
                     value={newRuleName}
@@ -396,8 +401,9 @@ export default function DdosBotMitigation() {
                   />
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Match Parameter Type</label>
+                  <label htmlFor="ddos-new-rule-type" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Match Parameter Type</label>
                   <select
+                    id="ddos-new-rule-type"
                     className="search-input"
                     value={newRuleType}
                     onChange={(e) => setNewRuleType(e.target.value)}
@@ -417,8 +423,9 @@ export default function DdosBotMitigation() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Match Pattern / Value</label>
+                <label htmlFor="ddos-new-rule-value" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Match Pattern / Value</label>
                 <input
+                  id="ddos-new-rule-value"
                   type="text"
                   className="search-input"
                   value={newRuleValue}
@@ -442,10 +449,11 @@ export default function DdosBotMitigation() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rate Limit (RPS)</label>
+                    <label htmlFor="ddos-new-rule-rps" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rate Limit (RPS)</label>
                     <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{newRuleRps} req/s</span>
                   </div>
                   <input
+                    id="ddos-new-rule-rps"
                     type="range" min="1" max="200"
                     value={newRuleRps} onChange={(e) => setNewRuleRps(parseInt(e.target.value))}
                     style={{ width: '100%', accentColor: 'var(--accent-color)' }}
@@ -453,10 +461,11 @@ export default function DdosBotMitigation() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
+                    <label htmlFor="ddos-new-rule-burst" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
                     <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{newRuleBurst} requests</span>
                   </div>
                   <input
+                    id="ddos-new-rule-burst"
                     type="range" min="1" max="500"
                     value={newRuleBurst} onChange={(e) => setNewRuleBurst(parseInt(e.target.value))}
                     style={{ width: '100%', accentColor: 'var(--accent-color)' }}

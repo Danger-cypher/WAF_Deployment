@@ -879,8 +879,9 @@ export default function ApiProtection() {
 
             <form onSubmit={handleCreateRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
+                <label htmlFor="rl-rule-name" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
                 <input
+                  id="rl-rule-name"
                   type="text"
                   className="search-input"
                   value={ruleName}
@@ -889,8 +890,9 @@ export default function ApiProtection() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Match Pattern (Request URI)</label>
+                <label htmlFor="rl-rule-pattern" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Match Pattern (Request URI)</label>
                 <input
+                  id="rl-rule-pattern"
                   type="text"
                   className="search-input"
                   style={{ fontFamily: 'monospace' }}
@@ -906,10 +908,11 @@ export default function ApiProtection() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rate Limit</label>
+                    <label htmlFor="rl-rate-limit" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rate Limit</label>
                     <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{ruleRps} req/s</span>
                   </div>
                   <input
+                    id="rl-rate-limit"
                     type="range" min="1" max="500"
                     value={ruleRps} onChange={(e) => setRuleRps(parseInt(e.target.value))}
                     style={{ width: '100%', accentColor: 'var(--accent-color)' }}
@@ -917,10 +920,11 @@ export default function ApiProtection() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
+                    <label htmlFor="rl-burst-tolerance" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
                     <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{ruleBurst} reqs</span>
                   </div>
                   <input
+                    id="rl-burst-tolerance"
                     type="range" min="1" max="1000"
                     value={ruleBurst} onChange={(e) => setRuleBurst(parseInt(e.target.value))}
                     style={{ width: '100%', accentColor: 'var(--accent-color)' }}

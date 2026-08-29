@@ -109,6 +109,9 @@ function App() {
   // from This Event" (Events drawer -> Virtual Patching, pre-filled with
   // the real IP/URI/User-Agent from whichever event it was opened from).
   const [pendingRuleContext, setPendingRuleContext] = useState(null);
+  // Same pattern again, for Overview's "what changed" strip jumping
+  // straight to Settings > Activity Log instead of just General.
+  const [pendingSettingsTab, setPendingSettingsTab] = useState(null);
 
   // Wrapper that syncs tab state + URL together
   const setActiveTab = (tabId) => {
@@ -156,6 +159,11 @@ function App() {
   const handleTriggerMarkFp = (log) => {
     setLogToFlag(log);
     setIsFpModalOpen(true);
+  };
+
+  const handleNavigateToActivityLog = () => {
+    setPendingSettingsTab('activity-log');
+    setActiveTab('settings');
   };
 
   const handleCreateRuleFromLog = (log) => {
@@ -383,7 +391,9 @@ function App() {
         >
         <Suspense fallback={<TabLoadingFallback />}>
           {/* Overview Tab */}
-          {activeTab === 'overview' && <ThreatAnalytics key="overview" userRole={userRole} />}
+          {activeTab === 'overview' && (
+            <ThreatAnalytics key="overview" userRole={userRole} onNavigateToActivityLog={userRole === 'admin' ? handleNavigateToActivityLog : undefined} />
+          )}
 
           {/* Apps & DDoS Shield Tab (id: 'protection') — Virtual Hosts (protected apps, SSL, LB) + DDoS/Bot sub-tabs */}
           {activeTab === 'protection' && (
@@ -449,7 +459,12 @@ function App() {
 
           {/* Settings Tab - Admin only */}
           {activeTab === 'settings' && userRole === 'admin' && (
-            <Settings key="settings" onLogout={handleLogout} />
+            <Settings
+              key="settings"
+              onLogout={handleLogout}
+              initialSettingsTab={pendingSettingsTab}
+              onConsumeInitialSettingsTab={() => setPendingSettingsTab(null)}
+            />
           )}
         </Suspense>
         </motion.div>

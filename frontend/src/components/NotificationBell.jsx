@@ -284,9 +284,9 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
       {/* Details View Modal */}
       {selectedAlert && (
         <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100000 }}>
-          <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '560px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="notif-bell-alert-title" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '560px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Alert details: {selectedAlert.rule_name}</h3>
+              <h3 id="notif-bell-alert-title" style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Alert details: {selectedAlert.rule_name}</h3>
               <Button variant="ghost" size="sm" icon={X} onClick={() => setSelectedAlert(null)} aria-label="Close alert details" />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px', color: 'var(--text-primary)' }}>

@@ -397,6 +397,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSea
             <input
               type="text"
               placeholder="Search IP, URI, rule..."
+              aria-label="Search events by IP, URI, or rule"
               className="search-input"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -407,6 +408,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSea
           {!focusMode && (
             <select
               className="filter-select"
+              aria-label="Filter by severity"
               value={severityFilter}
               onChange={(e) => setSeverityFilter(e.target.value)}
             >
@@ -420,6 +422,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSea
 
           <select
             className="filter-select"
+            aria-label="Filter by attack type"
             value={attackFilter}
             onChange={(e) => setAttackFilter(e.target.value)}
           >
