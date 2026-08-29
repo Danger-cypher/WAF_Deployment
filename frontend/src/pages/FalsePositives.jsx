@@ -40,9 +40,9 @@ export function FlagFpModal({ isOpen, log, onClose, onSubmit }) {
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+      <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="flag-fp-modal-title" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
         <div className="modal-header">
-          <div className="modal-title">
+          <div className="modal-title" id="flag-fp-modal-title">
             <ShieldCheck size={20} color="var(--success-color)" />
             <span>Mark as False Positive</span>
           </div>
@@ -134,9 +134,9 @@ function FalsePositiveDetailsModal({ isOpen, entry, onClose, onUpdateStatus, onS
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '620px' }}>
+      <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="fp-details-modal-title" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '620px' }}>
         <div className="modal-header">
-          <div className="modal-title">
+          <div className="modal-title" id="fp-details-modal-title">
             <ShieldCheck size={20} color="var(--sev-low)" />
             <span>False Positive Report Details</span>
           </div>

@@ -107,9 +107,9 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px' }}>
+      <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="create-exception-title" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px' }}>
         <div className="modal-header">
-          <div className="modal-title">
+          <div className="modal-title" id="create-exception-title">
             <AlertTriangle size={20} color="var(--sev-high)" />
             <span>Create WAF Exception Exclusions</span>
           </div>
@@ -153,8 +153,9 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Exception Strategy</label>
+              <label htmlFor="exc-strategy" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Exception Strategy</label>
               <select
+                id="exc-strategy"
                 className="filter-select"
                 style={{ width: '100%', height: '36px' }}
                 value={exclusionType}
@@ -170,8 +171,9 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {exclusionType !== 'parameter' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Endpoint URI</label>
+                <label htmlFor="exc-uri" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Endpoint URI</label>
                 <input
+                  id="exc-uri"
                   type="text"
                   className="search-input"
                   style={{ width: '100%', height: '36px', fontSize: '13px', fontFamily: 'monospace' }}
@@ -184,8 +186,9 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {(exclusionType === 'parameter' || exclusionType === 'uri_parameter') && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Parameter Name</label>
+                <label htmlFor="exc-parameter-name" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Parameter Name</label>
                 <input
+                  id="exc-parameter-name"
                   type="text"
                   className="search-input"
                   style={{ width: '100%', height: '36px', fontSize: '13px', fontFamily: 'monospace' }}
@@ -199,8 +202,9 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {exclusionType === 'endpoint_method' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>HTTP Method</label>
+                <label htmlFor="exc-http-method" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>HTTP Method</label>
                 <select
+                  id="exc-http-method"
                   className="filter-select"
                   style={{ width: '100%', height: '36px' }}
                   value={httpMethod}
@@ -217,8 +221,9 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
 
             {exclusionType === 'ip_suppression' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Client IP Address</label>
+                <label htmlFor="exc-client-ip" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Target Client IP Address</label>
                 <input
+                  id="exc-client-ip"
                   type="text"
                   className="search-input"
                   style={{ width: '100%', height: '36px', fontSize: '13px', fontFamily: 'monospace' }}
@@ -230,8 +235,9 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Justification Reason</label>
+              <label htmlFor="exc-notes" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Justification Reason</label>
               <textarea
+                id="exc-notes"
                 className="settings-input"
                 style={{ height: '80px', resize: 'none', background: 'var(--inset-bg)', padding: '10px' }}
                 placeholder="E.g., verified search query parameters as legitimate business traffic..."
@@ -293,9 +299,9 @@ function ExclusionDetailsModal({ isOpen, exclusion, onClose }) {
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '580px' }}>
+      <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="exclusion-config-title" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '580px' }}>
         <div className="modal-header">
-          <div className="modal-title">
+          <div className="modal-title" id="exclusion-config-title">
             <ShieldCheck size={20} color="var(--success-color)" />
             <span>Active Exclusion Rule Config</span>
           </div>
@@ -795,9 +801,9 @@ export default function Exceptions() {
       <AnimatePresence>
         {isNoteModalOpen && editingExclusion && (
           <div className="modal-overlay" onClick={() => setIsNoteModalOpen(false)}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+            <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="edit-exception-note-title" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
               <div className="modal-header">
-                <div className="modal-title">
+                <div className="modal-title" id="edit-exception-note-title">
                   <Database size={18} color="var(--sev-low)" />
                   <span>Update Exception Justification</span>
                 </div>

@@ -718,8 +718,9 @@ export default function ProtectedApps({ onOpenWizard }) {
 
             <form onSubmit={handleSaveLoginProtection} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Login Path</label>
+                <label htmlFor="pa-login-path" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Login Path</label>
                 <input
+                  id="pa-login-path"
                   type="text"
                   className="search-input"
                   style={{ fontFamily: 'monospace' }}
@@ -735,10 +736,11 @@ export default function ProtectedApps({ onOpenWizard }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Max Attempts</label>
+                    <label htmlFor="pa-login-attempts" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Max Attempts</label>
                     <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{loginAttemptsPerMin} / min</span>
                   </div>
                   <input
+                    id="pa-login-attempts"
                     type="range" min="1" max="60"
                     value={loginAttemptsPerMin} onChange={(e) => setLoginAttemptsPerMin(parseInt(e.target.value))}
                     style={{ width: '100%', accentColor: 'var(--accent-color)' }}
@@ -746,10 +748,11 @@ export default function ProtectedApps({ onOpenWizard }) {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
+                    <label htmlFor="pa-login-burst" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
                     <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{loginBurst} reqs</span>
                   </div>
                   <input
+                    id="pa-login-burst"
                     type="range" min="0" max="20"
                     value={loginBurst} onChange={(e) => setLoginBurst(parseInt(e.target.value))}
                     style={{ width: '100%', accentColor: 'var(--accent-color)' }}
@@ -824,8 +827,9 @@ export default function ProtectedApps({ onOpenWizard }) {
             ) : (
               <form onSubmit={handleSaveApiSchema} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Mode</label>
+                  <label htmlFor="pa-api-schema-mode" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Mode</label>
                   <select
+                    id="pa-api-schema-mode"
                     className="settings-input"
                     style={{ width: '100%', fontSize: '14px' }}
                     value={apiSchemaMode}
@@ -837,8 +841,9 @@ export default function ProtectedApps({ onOpenWizard }) {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Endpoints (JSON array)</label>
+                  <label htmlFor="pa-api-schema-endpoints" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Endpoints (JSON array)</label>
                   <textarea
+                    id="pa-api-schema-endpoints"
                     className="settings-input"
                     style={{ width: '100%', minHeight: '180px', resize: 'vertical', fontFamily: 'monospace', fontSize: '12px' }}
                     value={apiSchemaEndpointsText}

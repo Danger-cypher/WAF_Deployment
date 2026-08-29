@@ -111,6 +111,9 @@ export default function CommandPalette({ isOpen, onClose, isAdmin, onNavigate, o
   return createPortal(
     <div className="log-drawer-overlay" style={{ alignItems: 'flex-start', justifyContent: 'center', paddingTop: '12vh' }} onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(560px, 92vw)', maxHeight: '70vh', display: 'flex', flexDirection: 'column',

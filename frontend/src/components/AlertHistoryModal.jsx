@@ -45,9 +45,9 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
 
   return (
     <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9999, padding: '24px' }}>
-      <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '900px', maxWidth: '94vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+      <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="alert-history-modal-title" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '900px', maxWidth: '94vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Triggered Alert History Logs</h3>
+          <h3 id="alert-history-modal-title" style={{ fontSize: '18px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Triggered Alert History Logs</h3>
           <Button variant="ghost" size="sm" icon={X} onClick={onClose} aria-label="Close alert history" />
         </div>
 
@@ -133,9 +133,9 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
       {/* Details View */}
       {selectedAlert && (
         <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10000, padding: '24px' }}>
-          <div className="modal-content" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '500px', maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="alert-details-modal-title" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '500px', maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--accent-color)' }}>Alert Details: {selectedAlert.rule_name}</h3>
+              <h3 id="alert-details-modal-title" style={{ fontSize: '15px', fontWeight: 700, color: 'var(--accent-color)' }}>Alert Details: {selectedAlert.rule_name}</h3>
               <Button variant="ghost" size="sm" icon={X} onClick={() => setSelectedAlert(null)} aria-label="Close alert details" />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px', color: 'var(--text-primary)' }}>

@@ -127,10 +127,10 @@ export default function MLLogDrawer({ log, onClose, onLabelUpdate, showToast }) 
 
   return createPortal(
     <div className="log-drawer-overlay" onClick={onClose}>
-      <div className="log-drawer" onClick={(e) => e.stopPropagation()}>
+      <div className="log-drawer" role="dialog" aria-modal="true" aria-labelledby="ml-log-drawer-title" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="log-drawer-header">
-          <div className="log-drawer-title">
+          <div className="log-drawer-title" id="ml-log-drawer-title">
             <Brain size={18} color="var(--accent-color)" />
             Threat Evaluation
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>

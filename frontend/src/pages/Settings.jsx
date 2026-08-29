@@ -58,7 +58,7 @@ const ALL_SETTINGS_LABELS = [
   'Security & Danger Zone', 'Activity Log', 'Backups',
 ];
 
-export default function Settings({ onLogout }) {
+export default function Settings({ onLogout, initialSettingsTab, onConsumeInitialSettingsTab }) {
   // General Settings
   const [refreshInterval, setRefreshInterval] = useState('5s');
   const [logsPerPage, setLogsPerPage] = useState('15');
@@ -167,7 +167,13 @@ export default function Settings({ onLogout }) {
   const [dangerModal, setDangerModal] = useState(null);
   useEscapeToClose(() => setDangerModal(null), !!dangerModal);
   const [loadingAction, setLoadingAction] = useState(false);
-  const [activeSettingTab, setActiveSettingTab] = useState('general');
+  // Seeded once from the Overview page's "what changed" strip (jumps
+  // straight to Activity Log), if that's how this page was reached.
+  const [activeSettingTab, setActiveSettingTab] = useState(initialSettingsTab || 'general');
+  useEffect(() => {
+    if (initialSettingsTab) onConsumeInitialSettingsTab?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [settingsSearch, setSettingsSearch] = useState('');
   // A group/button stays visible if no query is entered, or if ANY of the
   // labels passed in matches — used both per-button (one label) and per-
@@ -990,13 +996,16 @@ export default function Settings({ onLogout }) {
           <div className="modal-overlay" style={{ zIndex: 1100 }}>
             <motion.div
               className="modal-content pulse-warning"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="danger-modal-title"
               style={{ maxWidth: '480px', border: '1px solid var(--danger-border)' }}
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
             >
               <div className="modal-header" style={{ background: 'var(--danger-bg)', borderBottom: '1px solid var(--danger-border)' }}>
-                <div className="modal-title" style={{ color: 'var(--danger-color)' }}>
+                <div className="modal-title" id="danger-modal-title" style={{ color: 'var(--danger-color)' }}>
                   <AlertTriangle size={20} color="var(--danger-color)" />
                   <span>Administrative Action Confirmation</span>
                 </div>
@@ -1170,8 +1179,8 @@ export default function Settings({ onLogout }) {
 
                 <form onSubmit={handleSaveGeneral} onChange={() => markDirty('general')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Dashboard Refresh Interval</label>
-                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={refreshInterval} onChange={(e) => setRefreshInterval(e.target.value)}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-refresh-interval">Dashboard Refresh Interval</label>
+                    <select id="settings-refresh-interval" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={refreshInterval} onChange={(e) => setRefreshInterval(e.target.value)}>
                       <option value="3s">3 Seconds (Sync Active)</option>
                       <option value="5s">5 Seconds (Recommended)</option>
                       <option value="10s">10 Seconds</option>
@@ -1180,8 +1189,8 @@ export default function Settings({ onLogout }) {
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Live Logs Per Page</label>
-                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={logsPerPage} onChange={(e) => setLogsPerPage(e.target.value)}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-logs-per-page">Live Logs Per Page</label>
+                    <select id="settings-logs-per-page" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={logsPerPage} onChange={(e) => setLogsPerPage(e.target.value)}>
                       <option value="10">10 entries</option>
                       <option value="15">15 entries</option>
                       <option value="25">25 entries</option>
@@ -1217,26 +1226,27 @@ export default function Settings({ onLogout }) {
 
                 <form onSubmit={handleSaveWAF} onChange={() => markDirty('waf')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>SecRuleEngine Posture</label>
-                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={secRuleEngine} onChange={(e) => setSecRuleEngine(e.target.value)}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-secruleengine-posture">SecRuleEngine Posture</label>
+                    <select id="settings-secruleengine-posture" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={secRuleEngine} onChange={(e) => setSecRuleEngine(e.target.value)}>
                       <option value="On">On (Active Blocking Guard)</option>
                       <option value="DetectionOnly">DetectionOnly (Simulate Attacks)</option>
                       <option value="Off">Off (Bypass WAF Shields - Critical Risk)</option>
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Response Filtering Mode</label>
-                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={detectionMode} onChange={(e) => setDetectionMode(e.target.value)}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-response-filtering-mode">Response Filtering Mode</label>
+                    <select id="settings-response-filtering-mode" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={detectionMode} onChange={(e) => setDetectionMode(e.target.value)}>
                       <option value="Blocking">Strict Block & Drop (403 Forbidden)</option>
                       <option value="Detection">Log Analysis Only (Bypass drops)</option>
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>
+                    <label htmlFor="settings-paranoia-level" style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>
                       <span>Global Paranoia Setting</span>
                       <strong style={{ color: 'var(--sev-low)', fontSize: '14px' }}>PL{paranoiaLevel}</strong>
                     </label>
                     <input
+                      id="settings-paranoia-level"
                       type="range"
                       min="1"
                       max="4"
@@ -1280,8 +1290,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Audit Log Structure Formats</label>
-                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={logFormat} onChange={(e) => setLogFormat(e.target.value)}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-audit-log-format">Audit Log Structure Formats</label>
+                    <select id="settings-audit-log-format" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={logFormat} onChange={(e) => setLogFormat(e.target.value)}>
                       <option value="JSON">Structured JSON (RFC 8259 Standard)</option>
                       <option value="Native">CyberSentinel Engine Native Audit Structure</option>
                     </select>
@@ -1298,8 +1308,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Log Retention Period</label>
-                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={retention} onChange={(e) => setRetention(e.target.value)}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-log-retention-period">Log Retention Period</label>
+                    <select id="settings-log-retention-period" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={retention} onChange={(e) => setRetention(e.target.value)}>
                       <option value="7 Days">7 Days</option>
                       <option value="30 Days">30 Days</option>
                       <option value="90 Days">90 Days</option>
@@ -1338,8 +1348,8 @@ export default function Settings({ onLogout }) {
                     {hstsEnabled && (
                       <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '10px' }}>
-                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>HSTS Max Age (Seconds)</label>
-                          <input
+                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-hsts-max-age">HSTS Max Age (Seconds)</label>
+                          <input id="settings-hsts-max-age"
                             type="number"
                             className="settings-input"
                             style={{ width: '100%', fontSize: '14px' }}
@@ -1363,8 +1373,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Global IP Blacklist (Comma separated)</label>
-                    <textarea
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-ip-blacklist">Global IP Blacklist (Comma separated)</label>
+                    <textarea id="settings-ip-blacklist"
                       className="settings-input"
                       style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
                       value={ipBlacklist}
@@ -1374,8 +1384,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Global IP Whitelist (Comma separated)</label>
-                    <textarea
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-ip-whitelist">Global IP Whitelist (Comma separated)</label>
+                    <textarea id="settings-ip-whitelist"
                       className="settings-input"
                       style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
                       value={ipWhitelist}
@@ -1413,8 +1423,8 @@ export default function Settings({ onLogout }) {
                     {geoBlockEnabled && (
                       <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Mode</label>
-                          <select
+                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-geoblock-mode">Mode</label>
+                          <select id="settings-geoblock-mode"
                             className="settings-input"
                             style={{ width: '100%', fontSize: '14px' }}
                             value={geoBlockMode}
@@ -1426,8 +1436,8 @@ export default function Settings({ onLogout }) {
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Countries (ISO 3166-1 alpha-2 codes, comma separated)</label>
-                          <textarea
+                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-geoblock-countries">Countries (ISO 3166-1 alpha-2 codes, comma separated)</label>
+                          <textarea id="settings-geoblock-countries"
                             className="settings-input"
                             style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
                             value={geoBlockCountries}
@@ -1469,8 +1479,8 @@ export default function Settings({ onLogout }) {
                     {threatIntelEnabled && (
                       <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '10px' }}>
-                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Sync Interval (Hours)</label>
-                          <input
+                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-threatintel-sync-interval">Sync Interval (Hours)</label>
+                          <input id="settings-threatintel-sync-interval"
                             type="number"
                             min="1"
                             className="settings-input"
@@ -1536,29 +1546,29 @@ export default function Settings({ onLogout }) {
                       <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingBottom: '10px' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Threshold (requests)</label>
-                            <input
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-autorep-block-threshold">Block Threshold (requests)</label>
+                            <input id="settings-autorep-block-threshold"
                               type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
                               value={autoRepThreshold} onChange={(e) => setAutoRepThreshold(e.target.value)}
                             />
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Window (hours)</label>
-                            <input
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-autorep-window-hours">Window (hours)</label>
+                            <input id="settings-autorep-window-hours"
                               type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
                               value={autoRepWindowHours} onChange={(e) => setAutoRepWindowHours(e.target.value)}
                             />
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Duration (hours)</label>
-                            <input
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-autorep-block-duration">Block Duration (hours)</label>
+                            <input id="settings-autorep-block-duration"
                               type="number" min="1" className="settings-input" style={{ fontSize: '14px' }}
                               value={autoRepTtlHours} onChange={(e) => setAutoRepTtlHours(e.target.value)}
                             />
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Sync Interval (minutes)</label>
-                            <input
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-autorep-sync-interval">Sync Interval (minutes)</label>
+                            <input id="settings-autorep-sync-interval"
                               type="number" min="5" className="settings-input" style={{ fontSize: '14px' }}
                               value={autoRepIntervalMinutes} onChange={(e) => setAutoRepIntervalMinutes(e.target.value)}
                             />
@@ -1661,8 +1671,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Allowed IPs / CIDRs (Comma separated)</label>
-                    <textarea
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-admin-allowlist-networks">Allowed IPs / CIDRs (Comma separated)</label>
+                    <textarea id="settings-admin-allowlist-networks"
                       className="settings-input"
                       style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
                       value={adminAllowlistNetworks}
@@ -1702,15 +1712,15 @@ export default function Settings({ onLogout }) {
                       <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', paddingBottom: '10px' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>If ClamAV is unreachable</label>
-                            <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={malwareScanFailMode} onChange={(e) => setMalwareScanFailMode(e.target.value)}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-malwarescan-fail-mode">If ClamAV is unreachable</label>
+                            <select id="settings-malwarescan-fail-mode" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={malwareScanFailMode} onChange={(e) => setMalwareScanFailMode(e.target.value)}>
                               <option value="open">Allow uploads through unscanned (recommended)</option>
                               <option value="closed">Block all uploads until it recovers</option>
                             </select>
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Scan Timeout (seconds)</label>
-                            <input
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-malwarescan-timeout">Scan Timeout (seconds)</label>
+                            <input id="settings-malwarescan-timeout"
                               type="number" min="1" max="60" className="settings-input" style={{ fontSize: '14px' }}
                               value={malwareScanTimeout} onChange={(e) => setMalwareScanTimeout(e.target.value)}
                             />
@@ -1788,8 +1798,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Allowed HTTP Methods (Comma separated)</label>
-                    <textarea
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-possec-methods">Allowed HTTP Methods (Comma separated)</label>
+                    <textarea id="settings-possec-methods"
                       className="settings-input"
                       style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
                       value={posSecMethods}
@@ -1802,8 +1812,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Allowed Content-Types (Comma separated)</label>
-                    <textarea
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-possec-content-types">Allowed Content-Types (Comma separated)</label>
+                    <textarea id="settings-possec-content-types"
                       className="settings-input"
                       style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
                       value={posSecContentTypes}
@@ -1817,8 +1827,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Restricted File Extensions (Comma separated)</label>
-                    <textarea
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-possec-extensions">Restricted File Extensions (Comma separated)</label>
+                    <textarea id="settings-possec-extensions"
                       className="settings-input"
                       style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
                       value={posSecExtensions}
@@ -1860,8 +1870,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Audit Scan Interval (Seconds)</label>
-                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={checkInterval} onChange={(e) => setCheckInterval(parseInt(e.target.value))}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-defacement-check-interval">Audit Scan Interval (Seconds)</label>
+                    <select id="settings-defacement-check-interval" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={checkInterval} onChange={(e) => setCheckInterval(parseInt(e.target.value))}>
                       <option value="2">2 Seconds (High sensitivity)</option>
                       <option value="5">5 Seconds (Recommended)</option>
                       <option value="10">10 Seconds</option>
@@ -1870,8 +1880,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Monitored Asset Filepaths (Comma separated)</label>
-                    <textarea
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-defacement-files">Monitored Asset Filepaths (Comma separated)</label>
+                    <textarea id="settings-defacement-files"
                       className="settings-input"
                       style={{ width: '100%', minHeight: '100px', resize: 'vertical' }}
                       value={defacementFiles}
@@ -1907,8 +1917,8 @@ export default function Settings({ onLogout }) {
 
                 <form onSubmit={handleSaveCustomResponse} onChange={() => markDirty('customresponse')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '700px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Page HTML</label>
-                    <textarea
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-custom-response-html">Block Page HTML</label>
+                    <textarea id="settings-custom-response-html"
                       className="settings-input"
                       style={{ width: '100%', minHeight: '260px', resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: '12.5px' }}
                       value={customResponseHtml}
@@ -1954,8 +1964,8 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Learning Period</label>
-                    <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={autoLearningPeriod} onChange={(e) => setAutoLearningPeriod(e.target.value)}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-autolearning-period">Learning Period</label>
+                    <select id="settings-autolearning-period" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={autoLearningPeriod} onChange={(e) => setAutoLearningPeriod(e.target.value)}>
                       <option value="3 Days">3 Days</option>
                       <option value="7 Days">7 Days (Recommended)</option>
                       <option value="14 Days">14 Days</option>
@@ -1967,8 +1977,9 @@ export default function Settings({ onLogout }) {
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Confidence Threshold ({autoLearningThreshold}%)</label>
+                    <label htmlFor="settings-confidence-threshold" style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Confidence Threshold ({autoLearningThreshold}%)</label>
                     <input
+                      id="settings-confidence-threshold"
                       type="range"
                       min="50"
                       max="99"
@@ -2075,20 +2086,20 @@ export default function Settings({ onLogout }) {
                     <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>Portal Authentication</div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Current Admin Password</label>
-                      <input type="password" placeholder="••••••••" className="settings-input" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required />
+                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-current-admin-password">Current Admin Password</label>
+                      <input id="settings-current-admin-password" type="password" placeholder="••••••••" className="settings-input" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>New Security Password</label>
-                      <input type="password" placeholder="••••••••" className="settings-input" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
+                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-new-security-password">New Security Password</label>
+                      <input id="settings-new-security-password" type="password" placeholder="••••••••" className="settings-input" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Confirm New Password</label>
-                      <input type="password" placeholder="••••••••" className="settings-input" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
+                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-confirm-new-password">Confirm New Password</label>
+                      <input id="settings-confirm-new-password" type="password" placeholder="••••••••" className="settings-input" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Portal Session Timeout</label>
-                      <select className="filter-select" style={{ width: '100%', padding: '12px' }} value={sessionTimeout} onChange={(e) => setSessionTimeout(e.target.value)}>
+                      <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-session-timeout">Portal Session Timeout</label>
+                      <select id="settings-session-timeout" className="filter-select" style={{ width: '100%', padding: '12px' }} value={sessionTimeout} onChange={(e) => setSessionTimeout(e.target.value)}>
                         <option value="15m">15 Minutes</option>
                         <option value="30m">30 Minutes</option>
                         <option value="1h">1 Hour (Standard)</option>
@@ -2152,23 +2163,23 @@ export default function Settings({ onLogout }) {
 
                     <form onSubmit={handleCreateApiKey} style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '2 1 160px' }}>
-                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Key Name</label>
-                        <input
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }} htmlFor="settings-new-api-key-name">Key Name</label>
+                        <input id="settings-new-api-key-name"
                           type="text" className="settings-input" value={newKeyName}
                           onChange={(e) => setNewKeyName(e.target.value)}
                           placeholder="CI/CD pipeline" required
                         />
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 140px' }}>
-                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Role</label>
-                        <select className="filter-select" style={{ padding: '10px' }} value={newKeyRole} onChange={(e) => setNewKeyRole(e.target.value)}>
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }} htmlFor="settings-new-api-key-role">Role</label>
+                        <select id="settings-new-api-key-role" className="filter-select" style={{ padding: '10px' }} value={newKeyRole} onChange={(e) => setNewKeyRole(e.target.value)}>
                           <option value="analyst">Analyst (read-only)</option>
                           <option value="admin">Admin (full access)</option>
                         </select>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 110px' }}>
-                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Expires (days)</label>
-                        <input
+                        <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }} htmlFor="settings-new-api-key-expires">Expires (days)</label>
+                        <input id="settings-new-api-key-expires"
                           type="number" min="1" className="settings-input" value={newKeyExpiresDays}
                           onChange={(e) => setNewKeyExpiresDays(e.target.value)}
                           placeholder="Never"

@@ -584,6 +584,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
               <input
                 type="text"
                 placeholder="Search rule ID, description..."
+                aria-label="Search rules by ID or description"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="search-input"
@@ -595,6 +596,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
               value={category}
               onChange={(e) => { setCategory(e.target.value); setPage(1); }}
               className="filter-select"
+              aria-label="Filter by OWASP category"
             >
               <option value="">All Categories</option>
               {Object.values(CATEGORY_MAP).map(cat => (
@@ -606,6 +608,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
               value={severity}
               onChange={(e) => { setSeverity(e.target.value); setPage(1); }}
               className="filter-select"
+              aria-label="Filter by severity"
             >
               <option value="">All Severities</option>
               <option value="Critical">Critical</option>
@@ -618,6 +621,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
               className="filter-select"
+              aria-label="Filter by rule status"
             >
               <option value="">All Statuses</option>
               <option value="enabled">Enabled</option>
@@ -823,9 +827,9 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
           centered modal — keeps the rule list visible behind it. --- */}
       {selectedRule && createPortal(
         <div className="log-drawer-overlay" onClick={() => setSelectedRule(null)}>
-          <div className="log-drawer" style={{ width: 'min(680px, 92vw)' }} onClick={(e) => e.stopPropagation()}>
+          <div className="log-drawer" role="dialog" aria-modal="true" aria-labelledby="rule-details-drawer-title" style={{ width: 'min(680px, 92vw)' }} onClick={(e) => e.stopPropagation()}>
             <div className="log-drawer-header">
-              <div className="log-drawer-title">
+              <div className="log-drawer-title" id="rule-details-drawer-title">
                 <ShieldAlert size={18} color="var(--sev-low)" />
                 Inspect Rule
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
@@ -993,13 +997,16 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
             <div className="modal-overlay" style={{ zIndex: 1100 }}>
               <motion.div
                 className="modal-content pulse-warning"
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby="rule-disable-warning-title"
                 style={{ maxWidth: '520px', border: '1px solid var(--danger-border)' }}
                 initial={{ scale: 0.95, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.95, opacity: 0 }}
               >
                 <div className="modal-header" style={{ background: 'var(--danger-bg)', borderBottom: '1px solid var(--danger-border)' }}>
-                  <div className="modal-title" style={{ color: 'var(--danger-color)' }}>
+                  <div className="modal-title" id="rule-disable-warning-title" style={{ color: 'var(--danger-color)' }}>
                     <AlertIcon size={20} color="var(--danger-color)" />
                     <span>Security Protection Override Warning</span>
                   </div>
@@ -1020,10 +1027,11 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
                   </div>
 
                   <div>
-                    <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', display: 'block', marginBottom: '8px' }}>
+                    <label htmlFor="disable-reason-textarea" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', display: 'block', marginBottom: '8px' }}>
                       Tuning Override Justification <span style={{ color: 'var(--danger-color)' }}>*</span>
                     </label>
                     <textarea
+                      id="disable-reason-textarea"
                       placeholder="Provide detailed white-listing reason (e.g. White-listing corporate webhook false positive on parameter x)"
                       value={disableReason}
                       onChange={(e) => {

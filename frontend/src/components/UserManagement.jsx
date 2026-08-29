@@ -35,9 +35,9 @@ function ModalShell({ title, onClose, children }) {
   useEscapeToClose(onClose, true);
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" style={{ maxWidth: '420px' }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="user-mgmt-modal-title" style={{ maxWidth: '420px' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <div className="modal-title">{title}</div>
+          <div className="modal-title" id="user-mgmt-modal-title">{title}</div>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close">
             <X size={18} />
           </button>
@@ -112,16 +112,16 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
     <ModalShell title="Add New User" onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div>
-          <label style={labelStyle}>Username</label>
-          <input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} placeholder="jdoe" autoFocus />
+          <label htmlFor="um-new-username" style={labelStyle}>Username</label>
+          <input id="um-new-username" style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} placeholder="jdoe" autoFocus />
         </div>
         <div>
-          <label style={labelStyle}>Temporary Password (min 12 chars, 3+ char types)</label>
-          <input style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+          <label htmlFor="um-new-password" style={labelStyle}>Temporary Password (min 12 chars, 3+ char types)</label>
+          <input id="um-new-password" style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
         </div>
         <div>
-          <label style={labelStyle}>Role</label>
-          <select style={inputStyle} value={role} onChange={(e) => setRole(e.target.value)}>
+          <label htmlFor="um-new-role" style={labelStyle}>Role</label>
+          <select id="um-new-role" style={inputStyle} value={role} onChange={(e) => setRole(e.target.value)}>
             <option value="analyst">Analyst (read-only)</option>
             <option value="admin">Admin (full access)</option>
             <option value="app_admin">App Admin (scoped to specific apps)</option>
@@ -134,12 +134,12 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
           </div>
         )}
         <div>
-          <label style={labelStyle}>Display Name (optional)</label>
-          <input style={inputStyle} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Jane Doe" />
+          <label htmlFor="um-new-display-name" style={labelStyle}>Display Name (optional)</label>
+          <input id="um-new-display-name" style={inputStyle} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Jane Doe" />
         </div>
         <div>
-          <label style={labelStyle}>Email (optional)</label>
-          <input style={inputStyle} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane@example.com" />
+          <label htmlFor="um-new-email" style={labelStyle}>Email (optional)</label>
+          <input id="um-new-email" style={inputStyle} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane@example.com" />
         </div>
         <Button variant="primary" loading={saving} onClick={handleSubmit} style={{ marginTop: '4px' }}>
           {saving ? 'Creating…' : 'Create User'}
@@ -217,8 +217,8 @@ function ResetPasswordModal({ user, onClose, showToast }) {
     <ModalShell title={`Reset Password — ${user.username}`} onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div>
-          <label style={labelStyle}>New Password (min 12 chars, 3+ char types)</label>
-          <input style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoFocus />
+          <label htmlFor="um-reset-password" style={labelStyle}>New Password (min 12 chars, 3+ char types)</label>
+          <input id="um-reset-password" style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoFocus />
         </div>
         <Button variant="primary" loading={saving} onClick={handleSubmit}>
           {saving ? 'Saving…' : 'Reset Password'}
