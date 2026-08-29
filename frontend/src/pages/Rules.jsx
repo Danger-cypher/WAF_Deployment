@@ -805,176 +805,170 @@ export default function Rules({ userRole }) {
 
       </div>
 
-      {/* --- Overlay Modals Drawer for rule inspection --- */}
-      {createPortal(
-        <AnimatePresence>
-          {selectedRule && (
-            <div className="modal-overlay" onClick={() => setSelectedRule(null)}>
-              <motion.div
-                className="modal-content"
-                style={{ maxWidth: '850px' }}
-                onClick={(e) => e.stopPropagation()}
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-              >
-                <div className="modal-header">
-                  <div className="modal-title">
-                    <ShieldAlert size={20} color="var(--sev-low)" />
-                    <span>Inspect Rule ID: {selectedRule.id}</span>
+      {/* --- Rule inspection: non-blocking slide-out drawer (same .log-drawer
+          pattern as MLLogDrawer.jsx / LogDetailsModal.jsx) instead of a
+          centered modal — keeps the rule list visible behind it. --- */}
+      {selectedRule && createPortal(
+        <div className="log-drawer-overlay" onClick={() => setSelectedRule(null)}>
+          <div className="log-drawer" style={{ width: 'min(680px, 92vw)' }} onClick={(e) => e.stopPropagation()}>
+            <div className="log-drawer-header">
+              <div className="log-drawer-title">
+                <ShieldAlert size={18} color="var(--sev-low)" />
+                Inspect Rule
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
+                  {selectedRule.id}
+                </span>
+              </div>
+              <button className="log-drawer-close" onClick={() => setSelectedRule(null)} aria-label="Close rule details">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="log-drawer-body">
+              <div>
+                <h3 style={{ margin: '0 0 8px', color: 'var(--text-primary)' }}>{selectedRule.name}</h3>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5', margin: 0 }}>
+                  {selectedRule.description}
+                </p>
+              </div>
+
+              <div className="rule-drawer-grid">
+                <div className="rule-meta-box">
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>OWASP Category</div>
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedRule.category}</div>
+                </div>
+                <div className="rule-meta-box">
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Severity Level</div>
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <span className={`severity-pill ${selectedRule.severity.toLowerCase()}`} style={{ display: 'inline-block' }}>{selectedRule.severity}</span>
                   </div>
-                  <button className="modal-close-btn" onClick={() => setSelectedRule(null)} aria-label="Close rule details">
-                    <X size={18} />
+                </div>
+                <div className="rule-meta-box">
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>CRS Paranoia Level</div>
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>PL {selectedRule.paranoia_level}</div>
+                </div>
+                <div className="rule-meta-box">
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Dynamic Logs Blocks</div>
+                  <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>{selectedRule.hit_count} triggers</div>
+                </div>
+              </div>
+
+              {/* canary review */}
+              <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FlaskConical size={14} color="var(--sev-low)" />
+                    Canary Review
+                  </div>
+                  <button
+                    onClick={() => handleToggleCanary(selectedRule, !selectedRule.is_canary)}
+                    disabled={canaryToggling}
+                    className="action-btn-inspect"
+                    style={selectedRule.is_canary ? { background: 'var(--success-bg)', color: 'var(--success-color)', borderColor: 'var(--success-glow)' } : undefined}
+                  >
+                    {selectedRule.is_canary ? 'Flagged for Review' : 'Flag for Canary Review'}
                   </button>
                 </div>
-
-                <div style={{ padding: '24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
+                  Doesn't change enforcement — this rule keeps running exactly as before. Flags it for
+                  review and lets you pull a historical-impact report: of its past matches, how many were
+                  the <em>only</em> rule that fired on that request (disabling it would let those through)
+                  vs. matched alongside another rule (still blocked either way).
+                </p>
+                {selectedRule.is_canary && canaryStatus && (
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      Monitoring since {canaryStatus.started_at ? formatLocalTime(canaryStatus.started_at) : '—'}
+                      {canaryStatus.elapsed_hours != null && (
+                        ` (${Math.max(0, canaryStatus.window_hours - canaryStatus.elapsed_hours).toFixed(0)}h remaining)`
+                      )}
+                    </span>
+                    {canaryStatus.needs_review && (
+                      <span style={{ fontSize: '11px', background: 'var(--danger-bg)', color: 'var(--danger-color)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                        Needs Review — window elapsed without a confident auto-decision
+                      </span>
+                    )}
+                  </div>
+                )}
+                {selectedRule.is_canary && (
                   <div>
-                    <h3 style={{ margin: '0 0 8px', color: 'var(--text-primary)' }}>{selectedRule.name}</h3>
-                    <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5', margin: 0 }}>
-                      {selectedRule.description}
-                    </p>
-                  </div>
-
-                  <div className="rule-drawer-grid">
-                    <div className="rule-meta-box">
-                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>OWASP Category</div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedRule.category}</div>
-                    </div>
-                    <div className="rule-meta-box">
-                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Severity Level</div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', gap: '6px', alignItems: 'center' }}>
-                        <span className={`severity-pill ${selectedRule.severity.toLowerCase()}`} style={{ display: 'inline-block' }}>{selectedRule.severity}</span>
+                    <button
+                      onClick={() => handleLoadCanaryReport(selectedRule)}
+                      disabled={canaryReportLoading}
+                      className="action-btn-inspect"
+                      style={{ fontSize: '11px' }}
+                    >
+                      {canaryReportLoading ? 'Loading...' : 'Load 7-Day Impact Report'}
+                    </button>
+                    {canaryReport && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginTop: '10px' }}>
+                        <div className="rule-meta-box">
+                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Total Matches</div>
+                          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{canaryReport.total_matches}</div>
+                        </div>
+                        <div className="rule-meta-box">
+                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Sole Match (would open a hole)</div>
+                          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>{canaryReport.sole_match_count}</div>
+                        </div>
+                        <div className="rule-meta-box">
+                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Co-Matched (still safe)</div>
+                          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--success-color)' }}>{canaryReport.co_matched_count}</div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="rule-meta-box">
-                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>CRS Paranoia Level</div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>PL {selectedRule.paranoia_level}</div>
-                    </div>
-                    <div className="rule-meta-box">
-                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Dynamic Logs Blocks</div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>{selectedRule.hit_count} triggers</div>
-                    </div>
+                    )}
                   </div>
+                )}
+              </div>
 
-                  {/* canary review */}
-                  <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <FlaskConical size={14} color="var(--sev-low)" />
-                        Canary Review
-                      </div>
+              {/* syntax block */}
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Code size={14} color="var(--sev-low)" />
+                  CyberSentinel Engine Configuration Rule Syntax
+                </div>
+                {ruleDetailLoading ? (
+                  <div style={{ background: 'var(--inset-bg)', padding: '24px', textAlign: 'center', borderRadius: '8px' }}>
+                    <div className="spinner" style={{ margin: '0 auto' }}></div>
+                  </div>
+                ) : detailedRule ? (
+                  <pre className="syntax-box">{detailedRule.syntax}</pre>
+                ) : (
+                  <pre className="syntax-box">{selectedRule.syntax}</pre>
+                )}
+              </div>
+
+              {/* trigger examples */}
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Database size={14} color="var(--success-color)" />
+                  Simulated Payload / Attack Trigger Examples
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {getPayloadSample(selectedRule.category).map((sample, idx) => (
+                    <div key={idx} style={{ background: 'var(--surface-subtle)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <code style={{ fontSize: '12px', color: 'var(--danger-color)', fontFamily: 'monospace' }}>{sample}</code>
                       <button
-                        onClick={() => handleToggleCanary(selectedRule, !selectedRule.is_canary)}
-                        disabled={canaryToggling}
+                        onClick={() => {
+                          navigator.clipboard.writeText(sample);
+                          showToast("Copied trigger payload to clipboard!");
+                        }}
                         className="action-btn-inspect"
-                        style={selectedRule.is_canary ? { background: 'var(--success-bg)', color: 'var(--success-color)', borderColor: 'var(--success-glow)' } : undefined}
+                        style={{ padding: '3px 8px', fontSize: '10px' }}
                       >
-                        {selectedRule.is_canary ? 'Flagged for Review' : 'Flag for Canary Review'}
+                        Copy
                       </button>
                     </div>
-                    <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
-                      Doesn't change enforcement — this rule keeps running exactly as before. Flags it for
-                      review and lets you pull a historical-impact report: of its past matches, how many were
-                      the <em>only</em> rule that fired on that request (disabling it would let those through)
-                      vs. matched alongside another rule (still blocked either way).
-                    </p>
-                    {selectedRule.is_canary && canaryStatus && (
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                          Monitoring since {canaryStatus.started_at ? formatLocalTime(canaryStatus.started_at) : '—'}
-                          {canaryStatus.elapsed_hours != null && (
-                            ` (${Math.max(0, canaryStatus.window_hours - canaryStatus.elapsed_hours).toFixed(0)}h remaining)`
-                          )}
-                        </span>
-                        {canaryStatus.needs_review && (
-                          <span style={{ fontSize: '11px', background: 'var(--danger-bg)', color: 'var(--danger-color)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
-                            Needs Review — window elapsed without a confident auto-decision
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    {selectedRule.is_canary && (
-                      <div>
-                        <button
-                          onClick={() => handleLoadCanaryReport(selectedRule)}
-                          disabled={canaryReportLoading}
-                          className="action-btn-inspect"
-                          style={{ fontSize: '11px' }}
-                        >
-                          {canaryReportLoading ? 'Loading...' : 'Load 7-Day Impact Report'}
-                        </button>
-                        {canaryReport && (
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginTop: '10px' }}>
-                            <div className="rule-meta-box">
-                              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Total Matches</div>
-                              <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{canaryReport.total_matches}</div>
-                            </div>
-                            <div className="rule-meta-box">
-                              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Sole Match (would open a hole)</div>
-                              <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--danger-color)' }}>{canaryReport.sole_match_count}</div>
-                            </div>
-                            <div className="rule-meta-box">
-                              <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Co-Matched (still safe)</div>
-                              <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--success-color)' }}>{canaryReport.co_matched_count}</div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* syntax block */}
-                  <div>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Code size={14} color="var(--sev-low)" />
-                      CyberSentinel Engine Configuration Rule Syntax
-                    </div>
-                    {ruleDetailLoading ? (
-                      <div style={{ background: 'var(--inset-bg)', padding: '24px', textAlign: 'center', borderRadius: '8px' }}>
-                        <div className="spinner" style={{ margin: '0 auto' }}></div>
-                      </div>
-                    ) : detailedRule ? (
-                      <pre className="syntax-box">{detailedRule.syntax}</pre>
-                    ) : (
-                      <pre className="syntax-box">{selectedRule.syntax}</pre>
-                    )}
-                  </div>
-
-                  {/* trigger examples */}
-                  <div>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Database size={14} color="var(--success-color)" />
-                      Simulated Payload / Attack Trigger Examples
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {getPayloadSample(selectedRule.category).map((sample, idx) => (
-                        <div key={idx} style={{ background: 'var(--surface-subtle)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <code style={{ fontSize: '12px', color: 'var(--danger-color)', fontFamily: 'monospace' }}>{sample}</code>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(sample);
-                              showToast("Copied trigger payload to clipboard!");
-                            }}
-                            className="action-btn-inspect"
-                            style={{ padding: '3px 8px', fontSize: '10px' }}
-                          >
-                            Copy
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* file path */}
-                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                    <strong>VENDOR SOURCE:</strong> {selectedRule.file_path}
-                  </div>
+                  ))}
                 </div>
-              </motion.div>
+              </div>
+
+              {/* file path */}
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '12px', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                <strong>VENDOR SOURCE:</strong> {selectedRule.file_path}
+              </div>
             </div>
-          )}
-        </AnimatePresence>,
+          </div>
+        </div>,
         document.body
       )}
 

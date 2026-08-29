@@ -39,6 +39,29 @@ export default function LiveLogs({ onMarkFalsePositive }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedLogs, setExpandedLogs] = useState(new Set());
 
+  // Whichever list the currently-open drawer's row came from (the flat
+  // timeline, or one group's drill-down events) — lets Up/Down in
+  // LogDetailsModal step through the same rows the analyst was scanning,
+  // without caring which table they opened it from.
+  const [activeLogList, setActiveLogList] = useState([]);
+  const [activeLogIndex, setActiveLogIndex] = useState(-1);
+
+  const openLogDetails = (list, index) => {
+    setActiveLogList(list);
+    setActiveLogIndex(index);
+    setSelectedLog(list[index]);
+    setIsModalOpen(true);
+  };
+
+  const handleNavigateLog = (direction) => {
+    setActiveLogIndex((prevIndex) => {
+      const nextIndex = direction === 'next' ? prevIndex + 1 : prevIndex - 1;
+      if (nextIndex < 0 || nextIndex >= activeLogList.length) return prevIndex;
+      setSelectedLog(activeLogList[nextIndex]);
+      return nextIndex;
+    });
+  };
+
   // Grouped ("collapse repeats by IP+Rule") view — opt-in alongside the
   // default flat timeline. See backend query_waf_events_grouped().
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'grouped'
@@ -755,8 +778,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                                   className="action-btn-inspect"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setSelectedLog(log);
-                                    setIsModalOpen(true);
+                                    openLogDetails(sortedLogs, index);
                                   }}
                               >
                                 Inspect Log
@@ -893,7 +915,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {expanded.events.map(ev => (
+                                    {expanded.events.map((ev, evIndex) => (
                                       <tr key={ev.id}>
                                         <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{formatLocalTime(ev.timestamp)}</td>
                                         <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{ev.http_code || '-'}</td>
@@ -911,7 +933,7 @@ export default function LiveLogs({ onMarkFalsePositive }) {
                                             )}
                                             <button
                                               className="action-btn-inspect"
-                                              onClick={() => { setSelectedLog(ev); setIsModalOpen(true); }}
+                                              onClick={() => openLogDetails(expanded.events, evIndex)}
                                             >
                                               Inspect Log
                                             </button>
@@ -963,8 +985,13 @@ export default function LiveLogs({ onMarkFalsePositive }) {
           onClose={() => {
             setIsModalOpen(false);
             setSelectedLog(null);
+            setActiveLogList([]);
+            setActiveLogIndex(-1);
           }}
           onMarkFalsePositive={onMarkFalsePositive}
+          onNavigate={handleNavigateLog}
+          canGoPrev={activeLogIndex > 0}
+          canGoNext={activeLogIndex < activeLogList.length - 1}
         />
         <Toast toast={toast} />
     </motion.div>

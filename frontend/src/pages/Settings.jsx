@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle, Archive, Brain, CheckSquare, Database, Download, FileCode, History, Lock, RotateCcw, RotateCw, Server, Settings as SettingsIcon, ShieldAlert, ShieldCheck, Trash2, X } from 'lucide-react';
 import {
@@ -26,6 +27,26 @@ import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import Button from '../components/Button';
 import { formatLocalTime } from '../utils/helpers';
+
+// One entry per independently-saved form on this page — every tab can hold
+// several (Hardening alone has six accordion sections, each its own form).
+// Backs the unsaved-changes bar: which form got dirty, and which tab to jump
+// to for it.
+const SETTINGS_SECTIONS = {
+  general: { label: 'General', tab: 'general' },
+  waf: { label: 'WAF Engine', tab: 'waf' },
+  logs: { label: 'Log Ingestion', tab: 'logs' },
+  hardening: { label: 'Infrastructure Hardening', tab: 'hardening' },
+  geoblock: { label: 'Geo-Block', tab: 'hardening' },
+  threatintel: { label: 'External Threat-Intel Feed', tab: 'hardening' },
+  autorep: { label: 'Self-Learned IP Reputation', tab: 'hardening' },
+  adminallowlist: { label: 'Admin-Login IP Allowlist', tab: 'hardening' },
+  malwarescan: { label: 'Malware Scanning', tab: 'hardening' },
+  possec: { label: 'Positive Security', tab: 'positive-security' },
+  defacement: { label: 'Anti-Defacement', tab: 'defacement' },
+  customresponse: { label: 'Custom Response Page', tab: 'custom-response' },
+  autolearning: { label: 'Auto-Learning', tab: 'auto-learning' },
+};
 
 export default function Settings({ onLogout }) {
   // General Settings
@@ -137,6 +158,20 @@ export default function Settings({ onLogout }) {
   useEscapeToClose(() => setDangerModal(null), !!dangerModal);
   const [loadingAction, setLoadingAction] = useState(false);
   const [activeSettingTab, setActiveSettingTab] = useState('general');
+
+  // Unsaved-changes tracking: each form marks its own key dirty on any field
+  // change (via the form's onChange, which catches every input inside it —
+  // no per-field wiring needed) and clears it once its own save succeeds.
+  // Sections stay independent on purpose — there's no "save all", since each
+  // form validates and applies separately.
+  const [dirtySections, setDirtySections] = useState({});
+  const markDirty = (key) => setDirtySections((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+  const clearDirty = (key) => setDirtySections((prev) => {
+    if (!prev[key]) return prev;
+    const next = { ...prev };
+    delete next[key];
+    return next;
+  });
   // Previously a failed initial load only did console.error, leaving every
   // tab showing hardcoded defaults with zero visible signal that they don't
   // reflect real WAF config — an admin could edit and save right over real
@@ -252,6 +287,7 @@ export default function Settings({ onLogout }) {
         logsPerPage,
         liveUpdates
       });
+      clearDirty('general');
       showToast("General preferences saved successfully.");
     } catch (err) {
       showToast(err.message || "Failed to save general settings.", "error");
@@ -269,6 +305,7 @@ export default function Settings({ onLogout }) {
         detectionMode,
         paranoiaLevel
       });
+      clearDirty('waf');
       showToast("WAF core policies updated successfully.");
     } catch (err) {
       showToast(err.message || "Failed to save WAF settings.", "error");
@@ -292,6 +329,7 @@ export default function Settings({ onLogout }) {
         ip_blacklist: blacklist,
         ip_whitelist: whitelist
       });
+      clearDirty('hardening');
       showToast("Hardening & Server Cloaking policies updated and applied to NGINX.");
     } catch (err) {
       showToast("Failed to update hardening settings: " + (err.message || "Unknown error"), "error");
@@ -310,6 +348,7 @@ export default function Settings({ onLogout }) {
         mode: geoBlockMode,
         countries,
       });
+      clearDirty('geoblock');
       showToast("Geo-Block policy updated.");
     } catch (err) {
       showToast("Failed to update geo-block settings: " + (err.message || "Unknown error"), "error");
@@ -327,6 +366,7 @@ export default function Settings({ onLogout }) {
         sync_interval_hours: parseInt(threatIntelIntervalHours) || 24,
       });
       setThreatIntelStatus(saved);
+      clearDirty('threatintel');
       showToast("Threat-intel feed settings updated.");
     } catch (err) {
       showToast("Failed to update threat-intel settings: " + (err.message || "Unknown error"), "error");
@@ -373,6 +413,7 @@ export default function Settings({ onLogout }) {
         sync_interval_minutes: parseInt(autoRepIntervalMinutes) || 15,
       });
       setAutoRepStatus(saved);
+      clearDirty('autorep');
       showToast("Self-learned IP reputation settings updated.");
     } catch (err) {
       showToast("Failed to update auto-reputation settings: " + (err.message || "Unknown error"), "error");
@@ -416,6 +457,7 @@ export default function Settings({ onLogout }) {
         allowed_networks: networks,
       });
       setAdminAllowlistNetworks(saved.allowed_networks.join(', '));
+      clearDirty('adminallowlist');
       showToast("Admin-login IP allowlist updated.");
     } catch (err) {
       // Includes the backend's self-lockout guard message when an admin
@@ -436,6 +478,7 @@ export default function Settings({ onLogout }) {
         scan_timeout_seconds: parseInt(malwareScanTimeout, 10) || 5,
       });
       setMalwareScanStatus(saved);
+      clearDirty('malwarescan');
       showToast("Malware scanning settings updated.");
     } catch (err) {
       showToast("Failed to update malware scanning settings: " + (err.message || "Unknown error"), "error");
@@ -511,6 +554,7 @@ export default function Settings({ onLogout }) {
         monitored_files: files,
         check_interval_seconds: parseInt(checkInterval) || 5
       });
+      clearDirty('defacement');
       showToast("Web Anti-Defacement policies updated successfully.");
     } catch (err) {
       showToast("Failed to update Anti-Defacement settings: " + (err.message || "Unknown error"), "error");
@@ -543,6 +587,7 @@ export default function Settings({ onLogout }) {
         allowed_content_types: contentTypes,
         restricted_extensions: extensions,
       });
+      clearDirty('possec');
       showToast(
         posSecEnabled
           ? "Positive Security policy updated and applied to protected apps."
@@ -560,6 +605,7 @@ export default function Settings({ onLogout }) {
     setLoadingAction(true);
     try {
       await saveCustomResponse({ html_content: customResponseHtml });
+      clearDirty('customresponse');
       showToast("Custom block page saved and will be served on the next blocked request.");
     } catch (err) {
       showToast("Failed to save custom response page: " + (err.message || "Unknown error"), "error");
@@ -577,6 +623,7 @@ export default function Settings({ onLogout }) {
         learning_period: autoLearningPeriod,
         confidence_threshold: parseInt(autoLearningThreshold) || 90,
       });
+      clearDirty('autolearning');
       showToast(
         autoLearningEnabled
           ? "Auto-Learning enabled — baseline tuning will use the configured window."
@@ -805,6 +852,7 @@ export default function Settings({ onLogout }) {
         concurrentLogging,
         retention
       });
+      clearDirty('logs');
       showToast("Log ingestion configurations successfully updated.");
     } catch (err) {
       showToast(err.message || "Failed to update log settings.", "error");
@@ -867,6 +915,53 @@ export default function Settings({ onLogout }) {
     >
       {/* Toast Alert overlay */}
       <Toast toast={toast} />
+
+      {/* Unsaved-changes bar — each form here saves independently (no "save
+          all"), so this is awareness, not another save action: which
+          section(s) have edits sitting uncommitted, and a one-click jump to
+          them if the admin isn't already looking at that tab. */}
+      {createPortal(
+        <AnimatePresence>
+          {Object.keys(dirtySections).length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 16 }}
+              transition={{ duration: 0.2 }}
+              style={{
+                position: 'fixed', left: '50%', bottom: '24px', transform: 'translateX(-50%)',
+                zIndex: 500, maxWidth: 'min(680px, calc(100vw - 48px))',
+                display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap',
+                padding: '10px 16px', borderRadius: '10px',
+                background: 'var(--warning-bg)', border: '1px solid var(--warning-glow)',
+                boxShadow: '0 10px 30px rgba(0,0,0,0.35)',
+              }}
+            >
+              <AlertTriangle size={16} color="var(--warning-color)" style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--warning-color)', whiteSpace: 'nowrap' }}>
+                Unsaved changes:
+              </span>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {Object.keys(dirtySections).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setActiveSettingTab(SETTINGS_SECTIONS[key]?.tab || key)}
+                    style={{
+                      fontSize: '11px', fontWeight: 600, padding: '3px 10px', borderRadius: '999px',
+                      background: 'var(--surface-hover)', color: 'var(--text-primary)',
+                      border: '1px solid var(--warning-glow)', cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {SETTINGS_SECTIONS[key]?.label || key}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Danger Modal confirmation prompt */}
       <AnimatePresence>
@@ -992,7 +1087,7 @@ export default function Settings({ onLogout }) {
                 </div>
                 <div className="settings-section-subtitle">Configure dashboard behavior and real-time updates.</div>
 
-                <form onSubmit={handleSaveGeneral} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveGeneral} onChange={() => markDirty('general')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Dashboard Refresh Interval</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={refreshInterval} onChange={(e) => setRefreshInterval(e.target.value)}>
@@ -1039,7 +1134,7 @@ export default function Settings({ onLogout }) {
                 </div>
                 <div className="settings-section-subtitle">Manage CyberSentinel Engine ruleset behaviors and blocking modes.</div>
 
-                <form onSubmit={handleSaveWAF} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveWAF} onChange={() => markDirty('waf')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>SecRuleEngine Posture</label>
                     <select className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={secRuleEngine} onChange={(e) => setSecRuleEngine(e.target.value)}>
@@ -1092,7 +1187,7 @@ export default function Settings({ onLogout }) {
                 </div>
                 <div className="settings-section-subtitle">Configure SecAuditEngine and log retention policies.</div>
 
-                <form onSubmit={handleSaveLogs} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveLogs} onChange={() => markDirty('logs')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>SecAuditEngine Logging</span>
@@ -1147,7 +1242,7 @@ export default function Settings({ onLogout }) {
                 <SettingsAccordionCard icon={Server} title="Infrastructure Hardening" status={hstsEnabled ? 'HSTS On' : 'HSTS Off'} tone={hstsEnabled ? 'active' : 'inactive'}>
                 <div className="settings-section-subtitle" style={{ marginTop: 0 }}>Manage HSTS, server cloaking, and IP restrictions.</div>
 
-                <form onSubmit={handleSaveHardening} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveHardening} onChange={() => markDirty('hardening')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Strict HTTPS (HSTS)</span>
@@ -1222,7 +1317,7 @@ export default function Settings({ onLogout }) {
                   active in this deployment) — otherwise this has no effect.
                 </div>
 
-                <form onSubmit={handleSaveGeoBlock} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveGeoBlock} onChange={() => markDirty('geoblock')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Geo-Block</span>
@@ -1278,7 +1373,7 @@ export default function Settings({ onLogout }) {
                   can never overwrite your own entries. Your manual whitelist always overrides it.
                 </div>
 
-                <form onSubmit={handleSaveThreatIntel} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveThreatIntel} onChange={() => markDirty('threatintel')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Scheduled Sync</span>
@@ -1344,7 +1439,7 @@ export default function Settings({ onLogout }) {
                   whitelist.
                 </div>
 
-                <form onSubmit={handleSaveAutoReputation} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveAutoReputation} onChange={() => markDirty('autorep')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Auto-Block</span>
@@ -1473,7 +1568,7 @@ export default function Settings({ onLogout }) {
                   </span>
                 </div>
 
-                <form onSubmit={handleSaveAdminLoginAllowlist} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveAdminLoginAllowlist} onChange={() => markDirty('adminallowlist')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Login Allowlist</span>
@@ -1510,7 +1605,7 @@ export default function Settings({ onLogout }) {
                   the WAF's existing rule-based protections, not a replacement for them.
                 </div>
 
-                <form onSubmit={handleSaveMalwareScanning} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveMalwareScanning} onChange={() => markDirty('malwarescan')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Malware Scanning</span>
@@ -1600,7 +1695,7 @@ export default function Settings({ onLogout }) {
                   </span>
                 </div>
 
-                <form onSubmit={handleSavePositiveSecurity} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSavePositiveSecurity} onChange={() => markDirty('possec')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Positive Security</span>
@@ -1672,7 +1767,7 @@ export default function Settings({ onLogout }) {
                 </div>
                 <div className="settings-section-subtitle">Real-time integrity monitoring for critical assets.</div>
 
-                <form onSubmit={handleSaveDefacement} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveDefacement} onChange={() => markDirty('defacement')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Real-time Integrity Monitor</span>
@@ -1729,7 +1824,7 @@ export default function Settings({ onLogout }) {
                   anywhere in the page to include the block's transaction ID, useful for support requests.
                 </div>
 
-                <form onSubmit={handleSaveCustomResponse} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '700px' }}>
+                <form onSubmit={handleSaveCustomResponse} onChange={() => markDirty('customresponse')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '700px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Block Page HTML</label>
                     <textarea
@@ -1766,7 +1861,7 @@ export default function Settings({ onLogout }) {
                   real usage, reducing false positives without loosening genuine protections.
                 </div>
 
-                <form onSubmit={handleSaveAutoLearning} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                <form onSubmit={handleSaveAutoLearning} onChange={() => markDirty('autolearning')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Auto-Learning</span>
