@@ -26,6 +26,14 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
   const prefsRef = useRef({ muted_severities: [], muted_event_types: [] });
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
+  // IDs already reflected in unreadCount — makes a WebSocket push idempotent
+  // against the initial REST fetch (both fire ~simultaneously on mount, so
+  // an alert created in that narrow window could otherwise be counted once
+  // by each) and against a reconnect re-delivering something already seen.
+  // Rebuilt from scratch on every fetchUnread() call, so it's also what
+  // makes the count self-heal from any WS-vs-REST drift, not just prevent
+  // future duplicates.
+  const knownUnreadIdsRef = useRef(new Set());
 
   const isMuted = useCallback((alert) => {
     const prefs = prefsRef.current;
@@ -40,6 +48,7 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
       const unread = visible.filter(h => h.status !== 'acknowledged');
       setHistory(visible.slice(0, 5)); // show latest 5
       setUnreadCount(unread.length);
+      knownUnreadIdsRef.current = new Set(unread.map(h => h.id));
     } catch (err) {
       console.error("Error fetching unread notifications:", err);
     }
@@ -81,9 +90,19 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
           return;
         }
         if (envelope?.type !== 'alert' || !envelope.data || isMuted(envelope.data)) return;
+        const alert = envelope.data;
 
-        setHistory(prev => [envelope.data, ...prev].slice(0, 5));
-        setUnreadCount(prev => prev + 1);
+        // Dedup by id, not just prepend — a duplicate push (or one for an
+        // alert the initial REST fetch already had) replaces its existing
+        // row instead of adding a second copy of the same alert.
+        setHistory(prev => [alert, ...prev.filter(h => h.id !== alert.id)].slice(0, 5));
+
+        // Only counts toward the badge the first time this id is seen —
+        // see knownUnreadIdsRef's own comment for why this exists.
+        if (!knownUnreadIdsRef.current.has(alert.id)) {
+          knownUnreadIdsRef.current.add(alert.id);
+          setUnreadCount(prev => prev + 1);
+        }
       };
 
       const scheduleReconnect = () => {
