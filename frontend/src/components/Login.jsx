@@ -238,7 +238,15 @@ const Login = ({ setAuth, onLoginSuccess }) => {
           credentials: 'include'
         });
         if (!response.ok) {
-          throw new Error('Invalid or expired OTP code');
+          // Surface the backend's actual reason (expired code, rate-limited,
+          // IP-allowlist block) instead of always blaming the OTP — those
+          // aren't the same failure and shouldn't read as if they were.
+          // A plain try/catch (not .json().catch()) because a response with
+          // no .json() method at all — as well as a non-JSON body — must
+          // both fall through to the default message.
+          let detail;
+          try { detail = (await response.json())?.detail; } catch { /* no JSON body */ }
+          throw new Error(detail || 'Invalid or expired OTP code');
         }
         await completeLogin();
         return;
@@ -254,7 +262,17 @@ const Login = ({ setAuth, onLoginSuccess }) => {
       });
 
       if (!response.ok) {
-        throw new Error('Invalid credentials');
+        // The backend has several distinct reasons for rejecting a login —
+        // wrong password, a rate-limit lockout from an earlier mistyped
+        // attempt, an admin IP-allowlist block, a disabled account — and
+        // collapsing all of them into a hardcoded "Invalid credentials"
+        // actively misleads someone who typed the right password but got
+        // rate-limited or IP-blocked. Show the backend's real reason. Plain
+        // try/catch (not .json().catch()) since a response with no .json()
+        // method at all must fall through to the default message too.
+        let detail;
+        try { detail = (await response.json())?.detail; } catch { /* no JSON body */ }
+        throw new Error(detail || 'Invalid credentials');
       }
 
       const data = await response.json().catch(() => ({}));
