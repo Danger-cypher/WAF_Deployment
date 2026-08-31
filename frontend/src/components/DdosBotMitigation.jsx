@@ -1,10 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { AlertTriangle, Activity, Database, Server } from 'lucide-react';
+import { AlertTriangle, Activity, Database, Server, Bot } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
-import { getDdosBotSettings, saveDdosBotSettings, getDdosAnalytics } from '../services/api';
+import { getDdosBotSettings, saveDdosBotSettings, getDdosAnalytics, getBotTrafficBreakdown, getTopBotIdentities } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
+
+// Fixed per-category color, independent of rank/sort order (dataviz rule:
+// "color follows the entity, never its rank") — same fixed-array-of-
+// existing-accent-tokens convention Overview.jsx's Attack Vectors/Threat
+// Severity sections already use, reused here rather than inventing a
+// second categorical palette for the app.
+const BOT_CATEGORY_COLORS = {
+  'AI Crawler': 'var(--ml-color)',
+  'Search Engine Bot': 'var(--cyan-color)',
+  'Headless Browser': 'var(--sev-high)',
+  'Scripted Client': 'var(--warning-color)',
+  'Generic Bot/Spider': 'var(--danger-color)',
+  'No User-Agent': 'var(--pink-color)',
+  'Browser (Human)': 'var(--success-color)',
+  'Other': 'var(--text-secondary)',
+};
 
 export default function DdosBotMitigation() {
   const [rateLimitRps, setRateLimitRps] = useState(50);
@@ -65,15 +81,41 @@ export default function DdosBotMitigation() {
     }
   };
 
+  // Bot/human traffic composition (P1 item 5) — its own state and its own,
+  // slower poll cadence: composition doesn't shift second-to-second the way
+  // the rate-limit block count above does, so it doesn't need the 3s cycle.
+  const [botTraffic, setBotTraffic] = useState([]);
+  const [botIdentities, setBotIdentities] = useState([]);
+  const [botTrafficLoading, setBotTrafficLoading] = useState(true);
+  const isFetchingBotTrafficRef = useRef(false);
+
+  const fetchBotTraffic = async () => {
+    if (isFetchingBotTrafficRef.current) return;
+    isFetchingBotTrafficRef.current = true;
+    try {
+      const [breakdown, identities] = await Promise.all([getBotTrafficBreakdown(), getTopBotIdentities()]);
+      setBotTraffic(breakdown || []);
+      setBotIdentities(identities || []);
+    } catch (err) {
+      console.error("Failed to fetch bot traffic composition", err);
+    } finally {
+      setBotTrafficLoading(false);
+      isFetchingBotTrafficRef.current = false;
+    }
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchSettings();
       fetchAnalytics();
+      fetchBotTraffic();
     }, 0);
     const interval = setInterval(fetchAnalytics, 3000);
+    const botInterval = setInterval(fetchBotTraffic, 30000);
     return () => {
       clearTimeout(timer);
       clearInterval(interval);
+      clearInterval(botInterval);
     };
   }, []);
 
@@ -578,6 +620,98 @@ export default function DdosBotMitigation() {
                     <td style={{ color: 'var(--text-secondary)' }}>#{index + 1}</td>
                     <td style={{ fontFamily: 'monospace', color: 'var(--sev-low)', fontWeight: 500 }}>{ipObj.ip}</td>
                     <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--danger-color)' }}>{ipObj.count.toLocaleString()}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Traffic Composition (Bot & Human) — P1 item 5 of the WAAP console
+          teardown roadmap (AWS's AI Traffic Analysis dashboard pattern).
+          User-Agent-based, so this is composition visibility, not a
+          detection control — the real enforcement stays the rate limiting
+          and JS Challenge above, which don't trust the UA string either. */}
+      <div className="chart-card glass-panel" style={{ gridColumn: 'span 6' }}>
+        <div className="card-title">
+          <Bot size={18} color="var(--ml-color)" />
+          Traffic Composition
+        </div>
+        <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {botTrafficLoading ? (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '13px', textAlign: 'center', padding: '30px 0' }}>Loading…</div>
+          ) : botTraffic.length === 0 ? (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '13px', textAlign: 'center', padding: '30px 0' }}>No traffic recorded yet.</div>
+          ) : (() => {
+            const total = botTraffic.reduce((s, c) => s + c.count, 0) || 1;
+            const maxCount = Math.max(...botTraffic.map((c) => c.count), 1);
+            return botTraffic.map((c) => {
+              const color = BOT_CATEGORY_COLORS[c.category] || 'var(--text-secondary)';
+              const pct = ((c.count / maxCount) * 100).toFixed(0);
+              const share = ((c.count / total) * 100).toFixed(1);
+              const blockRate = c.count > 0 ? ((c.blocked_count / c.count) * 100).toFixed(1) : '0.0';
+              return (
+                <div key={c.category}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0 }} />
+                      <span style={{ fontSize: '12.5px', color: 'var(--text-primary)', fontWeight: 500 }}>{c.category}</span>
+                    </div>
+                    <span style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+                      {c.count.toLocaleString()} ({share}%)
+                    </span>
+                  </div>
+                  <div style={{ width: '100%', height: '6px', background: 'var(--surface-hover)', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: '3px', opacity: 0.85 }} />
+                  </div>
+                  {c.blocked_count > 0 && (
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                      {c.blocked_count.toLocaleString()} blocked ({blockRate}%)
+                    </div>
+                  )}
+                </div>
+              );
+            });
+          })()}
+        </div>
+      </div>
+
+      <div className="chart-card glass-panel" style={{ gridColumn: 'span 6' }}>
+        <div className="card-title">
+          <Bot size={18} color="var(--cyan-color)" />
+          Top Identified Bots
+        </div>
+        <div className="logs-table-wrapper" style={{ marginTop: '16px' }}>
+          <table className="logs-table">
+            <thead>
+              <tr>
+                <th>User-Agent</th>
+                <th>Category</th>
+                <th style={{ textAlign: 'right' }}>Requests</th>
+              </tr>
+            </thead>
+            <tbody>
+              {botTrafficLoading ? (
+                <tr>
+                  <td colSpan="3" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>Loading…</td>
+                </tr>
+              ) : botIdentities.length === 0 ? (
+                <tr>
+                  <td colSpan="3" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
+                    No non-browser traffic identified yet.
+                  </td>
+                </tr>
+              ) : (
+                botIdentities.map((b) => (
+                  <tr key={`${b.user_agent}-${b.category}`}>
+                    <td style={{ fontFamily: 'monospace', fontSize: '11.5px', color: 'var(--text-primary)', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={b.user_agent}>
+                      {b.user_agent || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>(empty)</span>}
+                    </td>
+                    <td>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: BOT_CATEGORY_COLORS[b.category] || 'var(--text-secondary)' }}>{b.category}</span>
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--text-primary)' }}>{b.count.toLocaleString()}</td>
                   </tr>
                 ))
               )}
