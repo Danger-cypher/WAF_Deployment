@@ -1,10 +1,22 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from app.models.log_model import LogEntry, GroupedLogEntry
 
 
 class PaginatedLogs(BaseModel):
     data: List[LogEntry]
+    total: int
+    page: int
+    size: int
+
+
+class PaginatedEndpoints(BaseModel):
+    """API Protection's Discovered/Recently-Discovered/Stale endpoint lists
+    — was a bare, unpaginated array (every row, every poll); a discovered-
+    endpoint row has no fixed schema (calculate_endpoint_score merges in
+    whatever fields the ClickHouse aggregation happened to produce), so
+    this stays List[Dict] rather than a typed model like LogEntry above."""
+    data: List[Dict[str, Any]]
     total: int
     page: int
     size: int

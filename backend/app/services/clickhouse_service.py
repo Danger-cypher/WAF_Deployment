@@ -14,6 +14,7 @@ Design notes:
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -94,6 +95,37 @@ def _get_client() -> Optional[clickhouse_connect.driver.Client]:
     except Exception as e:
         logger.error(f"ClickHouse connection failed: {e}")
         return None
+
+
+# ── Short-TTL cache for the API Protection page's shared base queries ──────
+# The API Protection page (frontend/src/pages/ApiProtection.jsx) loads by
+# firing get_all_discovered_endpoints and get_endpoint_threat_counts
+# indirectly through FIVE and FOUR separate routes respectively
+# (/endpoints, /recently-discovered, /stale-endpoints, /analytics, /drift),
+# all in one Promise.all() burst, repeated every 10s by its poll interval.
+# Each route recomputed the identical full aggregation from scratch — 5x/4x
+# the necessary ClickHouse round trips per page view. A TTL well under that
+# 10s poll interval collapses concurrent/near-concurrent callers onto one
+# result without making the page's data meaningfully less fresh. Deliberately
+# a plain dict behind a lock (not functools.lru_cache) since entries must
+# expire on their own — nothing here ever explicitly invalidates the cache.
+_query_cache: Dict[str, Tuple[float, Any]] = {}
+_query_cache_lock = threading.Lock()
+_QUERY_CACHE_TTL_SECONDS = 5.0
+
+
+def _cached(key: str, compute):
+    """Runs compute() and caches its result under key for
+    _QUERY_CACHE_TTL_SECONDS, or returns the still-fresh cached value."""
+    now = time.monotonic()
+    with _query_cache_lock:
+        cached = _query_cache.get(key)
+        if cached is not None and (now - cached[0]) < _QUERY_CACHE_TTL_SECONDS:
+            return cached[1]
+    result = compute()
+    with _query_cache_lock:
+        _query_cache[key] = (now, result)
+    return result
 
 
 def is_available() -> bool:
@@ -278,6 +310,21 @@ def _time_filter_clause(hours: Optional[int], alias: str = "timestamp") -> str:
     if hours is None:
         return ""
     return f"AND {alias} >= now() - INTERVAL {int(hours)} HOUR"
+
+
+def _offset_time_filter_clause(hours: int, offset_hours: int = 0, alias: str = "timestamp") -> str:
+    """WHERE clause fragment for the `hours`-sized window ending
+    `offset_hours` in the past — offset_hours=0 is identical to
+    _time_filter_clause (the last `hours`); offset_hours=hours is the
+    equal-sized window immediately before that one. Powers the Overview KPI
+    trend badges (get_stats' offset_hours param) — see calculate_stats_trend
+    in stats_calculator.py."""
+    if offset_hours <= 0:
+        return _time_filter_clause(hours, alias)
+    return (
+        f"AND {alias} >= now() - INTERVAL {int(hours + offset_hours)} HOUR "
+        f"AND {alias} < now() - INTERVAL {int(offset_hours)} HOUR"
+    )
 
 
 def _build_waf_events_where_clause(
@@ -744,8 +791,15 @@ def find_ml_event_near(client_ip: str, uri: str, timestamp: str, window_seconds:
 # ---------------------------------------------------------------------------
 # Stats / Aggregation Queries
 # ---------------------------------------------------------------------------
-def get_stats(hours: Optional[int] = None) -> Dict[str, Any]:
+def get_stats(hours: Optional[int] = None, offset_hours: int = 0) -> Dict[str, Any]:
     """Aggregate stats from waf_events: total blocked, attack counts, etc.
+
+    `offset_hours` shifts the window into the past by that many hours (0 =
+    the default "last `hours`" behavior) — lets a caller fetch the
+    immediately-preceding, equal-sized window for a trend comparison
+    without a second, differently-shaped query. Requires a bounded `hours`;
+    combining offset_hours with hours=None (all-time) makes no sense, since
+    there's no "the all-time window before all time".
 
     Raises on any failure (no client, query error) instead of swallowing it
     — the caller (stats_calculator.py) needs to be able to tell a real,
@@ -757,8 +811,10 @@ def get_stats(hours: Optional[int] = None) -> Dict[str, Any]:
     client = _get_client()
     if client is None:
         raise RuntimeError("ClickHouse client unavailable")
+    if offset_hours and hours is None:
+        raise ValueError("offset_hours requires a bounded `hours` window")
 
-    time_filter = _time_filter_clause(hours)
+    time_filter = _offset_time_filter_clause(hours, offset_hours) if hours is not None else ""
     recent_filter = "AND timestamp >= now() - INTERVAL 1 MINUTE"
 
     try:
@@ -866,6 +922,142 @@ def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
         ]
     except Exception as e:
         logger.error(f"get_top_ips failed: {e}")
+        raise
+
+
+def get_top_uris(limit: int = 10, hours: Optional[int] = None) -> List[Dict]:
+    """Top targeted endpoints — from blocked (HTTP 401, 403, 406, 429)
+    events, grouped by URI with the query string stripped (same
+    normalization as get_endpoint_threat_counts, so a request logged with
+    different query params doesn't fragment into separate rows). The
+    "offenders by target" counterpart to get_top_ips' "offenders by
+    source" — Overview previously only had the latter, structurally
+    thinner than the field's typical aggregate -> top-offenders -> raw-log
+    investigation flow (see the WAAP console teardown roadmap, P0 item 3)."""
+    client = _get_client()
+    if client is None:
+        raise RuntimeError("ClickHouse client unavailable")
+    time_filter = _time_filter_clause(hours)
+    try:
+        result = client.query(f"""
+            SELECT splitByChar('?', uri)[1] AS clean_uri, count() AS count
+            FROM waf_events
+            WHERE http_code IN {_BLOCKED_HTTP_CODES_SQL} AND uri != '' {time_filter}
+            GROUP BY clean_uri
+            ORDER BY count DESC
+            LIMIT {int(limit)}
+        """)
+        return [{"uri": row[0], "count": row[1]} for row in result.result_rows]
+    except Exception as e:
+        logger.error(f"get_top_uris failed: {e}")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Bot / non-human traffic classification (P1 item 5 of the WAAP console
+# teardown roadmap — AWS's "AI Traffic Analysis" dashboard pattern: break
+# traffic down by identity/intent instead of just "blocked vs allowed").
+# User-Agent-only, since that's the one signal already captured on every
+# request (waf_events.request_headers) — no TLS/JA3 fingerprinting or bot-
+# management SaaS integration here, so this reads UA strings a scripted
+# client could always fake. Treat it as traffic-composition visibility, not
+# a bot-detection control (the real enforcement is DDoS & Bot Shield's rate
+# limiting and JS Challenge, which don't trust the UA string either).
+# ---------------------------------------------------------------------------
+
+# (category, [substrings]) — checked in order, first match wins, so more
+# specific identities (a named AI crawler) are listed before generic
+# catch-alls (anything with "bot" in it). Names are the actual UA tokens
+# real crawlers/tools send today, not exhaustive — this is a working
+# classification to surface traffic composition, not a maintained bot list.
+_BOT_CATEGORIES = [
+    ("AI Crawler", [
+        "GPTBot", "ChatGPT-User", "OAI-SearchBot", "CCBot", "ClaudeBot", "anthropic-ai",
+        "PerplexityBot", "Bytespider", "Amazonbot", "Google-Extended", "cohere-ai", "Diffbot",
+    ]),
+    ("Search Engine Bot", [
+        "Googlebot", "Bingbot", "Slurp", "DuckDuckBot", "Baiduspider", "YandexBot",
+        "facebookexternalhit", "Twitterbot", "LinkedInBot", "Applebot", "AhrefsBot", "SemrushBot", "MJ12bot",
+    ]),
+    ("Headless Browser", ["HeadlessChrome", "PhantomJS", "Puppeteer", "Playwright", "Selenium"]),
+    ("Scripted Client", [
+        "curl/", "Wget/", "python-requests", "python-urllib", "Go-http-client", "okhttp",
+        "Java/", "Apache-HttpClient", "PostmanRuntime", "axios/", "node-fetch", "libwww-perl",
+    ]),
+]
+
+
+def _bot_category_case_expr(ua_expr: str = "JSONExtractString(request_headers, 'User-Agent')") -> str:
+    """Builds the multiIf(...) classifying a User-Agent expression into one
+    of _BOT_CATEGORIES, then 'Generic Bot/Spider' (a keyword catch-all),
+    'No User-Agent', 'Browser (Human)' (a real-browser heuristic), or
+    'Other'. Shared by get_bot_traffic_breakdown and get_top_bot_identities
+    so the two views can never silently disagree on where a request lands."""
+    branches = []
+    for category, keywords in _BOT_CATEGORIES:
+        ors = " OR ".join(f"positionCaseInsensitive({ua_expr}, '{kw}') > 0" for kw in keywords)
+        branches.append(f"({ors}), '{category}'")
+    generic_bot = " OR ".join(
+        f"positionCaseInsensitive({ua_expr}, '{kw}') > 0" for kw in ("bot", "spider", "crawl", "scraper")
+    )
+    branches.append(f"({generic_bot}), 'Generic Bot/Spider'")
+    branches.append(f"({ua_expr} = ''), 'No User-Agent'")
+    real_browser = " OR ".join(
+        f"positionCaseInsensitive({ua_expr}, '{kw}') > 0" for kw in ("Chrome", "Safari", "Firefox", "Edg", "OPR")
+    )
+    branches.append(f"(positionCaseInsensitive({ua_expr}, 'Mozilla/') > 0 AND ({real_browser})), 'Browser (Human)'")
+    return f"multiIf({', '.join(branches)}, 'Other')"
+
+
+def get_bot_traffic_breakdown(hours: Optional[int] = None) -> List[Dict]:
+    """Traffic volume per category (see _BOT_CATEGORIES), each with its own
+    blocked-count — so an admin sees not just "how much AI-crawler traffic"
+    but "how much of it did we actually block"."""
+    client = _get_client()
+    if client is None:
+        raise RuntimeError("ClickHouse client unavailable")
+    time_filter = _time_filter_clause(hours)
+    category_expr = _bot_category_case_expr()
+    try:
+        result = client.query(f"""
+            SELECT {category_expr} AS category, count() AS total, countIf(http_code IN {_BLOCKED_HTTP_CODES_SQL}) AS blocked
+            FROM waf_events
+            WHERE 1=1 {time_filter}
+            GROUP BY category
+            ORDER BY total DESC
+        """)
+        return [{"category": row[0], "count": row[1], "blocked_count": row[2]} for row in result.result_rows]
+    except Exception as e:
+        logger.error(f"get_bot_traffic_breakdown failed: {e}")
+        raise
+
+
+def get_top_bot_identities(hours: Optional[int] = None, limit: int = 10) -> List[Dict]:
+    """The specific User-Agent strings behind the non-human categories —
+    AWS's "Bot Identity" panel equivalent. Excludes 'Browser (Human)' (no
+    individually-interesting identity there) and 'No User-Agent' (there's
+    no string to show)."""
+    client = _get_client()
+    if client is None:
+        raise RuntimeError("ClickHouse client unavailable")
+    time_filter = _time_filter_clause(hours)
+    category_expr = _bot_category_case_expr()
+    try:
+        result = client.query(f"""
+            SELECT ua, category, count() AS total
+            FROM (
+                SELECT JSONExtractString(request_headers, 'User-Agent') AS ua, {category_expr} AS category
+                FROM waf_events
+                WHERE 1=1 {time_filter}
+            )
+            WHERE category NOT IN ('Browser (Human)', 'No User-Agent')
+            GROUP BY ua, category
+            ORDER BY total DESC
+            LIMIT {int(limit)}
+        """)
+        return [{"user_agent": row[0], "category": row[1], "count": row[2]} for row in result.result_rows]
+    except Exception as e:
+        logger.error(f"get_top_bot_identities failed: {e}")
         raise
 
 
@@ -1467,7 +1659,15 @@ def insert_api_discovery(records: List[Dict[str, Any]]) -> int:
 
 
 def get_all_discovered_endpoints() -> List[Dict[str, Any]]:
-    """Retrieve all discovered endpoints with aggregated statistics from ClickHouse."""
+    """Retrieve all discovered endpoints with aggregated statistics from
+    ClickHouse. Cached for _QUERY_CACHE_TTL_SECONDS — see _cached's
+    docstring for why (this is the query duplicated across API Protection's
+    /endpoints, /analytics, /drift routes, plus recently-discovered's and
+    stale-endpoints' own filtering below, which both call this too)."""
+    return _cached("all_discovered_endpoints", _fetch_all_discovered_endpoints)
+
+
+def _fetch_all_discovered_endpoints() -> List[Dict[str, Any]]:
     client = _get_client()
     if client is None:
         return []
@@ -1566,7 +1766,16 @@ def get_endpoint_threat_counts(hours: Optional[int] = None) -> Dict[Tuple[str, s
     WAF blocks (same http_code set used everywhere else in this file for
     "blocked"); suspicious_count is ModSecurity-flagged Medium/Low severity
     hits that were NOT blocked (e.g. detection-only paranoia rules).
+
+    Cached for _QUERY_CACHE_TTL_SECONDS per distinct `hours` value — see
+    _cached's docstring (API Protection's page load fans this same
+    unbounded, full-waf_events-table query out across four routes at once
+    via _overlay_real_threat_counts).
     """
+    return _cached(f"endpoint_threat_counts:{hours}", lambda: _fetch_endpoint_threat_counts(hours))
+
+
+def _fetch_endpoint_threat_counts(hours: Optional[int]) -> Dict[Tuple[str, str], Dict[str, int]]:
     client = _get_client()
     if client is None:
         return {}
@@ -1800,7 +2009,21 @@ def query_alert_history(
 
 
 def acknowledge_alert(alert_id: int, acknowledged_by: str) -> bool:
-    """Acknowledge alert in ClickHouse using mutations."""
+    """Acknowledge alert in ClickHouse using mutations.
+
+    SETTINGS mutations_sync = 1 forces this specific mutation to apply
+    synchronously before the command returns — without it, ClickHouse
+    queues ALTER TABLE ... UPDATE as a background mutation with no
+    visibility guarantee, so the route handler's response (and the
+    NotificationBell's immediate re-fetch right after acknowledging)
+    could still read the OLD, unacknowledged row: the alert would appear
+    to un-acknowledge itself, or the unread badge wouldn't budge, until
+    the mutation happened to finish sometime later. A single-row
+    acknowledge is rare and user-triggered, so the extra synchronous
+    latency here is the right tradeoff — unlike the bulk one-time
+    api_discovery reset mutation elsewhere in this file, which nothing
+    reads back immediately and stays async on purpose.
+    """
     client = _get_client()
     if client is None:
         return False
@@ -1810,7 +2033,8 @@ def acknowledge_alert(alert_id: int, acknowledged_by: str) -> bool:
             "status = 'acknowledged', "
             "acknowledged_by = %(acknowledged_by)s, "
             "acknowledged_at = now() "
-            f"WHERE id = {int(alert_id)}",
+            f"WHERE id = {int(alert_id)} "
+            "SETTINGS mutations_sync = 1",
             parameters={"acknowledged_by": acknowledged_by},
         )
         return True

@@ -92,3 +92,13 @@ def test_get_endpoint_threat_counts_uses_shared_blocked_codes(fake_ch_client):
     # Referenced twice — once for malicious_count (IN), once for
     # suspicious_count (NOT IN) — both must use the same fragment.
     assert fake_ch_client.queries[0].count(clickhouse_service._BLOCKED_HTTP_CODES_SQL) == 2
+
+
+def test_get_top_uris_uses_shared_blocked_codes(fake_ch_client):
+    clickhouse_service.get_top_uris()
+    assert len(fake_ch_client.queries) == 1
+    assert fake_ch_client.queries[0].count(clickhouse_service._BLOCKED_HTTP_CODES_SQL) == 1
+    # Same query-string-stripping normalization as get_endpoint_threat_counts
+    # — two events that differ only in query params must collapse into one
+    # "offender" row, not fragment the top-N list.
+    assert "splitByChar('?', uri)[1]" in fake_ch_client.queries[0]
