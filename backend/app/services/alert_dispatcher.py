@@ -77,7 +77,11 @@ class EmailNotificationChannel(BaseNotificationChannel):
             smtp_host = config.get("smtp_host")
             smtp_port = config.get("smtp_port", 587)
             username = config.get("username")
-            password = config.get("password")  # Note: Should ideally be decrypted if stored encrypted
+            # Stored and read as plain text — see EmailChannelConfig.password
+            # in alert_models.py for why (no encryption-at-rest exists for
+            # any channel secret in this codebase yet), not a missing
+            # decrypt step here.
+            password = config.get("password")
             from_addr = config.get("from_addr")
             to_addrs = config.get("to_addrs", [])
             use_tls = config.get("use_tls", True)
@@ -118,7 +122,7 @@ class EmailNotificationChannel(BaseNotificationChannel):
                         <p><strong>Time:</strong> {dt_module.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
                         <p><strong>Message:</strong> {message}</p>
                         <h3>Event Details:</h3>
-                        <div class="details">{json.dumps(event_data, indent=2)}</div>
+                        <div class="details">{json.dumps(event_data, indent=2, default=str)}</div>
                     </div>
                 </div>
             </body>
@@ -128,20 +132,34 @@ class EmailNotificationChannel(BaseNotificationChannel):
             msg.attach(MIMEText(message, "plain"))
             msg.attach(MIMEText(html_body, "html"))
 
-            # Connect and send
+            # Connect and send. server is created outside the try below and
+            # closed in finally — previously a login()/sendmail() failure
+            # (e.g. bad password) jumped straight to the outer except and
+            # returned without ever calling server.quit(), leaking the open
+            # SMTP socket on every failed attempt. A misconfigured channel
+            # that fires repeatedly (a rule with no throttle, or an admin
+            # mashing "Test") would leak one connection per attempt.
             if use_ssl:
                 server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
             else:
                 server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
+            try:
+                if use_tls and not use_ssl:
+                    server.starttls()
 
-            if use_tls and not use_ssl:
-                server.starttls()
+                if username and password:
+                    server.login(username, password)
 
-            if username and password:
-                server.login(username, password)
-
-            server.sendmail(from_addr, to_addrs, msg.as_string())
-            server.quit()
+                server.sendmail(from_addr, to_addrs, msg.as_string())
+            finally:
+                try:
+                    server.quit()
+                except Exception:
+                    # The connection may already be dead (e.g. the server
+                    # dropped it after rejecting auth) — quit() itself
+                    # raising must never mask the real error above, and
+                    # there's nothing further to clean up either way.
+                    pass
             return True, None
         except Exception as e:
             logger.error(f"Email notification dispatch failed: {e}")
@@ -190,7 +208,7 @@ class SlackNotificationChannel(BaseNotificationChannel):
                             {"title": "Severity", "value": severity.upper(), "short": True},
                             {
                                 "title": "Details",
-                                "value": f"```\n{json.dumps(event_data, indent=2)[:1000]}\n```",
+                                "value": f"```\n{json.dumps(event_data, indent=2, default=str)[:1000]}\n```",
                                 "short": False,
                             },
                         ]
@@ -242,10 +260,19 @@ class WebhookNotificationChannel(BaseNotificationChannel):
 
             headers.setdefault("Content-Type", "application/json")
 
+            # requests' own json= shorthand calls json.dumps with no
+            # default= hook, so it raises (silently failing the whole
+            # dispatch, same as the Email/Slack channels before this fix)
+            # the moment event_data carries anything not natively
+            # JSON-serializable. Encoding it ourselves with default=str
+            # gets the same defensive fallback the Syslog channel already
+            # has, while still sending an identical JSON body via data=.
+            body = json.dumps(payload, default=str)
+
             if method == "PUT":
-                res = requests.put(url, json=payload, headers=headers, timeout=timeout, verify=verify_ssl)
+                res = requests.put(url, data=body, headers=headers, timeout=timeout, verify=verify_ssl)
             else:
-                res = requests.post(url, json=payload, headers=headers, timeout=timeout, verify=verify_ssl)
+                res = requests.post(url, data=body, headers=headers, timeout=timeout, verify=verify_ssl)
 
             if 200 <= res.status_code < 300:
                 return True, None
