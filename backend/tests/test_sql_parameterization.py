@@ -173,6 +173,25 @@ def test_acknowledge_alert_parameterizes_acknowledged_by(monkeypatch):
     finalize_query(sql, params)
 
 
+def test_acknowledge_alert_forces_synchronous_mutation(monkeypatch):
+    """Regression guard for a real, empirically-confirmed bug: ClickHouse's
+    ALTER TABLE ... UPDATE is an async background mutation by default —
+    without SETTINGS mutations_sync = 1, a route handler (or
+    NotificationBell.jsx's immediate re-fetch right after acknowledging)
+    reading the row back right after this call can still see the OLD,
+    unacknowledged status. Confirmed directly against a live ClickHouse
+    instance during development: the exact same UPDATE without this
+    setting left the row's status as 'sent' on an immediate re-read; with
+    it, the re-read correctly showed 'acknowledged'."""
+    fake = _FakeClient()
+    monkeypatch.setattr(clickhouse_service, "_get_client", lambda: fake)
+
+    clickhouse_service.acknowledge_alert(1, "alice")
+
+    sql, _ = fake.calls[0]
+    assert "mutations_sync" in sql and "= 1" in sql
+
+
 def test_get_waf_event_by_id_parameterizes_log_id(monkeypatch):
     fake = _FakeClient()
     monkeypatch.setattr(clickhouse_service, "_get_client", lambda: fake)

@@ -413,11 +413,22 @@ def run_retrain_subprocess():
     global retrain_state
     import subprocess
     try:
+        # retrain.sh already tee's everything (its own log() calls, plus
+        # train_iso.py/train_xgb.py's stdout) into logs/retrain.log, so
+        # nothing here needs to re-capture it. Piping to Popen's stdout and
+        # then calling wait() without ever reading that pipe was a classic
+        # subprocess deadlock: once the training scripts' combined output
+        # exceeds the OS pipe buffer (~64KB — easy to hit given xgboost's
+        # per-round logging plus the validation report), the child blocks
+        # writing and wait() blocks right along with it, even though the
+        # model files were already written to disk minutes earlier. Discard
+        # the pipe instead — retrain.log remains the source of truth for
+        # output, and status now reflects the process's real end state.
         process = subprocess.Popen(
             ["bash", "retrain.sh"],
             cwd=BASE_DIR,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             text=True
         )
         try:

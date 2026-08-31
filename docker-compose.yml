@@ -126,6 +126,13 @@ services:
       - "9000"
     volumes:
       - ./ml-waf/models:/app/models
+      # retrain.sh (invoked by ml_server.py's /retrain) tee's its own log
+      # to logs/retrain.log — without this mount that only landed in the
+      # container's ephemeral layer, so the host-visible retrain.log was a
+      # stale image-build-time snapshot that silently stopped tracking
+      # real runs (model versions kept advancing with no matching log
+      # entries appearing on the host).
+      - ./ml-waf/logs:/app/logs
       - ./backend/app/data:/opt/ModSecurity/WAF_GUI/backend/app/data
       # Read-only: lets crs_audit_enrichment.py backfill real per-request
       # CRS scores into ml_events from ModSecurity's own audit log (see

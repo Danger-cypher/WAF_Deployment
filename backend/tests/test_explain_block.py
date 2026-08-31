@@ -138,6 +138,11 @@ def test_explain_returns_merged_view_when_ml_event_found(client_with_fake_ch, ma
     assert body["waf_event"]["rule_id"] == "942100"
     assert body["ml_event"]["decision"] == "block"
     assert "3-second window" in body["ml_match_note"]
+    # P2 item 7 — the plain-language translation of the above, wired all
+    # the way through the real route (test_threat_explain.py covers the
+    # generator's own logic in isolation).
+    assert "SQL Injection" in body["plain_summary"]
+    assert "942100" in body["plain_summary"]
 
 
 def test_explain_handles_no_ml_match_gracefully(client_with_fake_ch, make_user, monkeypatch):
@@ -162,3 +167,5 @@ def test_explain_handles_no_ml_match_gracefully(client_with_fake_ch, make_user, 
     body = r.json()
     assert body["ml_event"] is None
     assert "blocked it natively" in body["ml_match_note"]
+    # The rule-match sentence must still appear even with no ML event to draw from.
+    assert "SQL Injection" in body["plain_summary"]

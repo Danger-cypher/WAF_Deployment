@@ -216,6 +216,38 @@ def calculate_stats(hours: Optional[int] = None) -> Dict[str, Any]:
     return result
 
 
+def calculate_stats_trend(window_hours: int = 24) -> Dict[str, Any]:
+    """
+    Current vs. previous `window_hours`-sized window, for the Overview KPI
+    trend badges (P0 of the WAAP console teardown roadmap — pairs every
+    tile with a delta against the prior period, matching AWS WAF's pattern).
+
+    Scoped to the ClickHouse-native fields only (total_blocked, sqli_count,
+    xss_count, total_unique_ips) — total_requests additionally needs
+    _get_total_nginx_requests' raw access-log scan, which has no cheap way
+    to shift by an offset (it's a straight line-by-line file read bounded
+    only by a single "since" cutoff), so it's left out here rather than
+    made expensive. Redis-cached for 30s, same as calculate_stats.
+    """
+    cache_key = f"stats_trend:{window_hours}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        current = clickhouse_service.get_stats(window_hours, offset_hours=0)
+        previous = clickhouse_service.get_stats(window_hours, offset_hours=window_hours)
+    except Exception as e:
+        # Same reasoning as calculate_stats: don't cache a transient failure
+        # as if it were real "no change" data.
+        logger.error(f"calculate_stats_trend: ClickHouse query failed, not caching: {e}")
+        return {"current": None, "previous": None}
+
+    result = {"current": current, "previous": previous}
+    _cache_set(cache_key, result)
+    return result
+
+
 def get_top_ips(limit: int = 10, hours: Optional[int] = None) -> List[Dict[str, Any]]:
     """Top attacking IPs from ClickHouse, enriched with Redis AbuseIPDB scores."""
     cache_key = f"top_ips:{limit}:{hours}"
@@ -288,6 +320,59 @@ def get_top_rules(limit: int = 10, hours: Optional[int] = None) -> List[Dict[str
         result = clickhouse_service.get_top_rules(limit=limit, hours=hours)
     except Exception as e:
         logger.error(f"get_top_rules: ClickHouse query failed, not caching: {e}")
+        return []
+    if result:
+        _cache_set(cache_key, result)
+    return result
+
+
+def get_top_uris(limit: int = 10, hours: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Top targeted endpoints from ClickHouse — the "by target" counterpart
+    to get_top_ips' "by source" (P0 item 3 of the WAAP console teardown
+    roadmap)."""
+    cache_key = f"top_uris:{limit}:{hours}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = clickhouse_service.get_top_uris(limit=limit, hours=hours)
+    except Exception as e:
+        logger.error(f"get_top_uris: ClickHouse query failed, not caching: {e}")
+        return []
+    if result:
+        _cache_set(cache_key, result)
+    return result
+
+
+def get_bot_traffic_breakdown(hours: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Traffic volume by bot/human category (P1 item 5 of the WAAP console
+    teardown roadmap)."""
+    cache_key = f"bot_breakdown:{hours}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = clickhouse_service.get_bot_traffic_breakdown(hours=hours)
+    except Exception as e:
+        logger.error(f"get_bot_traffic_breakdown: ClickHouse query failed, not caching: {e}")
+        return []
+    if result:
+        _cache_set(cache_key, result)
+    return result
+
+
+def get_top_bot_identities(hours: Optional[int] = None, limit: int = 10) -> List[Dict[str, Any]]:
+    """The specific User-Agent strings behind the non-human traffic
+    categories — the "which bots, by name" counterpart to the aggregate
+    breakdown above."""
+    cache_key = f"bot_identities:{limit}:{hours}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = clickhouse_service.get_top_bot_identities(hours=hours, limit=limit)
+    except Exception as e:
+        logger.error(f"get_top_bot_identities: ClickHouse query failed, not caching: {e}")
         return []
     if result:
         _cache_set(cache_key, result)

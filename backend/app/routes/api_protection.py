@@ -2,9 +2,10 @@ import hashlib
 import os
 import re
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from typing import List, Dict, Any
+from app.models.response_models import PaginatedEndpoints
 from app.services import db_service, clickhouse_service, api_spec
 from app.services.auth import require_admin, require_any_role, TokenData
 
@@ -175,34 +176,65 @@ def calculate_endpoint_score(ep: Dict[str, Any]) -> Dict[str, Any]:
     return ep_copy
 
 
-@router.get("/api-protection/endpoints", response_model=List[Dict[str, Any]])
-def get_discovered_endpoints(current_user: TokenData = Depends(require_any_role)):
-    """Returns all discovered endpoints with scores. Discovery itself runs as
-    a background task (see api_discovery.start_api_discovery_service) rather
-    than inline here, so this is a plain read."""
+def _paginate_scored(scored: List[Dict[str, Any]], page: int, size: int) -> Dict[str, Any]:
+    """Slices an already-scored endpoint list for one page. Pagination is
+    applied here, in Python, AFTER the (Redis-cached) fetch+score step —
+    not pushed into the ClickHouse query — because that step was already
+    cheap (~46ms for the full ~380-row set, shared across every page via
+    the existing cache; see clickhouse_service._cached). The real cost this
+    fixes is what happened after: the frontend previously received and
+    rendered every row unpaginated (up to ~380 of them, ~189KB of JSON,
+    every 10s poll) regardless of which page it would ever actually show."""
+    total = len(scored)
+    start = (page - 1) * size
+    return {"data": scored[start:start + size], "total": total, "page": page, "size": size}
+
+
+@router.get("/api-protection/endpoints", response_model=PaginatedEndpoints)
+def get_discovered_endpoints(
+    page: int = Query(1, ge=1),
+    size: int = Query(25, ge=1, le=200),
+    current_user: TokenData = Depends(require_any_role),
+):
+    """Returns discovered endpoints with scores, one page at a time.
+    Discovery itself runs as a background task (see
+    api_discovery.start_api_discovery_service) rather than inline here, so
+    this is a plain read."""
     endpoints = _overlay_real_threat_counts(db_service.get_all_discovered_endpoints())
-    return [calculate_endpoint_score(ep) for ep in endpoints]
+    scored = [calculate_endpoint_score(ep) for ep in endpoints]
+    return _paginate_scored(scored, page, size)
 
 
-@router.get("/api-protection/recently-discovered", response_model=List[Dict[str, Any]])
-def get_recently_discovered(current_user: TokenData = Depends(require_any_role)):
-    """Returns endpoints discovered in the last 48 hours."""
+@router.get("/api-protection/recently-discovered", response_model=PaginatedEndpoints)
+def get_recently_discovered(
+    page: int = Query(1, ge=1),
+    size: int = Query(25, ge=1, le=200),
+    current_user: TokenData = Depends(require_any_role),
+):
+    """Returns endpoints discovered in the last 48 hours, one page at a time."""
     endpoints = _overlay_real_threat_counts(db_service.get_recently_discovered_endpoints(hours=48))
-    return [calculate_endpoint_score(ep) for ep in endpoints]
+    scored = [calculate_endpoint_score(ep) for ep in endpoints]
+    return _paginate_scored(scored, page, size)
 
 
-@router.get("/api-protection/stale-endpoints", response_model=List[Dict[str, Any]])
-def get_stale_endpoints(days: int = 30, current_user: TokenData = Depends(require_any_role)):
+@router.get("/api-protection/stale-endpoints", response_model=PaginatedEndpoints)
+def get_stale_endpoints(
+    days: int = 30,
+    page: int = Query(1, ge=1),
+    size: int = Query(25, ge=1, le=200),
+    current_user: TokenData = Depends(require_any_role),
+):
     """
-    Returns endpoints not seen in at least `days` days — shadow/zombie API
-    candidates: things that used to receive traffic (so they were real,
-    reachable endpoints) but have gone quiet. Could mean deprecated-but-
-    still-live, forgotten debug/admin routes, or just a seasonal consumer —
-    worth a human look either way, which is why this is a separate view
-    rather than an automatic action.
+    Returns endpoints not seen in at least `days` days, one page at a
+    time — shadow/zombie API candidates: things that used to receive
+    traffic (so they were real, reachable endpoints) but have gone quiet.
+    Could mean deprecated-but-still-live, forgotten debug/admin routes, or
+    just a seasonal consumer — worth a human look either way, which is why
+    this is a separate view rather than an automatic action.
     """
     endpoints = _overlay_real_threat_counts(db_service.get_stale_discovered_endpoints(days=days))
-    return [calculate_endpoint_score(ep) for ep in endpoints]
+    scored = [calculate_endpoint_score(ep) for ep in endpoints]
+    return _paginate_scored(scored, page, size)
 
 
 @router.get("/api-protection/analytics", response_model=Dict[str, Any])

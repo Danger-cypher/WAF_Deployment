@@ -8,7 +8,7 @@ import { NoLogsEmptyState, NoSearchResultsEmptyState } from '../components/Empty
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
 
-export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSearch, onConsumeInitialSearch }) {
+export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSearch, initialSeverity, initialAttackType, onConsumeInitialSearch }) {
   const { toast, showToast } = useToast();
   const [logs, setLogs] = useState([]);
   const [total, setTotal] = useState(0);
@@ -28,17 +28,18 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSea
       if (settings.liveUpdates !== undefined) setLiveUpdates(settings.liveUpdates);
     }).catch(err => console.error("Failed to load general settings", err));
   }, []);
-  // Seeded once from the command palette's IP search, if that's how this
-  // page was reached (App.jsx remounts this component on every tab switch,
-  // so this only ever applies at that first mount).
+  // Seeded once from the command palette's IP search, or from clicking a
+  // segment on Overview's Attack Vectors / Threat Severity charts, if
+  // that's how this page was reached (App.jsx remounts this component on
+  // every tab switch, so this only ever applies at that first mount).
   const [search, setSearch] = useState(initialSearch || '');
+  const [severityFilter, setSeverityFilter] = useState(initialSeverity || '');
+  const [attackFilter, setAttackFilter] = useState(initialAttackType || '');
 
   useEffect(() => {
-    if (initialSearch) onConsumeInitialSearch?.();
+    if (initialSearch || initialSeverity || initialAttackType) onConsumeInitialSearch?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [severityFilter, setSeverityFilter] = useState('');
-  const [attackFilter, setAttackFilter] = useState('');
   const [trafficTab, setTrafficTab] = useState('all');
   const [focusMode, setFocusMode] = useState(false);
   const [sortField, setSortField] = useState('timestamp');

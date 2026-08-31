@@ -10,7 +10,9 @@ from app.services.auth import require_any_role, TokenData
 from app.services.log_reader import get_all_logs
 from app.services.stats_calculator import (
     calculate_stats,
+    calculate_stats_trend,
     get_top_ips,
+    get_top_uris,
     get_attack_types_distribution,
     get_timeline,
     get_top_rules,
@@ -39,6 +41,19 @@ async def get_general_stats(
     return StatsResponse(**stats)
 
 
+@router.get("/stats/trend")
+async def get_stats_trend(
+    window_hours: int = Query(24, ge=1, le=168, description="Size of the comparison window, in hours"),
+    current_user: TokenData = Depends(require_any_role)
+):
+    """
+    Current vs. previous `window_hours` window — powers the Overview KPI
+    trend badges (an up/down delta against the prior period, next to each
+    metric's all-time total).
+    """
+    return await asyncio.to_thread(calculate_stats_trend, window_hours)
+
+
 @router.get("/top-ips", response_model=List[Dict[str, Any]])
 async def get_top_attacking_ips(
     hours: int = Query(None, description="Timeframe in hours"),
@@ -48,6 +63,18 @@ async def get_top_attacking_ips(
     Get top attacking IPs.
     """
     return await asyncio.to_thread(get_top_ips, hours=hours)
+
+
+@router.get("/top-uris", response_model=List[Dict[str, Any]])
+async def get_top_targeted_uris(
+    hours: int = Query(None, description="Timeframe in hours"),
+    limit: int = Query(10, ge=1, le=50),
+    current_user: TokenData = Depends(require_any_role)
+):
+    """
+    Get most-targeted endpoints (blocked requests grouped by URI).
+    """
+    return await asyncio.to_thread(get_top_uris, limit=limit, hours=hours)
 
 
 @router.get("/attack-types", response_model=List[Dict[str, Any]])

@@ -137,6 +137,21 @@ export async function getStats(hours) {
 }
 
 /**
+ * Current vs. previous `windowHours` window ({current, previous}, each a
+ * stats object or null if ClickHouse was unavailable) — powers the
+ * Overview KPI trend badges.
+ */
+export async function getStatsTrend(windowHours = 24) {
+  try {
+    const response = await fetch(`${BASE_URL}/stats/trend?window_hours=${windowHours}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch stats trend:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch attack timeline
  */
 export async function getTimeline(hours) {
@@ -174,6 +189,21 @@ export async function getTopIPs(hours) {
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch top IPs:", error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch most-targeted endpoints (blocked requests grouped by URI) — the
+ * "by target" counterpart to getTopIPs' "by source".
+ */
+export async function getTopUris(hours) {
+  try {
+    const url = hours ? `${BASE_URL}/top-uris?hours=${hours}` : `${BASE_URL}/top-uris`;
+    const response = await fetch(url, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch top URIs:", error);
     throw error;
   }
 }
@@ -719,6 +749,36 @@ export async function getDdosAnalytics() {
 }
 
 /**
+ * Fetch traffic volume by bot/human category (User-Agent based), each with
+ * its own blocked count.
+ */
+export async function getBotTrafficBreakdown(hours) {
+  try {
+    const url = hours ? `${BASE_URL}/ddos/bot-traffic?hours=${hours}` : `${BASE_URL}/ddos/bot-traffic`;
+    const response = await fetch(url, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch bot traffic breakdown:", error);
+    throw error;
+  }
+}
+
+/**
+ * Fetch the specific User-Agent strings behind the non-human traffic
+ * categories.
+ */
+export async function getTopBotIdentities(hours) {
+  try {
+    const url = hours ? `${BASE_URL}/ddos/bot-identities?hours=${hours}` : `${BASE_URL}/ddos/bot-identities`;
+    const response = await fetch(url, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch top bot identities:", error);
+    throw error;
+  }
+}
+
+/**
  * Save Anti-DDoS & Bot Mitigation settings
  */
 export async function saveDdosBotSettings(settings) {
@@ -1032,9 +1092,9 @@ export async function getExclusionsHistory() {
 /**
  * Fetch all auto-discovered API endpoints and their scoring
  */
-export async function getDiscoveredEndpoints() {
+export async function getDiscoveredEndpoints(page = 1, size = 25) {
   try {
-    const response = await fetch(`${BASE_URL}/api-protection/endpoints`, { cache: 'no-store' });
+    const response = await fetch(`${BASE_URL}/api-protection/endpoints?page=${page}&size=${size}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch discovered endpoints:", error);
@@ -1045,9 +1105,9 @@ export async function getDiscoveredEndpoints() {
 /**
  * Fetch recently discovered API endpoints (discovered in last 48h)
  */
-export async function getRecentlyDiscoveredEndpoints() {
+export async function getRecentlyDiscoveredEndpoints(page = 1, size = 25) {
   try {
-    const response = await fetch(`${BASE_URL}/api-protection/recently-discovered`, { cache: 'no-store' });
+    const response = await fetch(`${BASE_URL}/api-protection/recently-discovered?page=${page}&size=${size}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch recently discovered endpoints:", error);
@@ -1059,9 +1119,9 @@ export async function getRecentlyDiscoveredEndpoints() {
  * Fetch API endpoints not seen in at least `days` days — shadow/zombie
  * API candidates (default 30 days, matches the backend default).
  */
-export async function getStaleEndpoints(days = 30) {
+export async function getStaleEndpoints(days = 30, page = 1, size = 25) {
   try {
-    const response = await fetch(`${BASE_URL}/api-protection/stale-endpoints?days=${days}`, { cache: 'no-store' });
+    const response = await fetch(`${BASE_URL}/api-protection/stale-endpoints?days=${days}&page=${page}&size=${size}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch stale endpoints:", error);

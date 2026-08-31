@@ -22,6 +22,8 @@ import {
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import SettingsAccordionCard from '../components/SettingsAccordionCard';
+import RecommendedFlag from '../components/RecommendedFlag';
+import { RECOMMENDED_BASELINE } from '../utils/recommendedBaseline';
 import Toast from '../components/Toast';
 import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
@@ -933,6 +935,19 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
     }
   };
 
+  // Sidebar dots — "does this section have anything drifted from the
+  // recommended baseline" (P2 item 8), so an admin can spot it without
+  // opening every tab, same idea as SettingsAccordionCard's status pill.
+  const wafDriftedFromBaseline = secRuleEngine !== RECOMMENDED_BASELINE.waf.secRuleEngine || detectionMode !== RECOMMENDED_BASELINE.waf.detectionMode;
+  const logsDriftedFromBaseline = auditEnabled !== RECOMMENDED_BASELINE.logs.auditEnabled;
+  const hardeningDriftedFromBaseline = hstsEnabled !== RECOMMENDED_BASELINE.hardening.hsts_enabled || serverCloaking !== RECOMMENDED_BASELINE.hardening.server_cloaking;
+  const sidebarDriftDot = (
+    <span
+      title="A setting in this section differs from the recommended baseline"
+      style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--warning-color)', marginLeft: 'auto', flexShrink: 0 }}
+    />
+  );
+
   return (
     <motion.div
       className="settings-container animate-fade-in"
@@ -1077,12 +1092,12 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
           )}
           {matchesSettingsSearch('WAF Engine Policies') && (
             <button onClick={() => setActiveSettingTab('waf')} className={`settings-tab-btn ${activeSettingTab === 'waf' ? 'active' : ''}`}>
-              <ShieldCheck size={20} /> WAF Engine Policies
+              <ShieldCheck size={20} /> WAF Engine Policies {wafDriftedFromBaseline && sidebarDriftDot}
             </button>
           )}
           {matchesSettingsSearch('Log Pipeline') && (
             <button onClick={() => setActiveSettingTab('logs')} className={`settings-tab-btn ${activeSettingTab === 'logs' ? 'active' : ''}`}>
-              <Database size={20} /> Log Pipeline
+              <Database size={20} /> Log Pipeline {logsDriftedFromBaseline && sidebarDriftDot}
             </button>
           )}
 
@@ -1091,7 +1106,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
           )}
           {matchesSettingsSearch('Server Hardening') && (
             <button onClick={() => setActiveSettingTab('hardening')} className={`settings-tab-btn ${activeSettingTab === 'hardening' ? 'active' : ''}`}>
-              <Server size={20} /> Server Hardening
+              <Server size={20} /> Server Hardening {hardeningDriftedFromBaseline && sidebarDriftDot}
             </button>
           )}
 
@@ -1226,7 +1241,10 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
 
                 <form onSubmit={handleSaveWAF} onChange={() => markDirty('waf')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-secruleengine-posture">SecRuleEngine Posture</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} htmlFor="settings-secruleengine-posture">
+                      SecRuleEngine Posture
+                      <RecommendedFlag current={secRuleEngine} recommended={RECOMMENDED_BASELINE.waf.secRuleEngine} label="On" />
+                    </label>
                     <select id="settings-secruleengine-posture" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={secRuleEngine} onChange={(e) => setSecRuleEngine(e.target.value)}>
                       <option value="On">On (Active Blocking Guard)</option>
                       <option value="DetectionOnly">DetectionOnly (Simulate Attacks)</option>
@@ -1234,7 +1252,10 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                     </select>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-response-filtering-mode">Response Filtering Mode</label>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} htmlFor="settings-response-filtering-mode">
+                      Response Filtering Mode
+                      <RecommendedFlag current={detectionMode} recommended={RECOMMENDED_BASELINE.waf.detectionMode} label="Strict Block" />
+                    </label>
                     <select id="settings-response-filtering-mode" className="filter-select" style={{ width: '100%', padding: '12px', fontSize: '14px' }} value={detectionMode} onChange={(e) => setDetectionMode(e.target.value)}>
                       <option value="Blocking">Strict Block & Drop (403 Forbidden)</option>
                       <option value="Detection">Log Analysis Only (Bypass drops)</option>
@@ -1281,7 +1302,10 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                 <form onSubmit={handleSaveLogs} onChange={() => markDirty('logs')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>SecAuditEngine Logging</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        SecAuditEngine Logging
+                        <RecommendedFlag current={auditEnabled} recommended={RECOMMENDED_BASELINE.logs.auditEnabled} label="On" />
+                      </span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Record details of flagged transactions</span>
                     </div>
                     <button type="button" role="switch" aria-checked={auditEnabled} aria-label="SecAuditEngine Logging" className={`toggle-switch ${auditEnabled ? 'active' : ''}`} onClick={() => setAuditEnabled(!auditEnabled)}>
@@ -1336,7 +1360,10 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                 <form onSubmit={handleSaveHardening} onChange={() => markDirty('hardening')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Strict HTTPS (HSTS)</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        Strict HTTPS (HSTS)
+                        <RecommendedFlag current={hstsEnabled} recommended={RECOMMENDED_BASELINE.hardening.hsts_enabled} label="On" />
+                      </span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Enforce Strict-Transport-Security header</span>
                     </div>
                     <button type="button" role="switch" aria-checked={hstsEnabled} aria-label="Strict HTTPS (HSTS)" className={`toggle-switch ${hstsEnabled ? 'active' : ''}`} onClick={() => setHstsEnabled(!hstsEnabled)}>
@@ -1364,7 +1391,10 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Server Cloaking</span>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        Server Cloaking
+                        <RecommendedFlag current={serverCloaking} recommended={RECOMMENDED_BASELINE.hardening.server_cloaking} label="On" />
+                      </span>
                       <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Scrub NGINX tokens & Express header disclosures</span>
                     </div>
                     <button type="button" role="switch" aria-checked={serverCloaking} aria-label="Server Cloaking" className={`toggle-switch ${serverCloaking ? 'active' : ''}`} onClick={() => setServerCloaking(!serverCloaking)}>

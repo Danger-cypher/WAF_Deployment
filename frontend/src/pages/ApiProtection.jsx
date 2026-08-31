@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, BarChart2, Clock, FileUp, Globe, RefreshCw, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart2, ChevronLeft, ChevronRight, Clock, FileUp, Globe, RefreshCw, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import {
   getApiProtectionAnalytics, getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getStaleEndpoints,
@@ -58,9 +58,17 @@ function suggestLimits(ep) {
 export default function ApiProtection() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
+  // Each holds just the current page's rows now — was every matching row,
+  // unpaginated (up to ~380 of them), refetched and fully re-rendered on
+  // every 10s poll regardless of which page (if any) was ever visible.
   const [endpoints, setEndpoints] = useState([]);
+  const [endpointsTotal, setEndpointsTotal] = useState(0);
   const [recentlyDiscovered, setRecentlyDiscovered] = useState([]);
+  const [recentlyDiscoveredTotal, setRecentlyDiscoveredTotal] = useState(0);
   const [staleEndpoints, setStaleEndpoints] = useState([]);
+  const [staleEndpointsTotal, setStaleEndpointsTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
   const [analytics, setAnalytics] = useState(null);
   const [activeTab, setActiveTab] = useState('inventory'); // 'inventory', 'recent', 'stale'
   const [topListTab, setTopListTab] = useState('consumed'); // 'consumed', 'resource'
@@ -103,18 +111,21 @@ export default function ApiProtection() {
     isFetchingRef.current = true;
     try {
       const [epsData, recentData, staleData, analyticsData, ddosData, blockedData, specData, driftData] = await Promise.all([
-        getDiscoveredEndpoints(),
-        getRecentlyDiscoveredEndpoints(),
-        getStaleEndpoints(),
+        getDiscoveredEndpoints(page, PAGE_SIZE),
+        getRecentlyDiscoveredEndpoints(page, PAGE_SIZE),
+        getStaleEndpoints(30, page, PAGE_SIZE),
         getApiProtectionAnalytics(),
         getDdosBotSettings(),
         getBlockedEndpoints(),
         getApiSpec(),
         getApiDrift(),
       ]);
-      setEndpoints(epsData);
-      setRecentlyDiscovered(recentData);
-      setStaleEndpoints(staleData);
+      setEndpoints(epsData.data);
+      setEndpointsTotal(epsData.total);
+      setRecentlyDiscovered(recentData.data);
+      setRecentlyDiscoveredTotal(recentData.total);
+      setStaleEndpoints(staleData.data);
+      setStaleEndpointsTotal(staleData.total);
       setAnalytics(analyticsData);
       setDdosSettings(ddosData);
       setBlockedEndpoints(blockedData);
@@ -131,6 +142,9 @@ export default function ApiProtection() {
   };
 
   useEffect(() => {
+    // Re-fetches immediately on mount AND whenever `page` changes (a page
+    // click shouldn't have to wait for the next poll tick) — the 10s
+    // interval still covers the "just sitting on this page" case.
     const timer = setTimeout(() => {
       fetchData();
     }, 0);
@@ -139,7 +153,19 @@ export default function ApiProtection() {
       clearTimeout(timer);
       clearInterval(interval);
     };
-  }, []);
+    // fetchData is redefined every render and reads `page` via closure —
+    // deliberately depending on `page` alone (not fetchData itself, which
+    // would defeat the point by re-running on every unrelated render too).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  // Every tab reads from a different backend list — jumping back to page 1
+  // on tab switch avoids e.g. landing on "page 4" of a 1-row Recently
+  // Discovered list just because that's where Stale happened to be.
+  const switchTab = (tab) => {
+    setActiveTab(tab);
+    setPage(1);
+  };
 
   const isProtected = (ep) => {
     const rules = ddosSettings?.advanced_rules || [];
@@ -343,6 +369,8 @@ export default function ApiProtection() {
   ] : [];
 
   const activeRows = activeTab === 'inventory' ? endpoints : activeTab === 'recent' ? recentlyDiscovered : staleEndpoints;
+  const activeTotal = activeTab === 'inventory' ? endpointsTotal : activeTab === 'recent' ? recentlyDiscoveredTotal : staleEndpointsTotal;
+  const totalPages = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
   const emptyStateMessage = activeTab === 'stale'
     ? "No stale endpoints — nothing discovered has gone 30+ days without traffic."
     : 'No discovered endpoints listed.';
@@ -523,7 +551,7 @@ export default function ApiProtection() {
           <div className="btn-group" style={{ display: 'flex', gap: '8px', padding: '2px', backgroundColor: 'var(--surface-subtle)', borderRadius: '6px' }}>
             <button
               className={`tab-btn ${activeTab === 'inventory' ? 'active' : ''}`}
-              onClick={() => setActiveTab('inventory')}
+              onClick={() => switchTab('inventory')}
               style={{
                 border: 'none',
                 padding: '8px 16px',
@@ -539,7 +567,7 @@ export default function ApiProtection() {
             </button>
             <button
               className={`tab-btn ${activeTab === 'recent' ? 'active' : ''}`}
-              onClick={() => setActiveTab('recent')}
+              onClick={() => switchTab('recent')}
               style={{
                 border: 'none',
                 padding: '8px 16px',
@@ -555,7 +583,7 @@ export default function ApiProtection() {
             </button>
             <button
               className={`tab-btn ${activeTab === 'stale' ? 'active' : ''}`}
-              onClick={() => setActiveTab('stale')}
+              onClick={() => switchTab('stale')}
               title="Endpoints that used to receive traffic but haven't in 30+ days — possible deprecated/forgotten routes"
               style={{
                 border: 'none',
@@ -568,7 +596,7 @@ export default function ApiProtection() {
                 fontWeight: activeTab === 'stale' ? 600 : 500
               }}
             >
-              Stale / Zombie (30d+){staleEndpoints.length > 0 ? ` (${staleEndpoints.length})` : ''}
+              Stale / Zombie (30d+){staleEndpointsTotal > 0 ? ` (${staleEndpointsTotal})` : ''}
             </button>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
@@ -608,7 +636,7 @@ export default function ApiProtection() {
             </thead>
             <tbody>
               {activeRows.length > 0 ? (
-                activeRows.map((ep, idx) => {
+                activeRows.map((ep) => {
                   // Traffic Source badge styles
                   const trafficSource = ep.traffic_source || 'Unknown';
                   const trafficBadgeStyle = (() => {
@@ -622,7 +650,12 @@ export default function ApiProtection() {
                   const trafficIcon = { External: '🌐', Internal: '🏠', Mixed: '🔀', Unknown: '❓' }[trafficSource] || '❓';
 
                   return (
-                    <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
+                    // Stable identity (same `${method} ${uri}` pattern already used for
+                    // blockingKey below), not array index — `endpoints` is a brand-new
+                    // array from every 10s poll, so an index key made React re-render
+                    // every one of these ~382 rows from scratch each tick instead of
+                    // patching just the ones that actually changed.
+                    <tr key={`${ep.method} ${ep.uri}`} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
                       <td style={{ padding: '12px 8px', ...getMethodStyle(ep.method) }}>{ep.method}</td>
                       <td style={{ padding: '12px 8px', fontFamily: 'monospace' }}>
                         <div>{ep.uri}</div>
@@ -720,6 +753,28 @@ export default function ApiProtection() {
             </tbody>
           </table>
         </div>
+
+        {totalPages > 1 && (
+          <div className="pagination-container">
+            <button
+              className="pagination-btn"
+              disabled={page === 1}
+              onClick={() => setPage(page - 1)}
+            >
+              <ChevronLeft size={16} /> Previous
+            </button>
+            <span className="pagination-info">
+              Page <strong style={{ color: 'var(--text-primary)' }}>{page}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalPages}</strong> ({activeTotal.toLocaleString()} endpoints)
+            </span>
+            <button
+              className="pagination-btn"
+              disabled={page >= totalPages}
+              onClick={() => setPage(page + 1)}
+            >
+              Next <ChevronRight size={16} />
+            </button>
+          </div>
+        )}
 
       </div>
 

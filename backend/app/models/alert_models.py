@@ -56,7 +56,14 @@ class EmailChannelConfig(BaseModel):
     smtp_host: str = Field(..., description="SMTP server hostname")
     smtp_port: int = Field(default=587, ge=1, le=65535)
     username: str = Field(..., description="SMTP username")
-    password: str = Field(..., description="SMTP password (encrypted)")
+    # Was documented as "(encrypted)" — false: alert_db_service.create_channel
+    # stores the whole config dict as plain json.dumps() text, and
+    # alert_dispatcher.EmailNotificationChannel reads this value straight
+    # through with no decrypt step. No encryption-at-rest is implemented
+    # for this or any other channel secret (Slack/generic webhook URLs,
+    # PagerDuty integration keys) — this field description should say so
+    # accurately rather than imply a protection that isn't there.
+    password: str = Field(..., description="SMTP password (stored as plain text — not encrypted at rest)")
     from_addr: EmailStr = Field(..., description="Sender email address")
     to_addrs: List[EmailStr] = Field(..., min_items=1, description="Recipient email addresses")
     use_tls: bool = Field(default=True, description="Use TLS encryption")
