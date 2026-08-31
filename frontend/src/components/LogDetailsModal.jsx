@@ -334,6 +334,16 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
                     {explainError && (
                       <div style={{ color: 'var(--danger-color)', fontSize: '12px', textAlign: 'center', padding: '10px' }}>{explainError}</div>
                     )}
+                    {/* Plain-language translation of the technical breakdown
+                        below (P2 item 7) — always present (even with no
+                        ml_event, most blocks are ModSecurity-only), shown
+                        first so an analyst gets the answer before the raw
+                        numbers; the grid below stays for whoever wants it. */}
+                    {explainData && explainData.plain_summary && (
+                      <div style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.5, padding: '10px 12px', marginBottom: '12px', background: 'var(--cyan-bg)', border: '1px solid var(--cyan-border, var(--cyan-bg))', borderRadius: '8px' }}>
+                        {explainData.plain_summary}
+                      </div>
+                    )}
                     {explainData && !explainData.ml_event && (
                       <div style={{ color: 'var(--text-muted)', fontSize: '12px', padding: '4px 0' }}>{explainData.ml_match_note}</div>
                     )}

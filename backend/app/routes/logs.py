@@ -18,6 +18,7 @@ from app.models.log_model import LogEntry, ExplainBlockResponse, MlSubScoreDetai
 from app.services.auth import require_any_role, require_admin, TokenData
 from app.services import clickhouse_service
 from app.services.log_reader import list_newest_log_files, _row_to_log_entry
+from app.services.threat_explain import generate_plain_explanation
 from app.config.settings import settings
 
 router = APIRouter()
@@ -161,7 +162,8 @@ async def explain_log_by_id(
             "the 3-second match window."
         )
 
-    return ExplainBlockResponse(waf_event=waf_event, ml_event=ml_event, ml_match_note=note)
+    summary = generate_plain_explanation(waf_event, ml_event)
+    return ExplainBlockResponse(waf_event=waf_event, ml_event=ml_event, ml_match_note=note, plain_summary=summary)
 
 
 @router.get("/debug/logs")

@@ -54,6 +54,9 @@ class ExplainBlockResponse(BaseModel):
     waf_event: LogEntry
     ml_event: Optional[MlSubScoreDetail] = None
     ml_match_note: str
+    # Plain-language translation of the above (P2 item 7 of the WAAP
+    # console teardown roadmap) — see threat_explain.generate_plain_explanation.
+    plain_summary: str
 
 
 class GroupedLogEntry(BaseModel):
