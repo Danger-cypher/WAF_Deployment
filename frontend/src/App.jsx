@@ -104,6 +104,9 @@ function App() {
   // target tab — the target page reads it once as its initial search value
   // (via the initialSearch prop below) then calls onConsumeInitialSearch to
   // clear it, so a later, ordinary visit to that tab doesn't inherit it.
+  // Overview's chart-click-to-investigate (Attack Vectors, Threat Severity)
+  // reuses this same object/shape, just populating severity/attackType
+  // instead of value — one tab, one handoff shape, whichever fields apply.
   const [pendingSearch, setPendingSearch] = useState(null);
   // Same one-time-handoff shape as pendingSearch above, for "Create Rule
   // from This Event" (Events drawer -> Virtual Patching, pre-filled with
@@ -295,6 +298,17 @@ function App() {
     setActiveTab('rules');
   };
 
+  // Overview's Attack Vectors / Threat Severity charts and Top Targeted
+  // Endpoints table — clicking a segment or row jumps to Security Events
+  // pre-filtered to it, instead of the click doing nothing beyond a
+  // tooltip. `value` reuses the same free-text search field the command
+  // palette's IP search already seeds (Top Targeted Endpoints has no
+  // structured URI filter on the Events page, just its full-text search).
+  const handleOverviewFilterEvents = ({ severity, attackType, value } = {}) => {
+    setPendingSearch({ tab: 'events', severity, attackType, value });
+    setActiveTab('events');
+  };
+
   if (window.location.pathname === '/auth/sso') {
     return (
       <SsoCallback
@@ -392,7 +406,7 @@ function App() {
         <Suspense fallback={<TabLoadingFallback />}>
           {/* Overview Tab */}
           {activeTab === 'overview' && (
-            <ThreatAnalytics key="overview" userRole={userRole} onNavigateToActivityLog={userRole === 'admin' ? handleNavigateToActivityLog : undefined} />
+            <ThreatAnalytics key="overview" userRole={userRole} username={username} onNavigateToActivityLog={userRole === 'admin' ? handleNavigateToActivityLog : undefined} onFilterEvents={handleOverviewFilterEvents} />
           )}
 
           {/* Apps & DDoS Shield Tab (id: 'protection') — Virtual Hosts (protected apps, SSL, LB) + DDoS/Bot sub-tabs */}
@@ -411,6 +425,8 @@ function App() {
               onMarkFalsePositive={handleTriggerMarkFp}
               onCreateRule={userRole === 'admin' ? handleCreateRuleFromLog : undefined}
               initialSearch={pendingSearch?.tab === 'events' ? pendingSearch.value : undefined}
+              initialSeverity={pendingSearch?.tab === 'events' ? pendingSearch.severity : undefined}
+              initialAttackType={pendingSearch?.tab === 'events' ? pendingSearch.attackType : undefined}
               onConsumeInitialSearch={() => setPendingSearch(null)}
             />
           )}

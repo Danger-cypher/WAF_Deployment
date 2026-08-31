@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import {
   Activity, AlertTriangle as AlertTriangleIcon, Code, Database, Globe, Lock, ShieldAlert,
   CheckCircle2, XCircle, AlertCircle, ShieldCheck, History, ArrowRight,
+  SlidersHorizontal, ChevronUp, ChevronDown, RotateCcw, X as CloseIcon,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
@@ -10,9 +11,10 @@ import {
 } from 'recharts';
 import {
   getStats, getTimeline, getAttackTypes, getTopIPs, getTopRules, getSeverityDistribution,
-  getGeneralSettings, getHealth, getBackgroundTasksHealth, getAuditLog,
+  getGeneralSettings, getHealth, getBackgroundTasksHealth, getAuditLog, getStatsTrend, getTopUris,
 } from '../services/api';
 import { NoTrafficEmptyState, FetchErrorState } from '../components/EmptyStates';
+import { DEFAULT_KPI_ORDER, KPI_LABELS, loadKpiPrefs, saveKpiPrefs } from '../utils/kpiPrefs';
 
 function AnimatedNumber({ value = 0 }) {
   const safeValue = value || 0;
@@ -118,7 +120,108 @@ function HealthChip({ label, ok, neutral = false, okLabel = 'Healthy', downLabel
   );
 }
 
-export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
+// Real KPI trend badge — replaces the 4 metric cards' old static, hardcoded
+// arrow+label ("Active blocking", "Inbound vectors"...) that never actually
+// reflected data, always pointed the same direction. `trend-up`/`trend-down`
+// are existing CSS classes already colored correctly for THIS domain (up in
+// attack volume is red/bad, down is green/good — the opposite of a typical
+// growth-metric dashboard), so this only needed to compute a real delta and
+// reuse them, not invent new styling.
+function TrendBadge({ current, previous }) {
+  if (current == null || previous == null) return null; // ClickHouse was unavailable for the trend query
+  if (previous === 0) {
+    if (current === 0) {
+      return <div className="metric-trend" style={{ color: 'var(--text-muted)' }}><span>No change vs. prior 24h</span></div>;
+    }
+    return (
+      <div className="metric-trend trend-up">
+        <span className="trend-arrow">↑</span>
+        <span>+{current.toLocaleString()} new vs. prior 24h</span>
+      </div>
+    );
+  }
+  const deltaPct = ((current - previous) / previous) * 100;
+  const rounded = Math.round(Math.abs(deltaPct));
+  if (rounded === 0) {
+    return <div className="metric-trend" style={{ color: 'var(--text-muted)' }}><span>Flat vs. prior 24h</span></div>;
+  }
+  const isUp = deltaPct > 0;
+  return (
+    <div className={`metric-trend ${isUp ? 'trend-up' : 'trend-down'}`}>
+      <span className="trend-arrow">{isUp ? '↑' : '↓'}</span>
+      <span>{rounded}% vs. prior 24h</span>
+    </div>
+  );
+}
+
+// The customize panel — a lightweight popover (button + up/down + checkbox
+// per card), not a drag-and-drop builder. Deliberately no drag library:
+// keyboard-operable for free, and reorder-by-6-items-at-most doesn't need
+// the complexity a real drag interaction brings.
+export function KpiCustomizePanel({ order, hidden, onChange, onClose }) {
+  const move = (id, dir) => {
+    const idx = order.indexOf(id);
+    const swapWith = idx + dir;
+    if (swapWith < 0 || swapWith >= order.length) return;
+    const next = [...order];
+    [next[idx], next[swapWith]] = [next[swapWith], next[idx]];
+    onChange({ order: next, hidden });
+  };
+
+  const toggle = (id) => {
+    const isHidden = hidden.includes(id);
+    if (!isHidden && hidden.length >= order.length - 1) return; // keep at least one card visible
+    onChange({ order, hidden: isHidden ? hidden.filter((h) => h !== id) : [...hidden, id] });
+  };
+
+  const reset = () => onChange({ order: DEFAULT_KPI_ORDER, hidden: [] });
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Customize KPI cards"
+      style={{
+        position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 30, width: '280px',
+        background: 'var(--surface, var(--bg-secondary))', border: '1px solid var(--border-strong)',
+        borderRadius: '10px', boxShadow: '0 12px 32px rgba(0,0,0,0.25)', padding: '12px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>Customize cards</span>
+        <button type="button" onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', padding: '2px' }}>
+          <CloseIcon size={14} />
+        </button>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        {order.map((id, idx) => {
+          const isHidden = hidden.includes(id);
+          const lastVisible = !isHidden && hidden.length >= order.length - 1;
+          return (
+            <div key={id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 2px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, fontSize: '12.5px', color: isHidden ? 'var(--text-muted)' : 'var(--text-primary)', cursor: lastVisible ? 'not-allowed' : 'pointer' }}>
+                <input type="checkbox" checked={!isHidden} disabled={lastVisible} onChange={() => toggle(id)} />
+                {KPI_LABELS[id]}
+              </label>
+              <button type="button" onClick={() => move(id, -1)} disabled={idx === 0} aria-label={`Move ${KPI_LABELS[id]} up`}
+                style={{ background: 'none', border: 'none', color: idx === 0 ? 'var(--text-muted)' : 'var(--text-secondary)', cursor: idx === 0 ? 'default' : 'pointer', display: 'flex', padding: '2px' }}>
+                <ChevronUp size={13} />
+              </button>
+              <button type="button" onClick={() => move(id, 1)} disabled={idx === order.length - 1} aria-label={`Move ${KPI_LABELS[id]} down`}
+                style={{ background: 'none', border: 'none', color: idx === order.length - 1 ? 'var(--text-muted)' : 'var(--text-secondary)', cursor: idx === order.length - 1 ? 'default' : 'pointer', display: 'flex', padding: '2px' }}>
+                <ChevronDown size={13} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <button type="button" onClick={reset} style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '10px', background: 'none', border: 'none', color: 'var(--accent-color)', fontSize: '11.5px', cursor: 'pointer', padding: 0 }}>
+        <RotateCcw size={11} /> Reset to default
+      </button>
+    </div>
+  );
+}
+
+export default function ThreatAnalytics({ userRole, username, onNavigateToActivityLog, onFilterEvents }) {
   const [stats, setStats] = useState({
     total_requests: 0,
     total_blocked: 0,
@@ -132,6 +235,29 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
   const [timelineData, setTimelineData] = useState([]);
   const [topRules, setTopRules] = useState([]);
   const [topIPs, setTopIPs] = useState([]);
+  const [topUris, setTopUris] = useState([]);
+  const [kpiPrefs, setKpiPrefs] = useState(() => loadKpiPrefs(username));
+  const [showKpiCustomizer, setShowKpiCustomizer] = useState(false);
+  const kpiCustomizerRef = React.useRef(null);
+
+  const updateKpiPrefs = (next) => {
+    setKpiPrefs(next);
+    saveKpiPrefs(username, next);
+  };
+
+  useEffect(() => {
+    if (!showKpiCustomizer) return;
+    const handlePointerDown = (e) => {
+      if (kpiCustomizerRef.current && !kpiCustomizerRef.current.contains(e.target)) setShowKpiCustomizer(false);
+    };
+    const handleKeyDown = (e) => { if (e.key === 'Escape') setShowKpiCustomizer(false); };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showKpiCustomizer]);
   // Previously one `loading` flag gated the ENTIRE page behind
   // Promise.allSettled of all 6 API calls — the whole dashboard stayed on
   // the skeleton until the SLOWEST of the six resolved, even when the other
@@ -143,6 +269,7 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
   const [distributionLoading, setDistributionLoading] = useState(true);
   const [topRulesLoading, setTopRulesLoading] = useState(true);
   const [topIPsLoading, setTopIPsLoading] = useState(true);
+  const [topUrisLoading, setTopUrisLoading] = useState(true);
   // "Has the first fetch cycle finished at all" — used only to decide
   // whether it's safe to show a terminal empty/error state (must not flash
   // "no traffic" before the first real answer has come back).
@@ -150,6 +277,10 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
   const [fetchError, setFetchError] = useState(null);
   const [refreshInterval, setRefreshInterval] = useState(3000);
   const [liveUpdates, setLiveUpdates] = useState(true);
+  // KPI trend badges — current vs. previous 24h window, from ClickHouse
+  // directly (not derived from `stats`, which is an all-time total with no
+  // window to compare against). {current, previous} or null.
+  const [statsTrend, setStatsTrend] = useState(null);
 
   // Config-health rollup — connectivity + background-task status, already
   // computed by the backend (health.py / heartbeat_registry.py) but never
@@ -268,7 +399,12 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
       .catch(err => console.warn('Top IPs unavailable (Redis may be unreachable):', err))
       .finally(() => setTopIPsLoading(false));
 
-    Promise.allSettled([statsPromise, distPromise, sevPromise, timePromise, rulesPromise, ipsPromise])
+    const urisPromise = getTopUris()
+      .then(value => setTopUris(value.slice(0, 5)))
+      .catch(err => console.error("Failed to fetch top targeted endpoints", err))
+      .finally(() => setTopUrisLoading(false));
+
+    Promise.allSettled([statsPromise, distPromise, sevPromise, timePromise, rulesPromise, ipsPromise, urisPromise])
       .finally(() => {
         setLoading(false);
         isFetchingRef.current = false;
@@ -292,6 +428,10 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
   useEffect(() => {
     const fetchHealth = () => {
       getHealth().then(setHealth).catch(err => console.error("Failed to fetch health status", err));
+      // Trend badges compare 24h windows — no need to refetch on the fast
+      // (3s) traffic-stats cycle, so it rides along with the slow 30s
+      // health poll instead, same reasoning as health/backgroundHealth above.
+      getStatsTrend(24).then(setStatsTrend).catch(err => console.error("Failed to fetch stats trend", err));
       if (isAdmin) {
         getBackgroundTasksHealth().then(setBackgroundHealth).catch(err => console.error("Failed to fetch background task health", err));
         getAuditLog(1, 5, null, 24)
@@ -494,116 +634,135 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
         </div>
       )}
 
-      {/* Row 1: 6 KPI Stat Cards */}
-
-      {/* Total Requests */}
-      <div className="metric-card cyan" style={{ gridColumn: 'span 2' }}>
-        <div className="metric-header">
-          <span className="metric-header-label">Total Requests</span>
-          <div className="metric-icon-wrapper cyan"><Activity size={14} /></div>
+      {/* Row 1: KPI Stat Cards — configurable (P1 item 6). Each visible
+          card gets flex:1 instead of a fixed 12-col grid span, so any
+          count from 1-6 (any subset can be hidden) distributes evenly
+          without leftover gaps a fixed span-2 grid would leave. */}
+      <div ref={kpiCustomizerRef} style={{ gridColumn: '1 / -1', position: 'relative' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
+          <button
+            type="button"
+            onClick={() => setShowKpiCustomizer((v) => !v)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '5px', background: 'none',
+              border: '1px solid var(--border-color)', borderRadius: '6px', padding: '4px 10px',
+              fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer',
+            }}
+          >
+            <SlidersHorizontal size={12} /> Customize
+          </button>
+          {showKpiCustomizer && (
+            <KpiCustomizePanel
+              order={kpiPrefs.order}
+              hidden={kpiPrefs.hidden}
+              onChange={updateKpiPrefs}
+              onClose={() => setShowKpiCustomizer(false)}
+            />
+          )}
         </div>
-        {statsLoading ? <SectionSkeleton variant="metric" /> : (
-          <>
-            <div className="metric-value" style={{ color: 'var(--cyan-color)' }}><AnimatedNumber value={stats.total_requests} /></div>
-            <div className="metric-sublabel">All analyzed traffic</div>
-            <div className="metric-trend">
-              <div className="pulse-dot" style={{ width: '6px', height: '6px' }} />
-              <span>Live capture</span>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px' }}>
+          {kpiPrefs.order.filter((id) => !kpiPrefs.hidden.includes(id)).map((id) => (
+            <div key={id} style={{ flex: '1 1 160px', minWidth: 0 }}>
+              {id === 'total_requests' && (
+                <div className="metric-card cyan">
+                  <div className="metric-header">
+                    <span className="metric-header-label">Total Requests</span>
+                    <div className="metric-icon-wrapper cyan"><Activity size={14} /></div>
+                  </div>
+                  {statsLoading ? <SectionSkeleton variant="metric" /> : (
+                    <>
+                      <div className="metric-value" style={{ color: 'var(--cyan-color)' }}><AnimatedNumber value={stats.total_requests} /></div>
+                      <div className="metric-sublabel">All analyzed traffic</div>
+                      <div className="metric-trend">
+                        <div className="pulse-dot" style={{ width: '6px', height: '6px' }} />
+                        <span>Live capture</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              {id === 'blocked_threats' && (
+                <div className="metric-card danger" style={{ animation: stats.recent_threats > 0 ? 'dangerPulse 2s infinite' : 'none' }}>
+                  <div className="metric-header">
+                    <span className="metric-header-label">Blocked Threats</span>
+                    <div className="metric-icon-wrapper red"><ShieldAlert size={14} /></div>
+                  </div>
+                  {statsLoading ? <SectionSkeleton variant="metric" /> : (
+                    <>
+                      <div className="metric-value" style={{ color: 'var(--danger-color)' }}><AnimatedNumber value={stats.total_blocked} /></div>
+                      <div className="metric-sublabel">HTTP 403 responses</div>
+                      <TrendBadge current={statsTrend?.current?.total_blocked} previous={statsTrend?.previous?.total_blocked} />
+                    </>
+                  )}
+                </div>
+              )}
+              {id === 'block_rate' && (
+                <div className="metric-card">
+                  <div className="metric-header">
+                    <span className="metric-header-label">Block Rate</span>
+                    <div className="metric-icon-wrapper purple"><Lock size={14} /></div>
+                  </div>
+                  {statsLoading ? <SectionSkeleton variant="metric" /> : (
+                    <>
+                      <div className="metric-value" style={{ color: 'var(--ml-color)' }}>
+                        {blockedPct}<span style={{ fontSize: '18px', fontWeight: 400, opacity: 0.7 }}>%</span>
+                      </div>
+                      <div className="metric-sublabel">Of all requests blocked</div>
+                      <div style={{ width: '100%', height: '4px', background: 'var(--border-color)', borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(parseFloat(blockedPct), 100)}%`, height: '100%', background: 'var(--ml-color)', borderRadius: '2px', transition: 'width 0.8s ease' }} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              {id === 'sqli' && (
+                <div className="metric-card warning">
+                  <div className="metric-header">
+                    <span className="metric-header-label">SQL Injection</span>
+                    <div className="metric-icon-wrapper orange"><Database size={14} /></div>
+                  </div>
+                  {statsLoading ? <SectionSkeleton variant="metric" /> : (
+                    <>
+                      <div className="metric-value" style={{ color: 'var(--warning-color)' }}><AnimatedNumber value={stats.sqli_count} /></div>
+                      <div className="metric-sublabel">Blocked SQLi attempts</div>
+                      <TrendBadge current={statsTrend?.current?.sqli_count} previous={statsTrend?.previous?.sqli_count} />
+                    </>
+                  )}
+                </div>
+              )}
+              {id === 'xss' && (
+                <div className="metric-card pink">
+                  <div className="metric-header">
+                    <span className="metric-header-label">Cross-Site Scripting</span>
+                    <div className="metric-icon-wrapper pink"><Code size={14} /></div>
+                  </div>
+                  {statsLoading ? <SectionSkeleton variant="metric" /> : (
+                    <>
+                      <div className="metric-value" style={{ color: 'var(--pink-color)' }}><AnimatedNumber value={stats.xss_count} /></div>
+                      <div className="metric-sublabel">Blocked XSS attacks</div>
+                      <TrendBadge current={statsTrend?.current?.xss_count} previous={statsTrend?.previous?.xss_count} />
+                    </>
+                  )}
+                </div>
+              )}
+              {id === 'unique_attackers' && (
+                <div className="metric-card">
+                  <div className="metric-header">
+                    <span className="metric-header-label">Unique Attackers</span>
+                    <div className="metric-icon-wrapper blue"><Globe size={14} /></div>
+                  </div>
+                  {statsLoading ? <SectionSkeleton variant="metric" /> : (
+                    <>
+                      <div className="metric-value" style={{ color: 'var(--accent-color)' }}><AnimatedNumber value={stats.total_unique_ips} /></div>
+                      <div className="metric-sublabel">Distinct source IPs blocked</div>
+                      <TrendBadge current={statsTrend?.current?.total_unique_ips} previous={statsTrend?.previous?.total_unique_ips} />
+                    </>
+                  )}
+                </div>
+              )}
             </div>
-          </>
-        )}
-      </div>
-
-      {/* Blocked Threats */}
-      <div className="metric-card danger" style={{ gridColumn: 'span 2', animation: stats.recent_threats > 0 ? 'dangerPulse 2s infinite' : 'none' }}>
-        <div className="metric-header">
-          <span className="metric-header-label">Blocked Threats</span>
-          <div className="metric-icon-wrapper red"><ShieldAlert size={14} /></div>
+          ))}
         </div>
-        {statsLoading ? <SectionSkeleton variant="metric" /> : (
-          <>
-            <div className="metric-value" style={{ color: 'var(--danger-color)' }}><AnimatedNumber value={stats.total_blocked} /></div>
-            <div className="metric-sublabel">HTTP 403 responses</div>
-            <div className="metric-trend trend-up">
-              <span className="trend-arrow">↑</span>
-              <span>Active blocking</span>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Block Rate */}
-      <div className="metric-card" style={{ gridColumn: 'span 2' }}>
-        <div className="metric-header">
-          <span className="metric-header-label">Block Rate</span>
-          <div className="metric-icon-wrapper purple"><Lock size={14} /></div>
-        </div>
-        {statsLoading ? <SectionSkeleton variant="metric" /> : (
-          <>
-            <div className="metric-value" style={{ color: 'var(--ml-color)' }}>
-              {blockedPct}<span style={{ fontSize: '18px', fontWeight: 400, opacity: 0.7 }}>%</span>
-            </div>
-            <div className="metric-sublabel">Of all requests blocked</div>
-            <div style={{ width: '100%', height: '4px', background: 'var(--border-color)', borderRadius: '2px', overflow: 'hidden' }}>
-              <div style={{ width: `${Math.min(parseFloat(blockedPct), 100)}%`, height: '100%', background: 'var(--ml-color)', borderRadius: '2px', transition: 'width 0.8s ease' }} />
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* SQL Injection */}
-      <div className="metric-card warning" style={{ gridColumn: 'span 2' }}>
-        <div className="metric-header">
-          <span className="metric-header-label">SQL Injection</span>
-          <div className="metric-icon-wrapper orange"><Database size={14} /></div>
-        </div>
-        {statsLoading ? <SectionSkeleton variant="metric" /> : (
-          <>
-            <div className="metric-value" style={{ color: 'var(--warning-color)' }}><AnimatedNumber value={stats.sqli_count} /></div>
-            <div className="metric-sublabel">Blocked SQLi attempts</div>
-            <div className="metric-trend trend-down">
-              <span className="trend-arrow">↓</span>
-              <span>Inbound vectors</span>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* XSS */}
-      <div className="metric-card pink" style={{ gridColumn: 'span 2' }}>
-        <div className="metric-header">
-          <span className="metric-header-label">Cross-Site Scripting</span>
-          <div className="metric-icon-wrapper pink"><Code size={14} /></div>
-        </div>
-        {statsLoading ? <SectionSkeleton variant="metric" /> : (
-          <>
-            <div className="metric-value" style={{ color: 'var(--pink-color)' }}><AnimatedNumber value={stats.xss_count} /></div>
-            <div className="metric-sublabel">Blocked XSS attacks</div>
-            <div className="metric-trend trend-down">
-              <span className="trend-arrow">↓</span>
-              <span>App shields active</span>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Unique Attackers */}
-      <div className="metric-card" style={{ gridColumn: 'span 2' }}>
-        <div className="metric-header">
-          <span className="metric-header-label">Unique Attackers</span>
-          <div className="metric-icon-wrapper blue"><Globe size={14} /></div>
-        </div>
-        {statsLoading ? <SectionSkeleton variant="metric" /> : (
-          <>
-            <div className="metric-value" style={{ color: 'var(--accent-color)' }}><AnimatedNumber value={stats.total_unique_ips} /></div>
-            <div className="metric-sublabel">Distinct source IPs blocked</div>
-            <div className="metric-trend trend-up">
-              <span className="trend-arrow">↑</span>
-              <Globe size={10} />
-              <span>Global distribution</span>
-            </div>
-          </>
-        )}
       </div>
 
       {/* Row 2: Timeline + Severity */}
@@ -655,7 +814,16 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
               const pct = ((s.value / maxSev) * 100).toFixed(0);
               const color = SEV_COLORS[s.name] || 'var(--accent-color)';
               return (
-                <div key={s.name}>
+                <button
+                  key={s.name}
+                  type="button"
+                  onClick={() => onFilterEvents?.({ severity: s.name })}
+                  title={`View ${s.name}-severity events`}
+                  style={{
+                    display: 'block', width: '100%', background: 'none', border: 'none', padding: 0,
+                    font: 'inherit', textAlign: 'left', cursor: onFilterEvents ? 'pointer' : 'default',
+                  }}
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
                       <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0 }} />
@@ -666,7 +834,7 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
                   <div style={{ width: '100%', height: '6px', background: 'var(--surface-hover)', borderRadius: '3px', overflow: 'hidden' }}>
                     <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: '3px', transition: 'width 0.7s ease', opacity: 0.85 }} />
                   </div>
-                </div>
+                </button>
               );
             });
           })()}
@@ -718,6 +886,8 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
                         }}
                         onMouseEnter={(_, i) => setActiveVectorIndex(i)}
                         onMouseLeave={() => setActiveVectorIndex(null)}
+                        onClick={(data) => onFilterEvents?.({ attackType: data.name })}
+                        style={{ cursor: onFilterEvents ? 'pointer' : 'default' }}
                         strokeWidth={0}
                       >
                         {attackDistribution.map((entry, index) => (
@@ -737,13 +907,25 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
                     const color = SIEM_COLORS[entry.name] || aColors[index % aColors.length];
                     const pct = ((entry.value / total) * 100).toFixed(0);
                     return (
-                      <div key={entry.name} onMouseEnter={() => setActiveVectorIndex(index)} onMouseLeave={() => setActiveVectorIndex(null)}
-                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', borderRadius: '5px', cursor: 'default', background: activeVectorIndex === index ? `${color}12` : 'transparent', transition: 'background 0.15s' }}>
+                      <button
+                        key={entry.name}
+                        type="button"
+                        onMouseEnter={() => setActiveVectorIndex(index)}
+                        onMouseLeave={() => setActiveVectorIndex(null)}
+                        onClick={() => onFilterEvents?.({ attackType: entry.name })}
+                        title={`View ${entry.name} events`}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
+                          padding: '4px 6px', borderRadius: '5px', border: 'none', font: 'inherit', textAlign: 'left',
+                          cursor: onFilterEvents ? 'pointer' : 'default',
+                          background: activeVectorIndex === index ? `${color}12` : 'transparent', transition: 'background 0.15s',
+                        }}
+                      >
                         <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: color, flexShrink: 0 }} />
                         <span style={{ flex: 1, fontSize: '11.5px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.name}</span>
                         <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color }}>{pct}%</span>
                         <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', minWidth: '40px', textAlign: 'right' }}>{entry.value.toLocaleString()}</span>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -826,6 +1008,58 @@ export default function ThreatAnalytics({ userRole, onNavigateToActivityLog }) {
                         </div>
                       </td>
                       <td style={{ padding: '7px 0', textAlign: 'right', fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--warning-color)', fontWeight: 700, verticalAlign: 'top' }}>{rule.count.toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* Row 4: Top Targeted Endpoints — "by target" counterpart to Top
+          Attackers' "by source", closing out the aggregate-charts ->
+          top-offenders investigation flow (WAAP console teardown roadmap,
+          P0 item 3). Full-width: URIs run longer than IPs or rule IDs and
+          deserve the room. */}
+      <div className="chart-card" style={{ gridColumn: 'span 12' }}>
+        <div className="card-title">
+          <ShieldAlert size={14} color="var(--warning-color)" />
+          Top Targeted Endpoints
+        </div>
+        <div className="chart-container" style={{ minHeight: '160px' }}>
+          {topUrisLoading ? <SectionSkeleton variant="table" /> : topUris.length === 0 ? (
+            <div style={{ color: 'var(--text-secondary)', fontSize: '13px', textAlign: 'center', paddingTop: '40px' }}>No endpoints targeted.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', textAlign: 'left', padding: '0 0 10px 0', letterSpacing: '0.6px', fontWeight: 600 }}>Endpoint</th>
+                  <th style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', textAlign: 'right', padding: '0 0 10px 0', letterSpacing: '0.6px', fontWeight: 600 }}>Blocked Hits</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topUris.map((u) => {
+                  const maxCount = topUris[0]?.count || 1;
+                  const pct = ((u.count / maxCount) * 100).toFixed(0);
+                  const openInEvents = () => onFilterEvents?.({ value: u.uri });
+                  return (
+                    <tr
+                      key={u.uri}
+                      role={onFilterEvents ? 'button' : undefined}
+                      tabIndex={onFilterEvents ? 0 : undefined}
+                      onClick={onFilterEvents ? openInEvents : undefined}
+                      onKeyDown={onFilterEvents ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openInEvents(); } } : undefined}
+                      title={onFilterEvents ? `View events for ${u.uri}` : undefined}
+                      style={{ borderBottom: '1px solid var(--border-subtle)', cursor: onFilterEvents ? 'pointer' : 'default' }}
+                    >
+                      <td style={{ padding: '7px 0', verticalAlign: 'top' }}>
+                        <div style={{ fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '520px' }}>{u.uri}</div>
+                        <div style={{ width: '100%', height: '3px', background: 'var(--border-color)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${pct}%`, height: '100%', background: 'var(--warning-color)', borderRadius: '2px', opacity: 0.7 }} />
+                        </div>
+                      </td>
+                      <td style={{ padding: '7px 0', textAlign: 'right', fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--warning-color)', fontWeight: 700, verticalAlign: 'top' }}>{u.count.toLocaleString()}</td>
                     </tr>
                   );
                 })}
