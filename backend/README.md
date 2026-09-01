@@ -30,4 +30,6 @@ uvicorn app.main:app --reload
 - **Log Parsing**: Parses ModSecurity concurrent JSON logs safely.
 - **REST API**: Provides paginated endpoints for logs, stats, top IPs, timeline, etc.
 - **WebSockets**: Streams new logs to connected clients in real-time.
-- **Security**: Basic JWT authentication placeholders, secure path sanitization, and CORS support.
+- **Security**: Cookie-based JWT sessions (`HttpOnly`, `SameSite=Strict`) with double-submit CSRF, bcrypt-hashed credentials in a real user database, role-based access control, optional TOTP MFA, session revocation on password/role change, rate-limited login, secure path sanitization, and CORS support. See the [project README](../README.md#-login-authentication--security) for the full authentication model.
+- **Alerting**: Multi-channel notification dispatch (Email/SMTP, Slack, generic Webhook, PagerDuty, Syslog/SIEM export) with rule-based routing, throttling, and per-channel delivery-health tracking (`app/services/alert_dispatcher.py`, `alert_manager.py`).
+- **Background-task health**: Every recurring job reports a heartbeat (`app/services/heartbeat_registry.py`); `GET /health/background-tasks` and a watchdog alert catch a stuck/crashed loop instead of it going silently quiet.
