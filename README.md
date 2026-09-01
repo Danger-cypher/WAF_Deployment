@@ -143,9 +143,14 @@ Quick reference mapping of important files, configuration, and log paths:
 13. **Positive Security Policy:** Per-protected-app allowlisting of HTTP methods, request Content-Types, and blocked file extensions — an opt-in, stricter alternative to signature-based (negative) detection.
 14. **Per-Application Authentication Requirements:** Require a configurable header or cookie to be present before a protected app's backend is reached, enforced at the WAF layer.
 15. **Per-Application Login Protection:** Rate-limits a protected app's own login endpoint (by URI+host) to blunt credential-stuffing/brute-force attempts, configured with one click from the Protected Apps screen.
-16. **Real-Time Alerts & Multi-Channel Integrations:** Configurable notification channels (Email/SMTP, Slack, generic Webhook, PagerDuty) with rule-based routing by event type and severity, throttling, and a live in-dashboard notification bell.
+16. **Real-Time Alerts & Multi-Channel Integrations:** Configurable notification channels (Email/SMTP, Slack, generic Webhook, PagerDuty, and outbound Syslog/SIEM export) with rule-based routing by event type and severity, throttling, per-channel delivery-health tracking, and a live in-dashboard notification bell.
 17. **Role-Based User Management:** Admin-managed accounts across three roles — `Admin` (full control), `Analyst` (read-only), and `App Admin` (scoped to a specific set of protected apps) — with self-service profile and password management, backed by a real user database, not shared/hardcoded credentials.
 18. **Admin Activity Audit Log:** Every settings change, rule toggle, app edit, and user-management action is recorded with who did it and when, viewable from a dedicated Activity Log tab in Settings.
+19. **Background-Task Health Monitoring:** Every recurring backend job (log retention, log ingestion, API discovery, anti-defacement/SSL monitors, auto-learning, threat intel, canary rollout, Redis/ClamAV reachability) reports a heartbeat; `/api/health/background-tasks` and a watchdog alert surface a stuck or crashed loop instead of it silently going quiet. `/api/health` itself verifies real ClickHouse connectivity rather than trusting an empty-result fallback.
+20. **Configuration Drift Detection:** Settings now flags any active configuration that has drifted from the recommended secure baseline, directly in the Settings UI.
+21. **Traffic Composition Analytics:** DDoS & Bot Mitigation includes a Traffic Composition view classifying inbound traffic by User-Agent (AI crawler / known bot / scripted client / human).
+22. **Actionable Overview Dashboard:** Real trend badges (vs. yesterday), click-to-filter KPI charts, a Top Targeted Endpoints table, and per-admin configurable/reorderable KPI cards.
+23. **Plain-Language Block Explanations:** Every blocked security event's detail drawer includes a human-readable summary of why it was blocked, alongside the raw rule/score data.
 
 ---
 
