@@ -1574,6 +1574,39 @@ export async function saveAntiDefacementSettings(settings) {
 }
 
 /**
+ * Fetch the Threat Globe's destination point — auto-detected once at
+ * backend startup from this server's own public IP, or an admin's manual
+ * override. Readable by any authenticated role (the globe is a
+ * monitoring view, not a settings page); only the POST is admin-gated.
+ */
+export async function getThreatGlobeSettings() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/threat-globe`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch threat globe settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Set a manual override for the Threat Globe's destination point.
+ */
+export async function saveThreatGlobeSettings(settings) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/threat-globe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save threat globe settings:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch ML engine overall analytics stats
  */
 export async function getMLStats() {

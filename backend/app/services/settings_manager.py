@@ -119,6 +119,22 @@ DEFAULT_SETTINGS = {
         "monitored_files": [],
         "check_interval_seconds": 5,
     },
+    # Where the Threat Globe view draws attack arcs landing — auto-detected
+    # once at startup from this server's own public IP (see
+    # threat_globe_location.py) and cached here so it survives without a
+    # GeoIP lookup on every page load. An admin behind a CDN/reverse-proxy
+    # (where the detected IP isn't the real deployment location) can
+    # override it from Settings.
+    "threat_globe": {
+        "server_lat": None,
+        "server_lon": None,
+        "server_label": "",
+        "auto_detected": False,
+        "override_enabled": False,
+        "override_lat": None,
+        "override_lon": None,
+        "override_label": "",
+    },
 }
 
 
@@ -378,6 +394,26 @@ class SettingsManager:
         self.settings["malware_scanning"] = data
         self.save_settings(self.settings)
         return self.settings["malware_scanning"]
+
+    def get_threat_globe(self) -> Dict[str, Any]:
+        return self.settings.get("threat_globe", DEFAULT_SETTINGS["threat_globe"])
+
+    def update_threat_globe(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["threat_globe"] = data
+        self.save_settings(self.settings)
+        return self.settings["threat_globe"]
+
+    def set_threat_globe_auto_location(self, lat: float, lon: float, label: str) -> None:
+        """Called once at startup by threat_globe_location.py's self-lookup
+        — separate from update_threat_globe so it never clobbers an
+        admin's manual override with a fresh auto-detection result."""
+        current = dict(self.settings.get("threat_globe", DEFAULT_SETTINGS["threat_globe"]))
+        current["server_lat"] = lat
+        current["server_lon"] = lon
+        current["server_label"] = label
+        current["auto_detected"] = True
+        self.settings["threat_globe"] = current
+        self.save_settings(self.settings)
 
     def get_anti_defacement(self) -> Dict[str, Any]:
         return self.settings.get("anti_defacement", DEFAULT_SETTINGS["anti_defacement"])

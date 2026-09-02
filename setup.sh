@@ -651,6 +651,34 @@ else
     success "GeoIP ASN database already present: $ASN_FILE"
 fi
 
+# ── City Database (adds lat/lon — powers the Threat Globe view) ──────────────
+CITY_FILE="${GEOIP_DIR}/GeoLite2-City.mmdb"
+if [ ! -f "$CITY_FILE" ]; then
+    log "Downloading GeoLite2-City database (enables lat/lon geolocation)..."
+    if [ -n "${LICENSE_KEY:-}" ]; then
+        TEMP_TAR_CITY="/tmp/geoip_city.tar.gz"
+        if wget -qO "$TEMP_TAR_CITY" "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${LICENSE_KEY}&suffix=tar.gz" 2>/dev/null; then
+            tar -xzf "$TEMP_TAR_CITY" -C /tmp
+            mv /tmp/GeoLite2-City_*/GeoLite2-City.mmdb "$CITY_FILE" 2>/dev/null || true
+            rm -f "$TEMP_TAR_CITY"
+            success "MaxMind GeoIP City Database downloaded successfully."
+        else
+            warn "MaxMind City download failed. Attempting public mirror fallback..."
+        fi
+    fi
+    # Fallback to public mirror if MaxMind key was not used or download failed
+    if [ ! -f "$CITY_FILE" ]; then
+        if wget -qO "$CITY_FILE" "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb" 2>/dev/null; then
+            success "Fallback GeoIP City Database downloaded successfully."
+        else
+            warn "Failed to download GeoIP City database. Lat/lon geolocation (Threat Globe) will be disabled."
+            touch "$CITY_FILE" || true
+        fi
+    fi
+else
+    success "GeoIP City database already present: $CITY_FILE"
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 5: User Credential Setup
 # ─────────────────────────────────────────────────────────────────────────────

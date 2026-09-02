@@ -3993,3 +3993,183 @@ select.setup-input {
   width: 100%;
 }
 
+
+/* ═══════════════════════════════════════════════════════════
+   THREAT GLOBE — live 3D attack-origin visualization (P1 item 4
+   of the WAAP console teardown roadmap). Namespaced `tg-` since
+   this section defines its own immersive HUD chrome distinct
+   from the rest of the dashboard's card language, layered
+   entirely on the shared design tokens above so it still follows
+   the light/dark theme toggle everywhere except the globe canvas
+   itself, which stays a dark "instrument" surface by design — the
+   same way an embedded map or video widget commonly keeps its own
+   visual identity inside an otherwise themed page.
+═══════════════════════════════════════════════════════════ */
+
+.tg-root {
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 190px);
+  min-height: 560px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  background: #070b14;
+  box-shadow: var(--shadow-card);
+}
+
+.tg-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.tg-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 46%, transparent 42%, rgba(7, 11, 20, .5) 88%, rgba(7, 11, 20, .85) 100%),
+    linear-gradient(180deg, rgba(7, 11, 20, .55) 0%, transparent 16%, transparent 82%, rgba(7, 11, 20, .65) 100%);
+}
+
+.tg-brackets span {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-color: var(--border-strong);
+  border-style: solid;
+  border-width: 0;
+  opacity: .5;
+  pointer-events: none;
+}
+.tg-brackets .tl { top: 16px; left: 16px; border-top-width: 2px; border-left-width: 2px; }
+.tg-brackets .tr { top: 16px; right: 16px; border-top-width: 2px; border-right-width: 2px; }
+.tg-brackets .bl { bottom: 16px; left: 16px; border-bottom-width: 2px; border-left-width: 2px; }
+.tg-brackets .br { bottom: 16px; right: 16px; border-bottom-width: 2px; border-right-width: 2px; }
+
+.tg-panel {
+  background: rgba(19, 27, 44, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+  color: #eef2fa;
+}
+
+.tg-top {
+  position: absolute;
+  top: 16px; left: 16px; right: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 4;
+}
+.tg-wordmark { display: flex; align-items: center; gap: 12px; padding: 8px 14px; }
+.tg-wordmark .tg-name { font-family: var(--font-display); font-weight: 700; font-size: 13px; letter-spacing: .03em; }
+.tg-wordmark .tg-name em { font-style: normal; color: #a78bfa; }
+.tg-live-pill { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; color: var(--success-color); padding-left: 10px; border-left: 1px solid rgba(148,163,184,0.2); }
+.tg-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success-color); box-shadow: 0 0 8px var(--success-glow); animation: tg-pulse-dot 1.6s ease-in-out infinite; }
+@keyframes tg-pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+.tg-clock { font-family: var(--font-mono); font-size: 10.5px; color: #9aa7c7; font-variant-numeric: tabular-nums; }
+
+.tg-top-right { display: flex; align-items: center; gap: 8px; }
+.tg-ctrl-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+  color: #9aa7c7;
+  background: rgba(19, 27, 44, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  padding: 8px 11px;
+  cursor: pointer;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+  transition: color .15s, border-color .15s;
+}
+.tg-ctrl-btn:hover { color: #eef2fa; border-color: rgba(148,163,184,0.32); }
+.tg-ctrl-btn:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.tg-ctrl-btn[data-on="true"] { color: #a78bfa; border-color: #a78bfa; }
+
+.tg-rail { position: absolute; top: 70px; right: 16px; width: 224px; display: flex; flex-direction: column; gap: 10px; z-index: 4; }
+.tg-rail-section { padding: 13px 15px; }
+.tg-rail-title { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #7c88a8; margin-bottom: 9px; }
+.tg-throughput-value { font-family: var(--font-display); font-weight: 700; font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 5px; }
+.tg-throughput-value .tg-unit { font-family: var(--font-mono); font-weight: 500; font-size: 10px; color: #7c88a8; }
+.tg-throughput-total { margin-top: 5px; font-family: var(--font-mono); font-size: 10px; color: #9aa7c7; }
+.tg-throughput-total b { color: #eef2fa; font-weight: 600; }
+.tg-spark { display: block; width: 100%; height: 30px; margin-top: 8px; }
+
+.tg-vector-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 4px 0; }
+.tg-vector-row .tg-cc { font-family: var(--font-mono); font-size: 9.5px; color: #7c88a8; width: 22px; flex: none; }
+.tg-vector-row .tg-vname { flex: 1; color: #9aa7c7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-vector-row .tg-bar-track { width: 46px; height: 4px; background: rgba(148,163,184,0.16); flex: none; position: relative; overflow: hidden; }
+.tg-vector-row .tg-bar-fill { position: absolute; inset: 0; background: #22d3ee; width: 0%; transition: width .4s ease; }
+.tg-vector-row .tg-n { font-family: var(--font-mono); font-size: 10px; color: #7c88a8; width: 20px; text-align: right; flex: none; }
+
+.tg-sev-mix { display: flex; flex-direction: column; gap: 8px; }
+.tg-sev-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+.tg-sev-chip { width: 7px; height: 7px; flex: none; border-radius: 1px; }
+.tg-sev-row .tg-label { flex: 1; color: #9aa7c7; }
+.tg-sev-row .tg-pct { font-family: var(--font-mono); font-size: 10px; color: #7c88a8; }
+
+.tg-feed { position: absolute; bottom: 16px; left: 16px; width: 360px; max-height: 218px; display: flex; flex-direction: column; z-index: 4; overflow: hidden; }
+.tg-feed-head { padding: 11px 14px 9px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(148,163,184,0.14); }
+.tg-feed-list { overflow-y: auto; padding: 3px 0; }
+.tg-feed-list::-webkit-scrollbar { width: 5px; }
+.tg-feed-list::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.25); }
+.tg-feed-row { display: grid; grid-template-columns: 14px 92px 1fr auto; align-items: center; gap: 8px; padding: 6px 14px; font-size: 11px; border-bottom: 1px solid rgba(148,163,184,0.08); animation: tg-feed-in .35s ease-out; }
+@keyframes tg-feed-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+.tg-feed-row .tg-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.tg-feed-row .tg-origin { font-family: var(--font-mono); font-size: 10px; color: #9aa7c7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tg-feed-row .tg-vec { color: #eef2fa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tg-feed-row .tg-ago { font-family: var(--font-mono); font-size: 9.5px; color: #7c88a8; flex: none; }
+
+.tg-legend { position: absolute; bottom: 16px; right: 16px; display: flex; gap: 13px; padding: 9px 14px; z-index: 4; }
+.tg-legend-item { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .03em; color: #9aa7c7; }
+.tg-legend-dot { width: 7px; height: 7px; flex: none; border-radius: 1px; }
+
+.tg-empty {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  text-align: center; padding: 32px;
+  background: rgba(7, 11, 20, 0.82);
+  backdrop-filter: blur(6px);
+}
+.tg-empty h3 { font-family: var(--font-display); font-size: 16px; color: #eef2fa; margin: 0; }
+.tg-empty p { font-family: var(--font-body); font-size: 13px; color: #9aa7c7; max-width: 420px; margin: 0; line-height: 1.5; }
+.tg-empty-form { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.tg-empty-form input {
+  width: 110px; font-family: var(--font-mono); font-size: 12px; padding: 8px 10px;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(148,163,184,0.24); border-radius: var(--radius-sm);
+  color: #eef2fa;
+}
+.tg-empty-form input::placeholder { color: #7c88a8; }
+.tg-empty-form button {
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .04em; padding: 8px 16px;
+  background: var(--accent-color); color: #0f0f14; border: none; border-radius: var(--radius-sm);
+  cursor: pointer; font-weight: 600;
+}
+.tg-empty-form button:hover { filter: brightness(1.08); }
+
+.tg-boot {
+  position: absolute; inset: 0; z-index: 10;
+  background: #070b14;
+  display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px;
+  transition: opacity .5s ease;
+}
+.tg-boot .tg-mark { font-family: var(--font-display); font-weight: 700; font-size: 13px; letter-spacing: .04em; color: #9aa7c7; }
+.tg-boot .tg-mark em { color: #a78bfa; font-style: normal; }
+.tg-boot .tg-bar { width: 190px; height: 2px; background: rgba(148,163,184,0.16); overflow: hidden; }
+.tg-boot .tg-bar i { display: block; height: 100%; width: 40%; background: #a78bfa; animation: tg-boot-sweep 1.1s ease-in-out infinite; }
+@keyframes tg-boot-sweep { 0% { transform: translateX(-120%); } 100% { transform: translateX(340%); } }
+.tg-boot .tg-boot-label { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em; color: #7c88a8; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tg-live-dot, .tg-boot .tg-bar i, .tg-feed-row { animation: none; }
+}
+
+@media (max-width: 900px) {
+  .tg-rail, .tg-feed, .tg-legend { display: none; }
+}

@@ -7,7 +7,7 @@ from pydantic import BaseModel, field_validator
 from typing import Dict, Any, Optional, List
 
 from app.services.settings_manager import settings_manager
-from app.services.auth import verify_password, require_admin, TokenData
+from app.services.auth import verify_password, require_admin, require_any_role, TokenData
 from app.utils.audit import log_admin_action
 from app.utils.security import get_client_ip, is_ip_in_networks
 
@@ -148,6 +148,37 @@ class AntiDefacementModel(BaseModel):
     enabled: bool
     monitored_files: List[str]
     check_interval_seconds: int
+
+
+class ThreatGlobeModel(BaseModel):
+    # server_lat/lon/label/auto_detected are read-only outputs of the
+    # startup auto-detection (threat_globe_location.py) — accepted here
+    # too (rather than split into a separate response-only model) so a
+    # round-trip GET-then-POST from the settings form doesn't have to
+    # strip fields; update_threat_globe_settings below re-derives them
+    # from the previous value regardless of what's submitted.
+    server_lat: Optional[float] = None
+    server_lon: Optional[float] = None
+    server_label: str = ""
+    auto_detected: bool = False
+    override_enabled: bool
+    override_lat: Optional[float] = None
+    override_lon: Optional[float] = None
+    override_label: str = ""
+
+    @field_validator("override_lat")
+    @classmethod
+    def validate_override_lat(cls, v):
+        if v is not None and not (-90 <= v <= 90):
+            raise ValueError("override_lat must be between -90 and 90.")
+        return v
+
+    @field_validator("override_lon")
+    @classmethod
+    def validate_override_lon(cls, v):
+        if v is not None and not (-180 <= v <= 180):
+            raise ValueError("override_lon must be between -180 and 180.")
+        return v
 
 
 class MalwareScanningModel(BaseModel):
@@ -638,6 +669,39 @@ async def update_anti_defacement_settings(
         )
     result = settings_manager.update_anti_defacement(settings.dict())
     log_admin_action("settings", "anti-defacement", "update", current_user, details=settings.dict())
+    return result
+
+
+# 3.10b Threat Globe destination — read is any authenticated role (the
+# globe view itself is a dashboard page an Analyst can see), the override
+# is admin-only like every other write in this file.
+@router.get("/settings/threat-globe", response_model=Dict[str, Any])
+async def get_threat_globe_settings(current_user: TokenData = Depends(require_any_role)):
+    return settings_manager.get_threat_globe()
+
+
+@router.post("/settings/threat-globe", response_model=Dict[str, Any])
+async def update_threat_globe_settings(
+    settings: ThreatGlobeModel, current_user: TokenData = Depends(require_admin)
+):
+    if settings.override_enabled and (settings.override_lat is None or settings.override_lon is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="override_lat and override_lon are required when override_enabled is true.",
+        )
+    # server_lat/lon/label/auto_detected are the auto-detection's own
+    # output — preserved from the current stored value rather than taken
+    # from the submitted body, so a settings-form round-trip can never
+    # accidentally overwrite what threat_globe_location.py detected.
+    current = settings_manager.get_threat_globe()
+    payload = settings.dict()
+    payload["server_lat"] = current.get("server_lat")
+    payload["server_lon"] = current.get("server_lon")
+    payload["server_label"] = current.get("server_label", "")
+    payload["auto_detected"] = current.get("auto_detected", False)
+
+    result = settings_manager.update_threat_globe(payload)
+    log_admin_action("settings", "threat-globe", "update", current_user, details=payload)
     return result
 
 

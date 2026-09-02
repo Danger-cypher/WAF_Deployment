@@ -25,6 +25,12 @@ class LogEntry(BaseModel):
     hostname: str
     country: Optional[str] = ""
     source_asn_org: Optional[str] = ""
+    # City-level geolocation — absent (None) rather than 0/0 whenever the
+    # City DB has no fix for this IP, so a consumer (Threat Globe) can
+    # skip the event instead of plotting a false point at the equator.
+    geo_lat: Optional[float] = None
+    geo_lon: Optional[float] = None
+    geo_city: Optional[str] = ""
     request_headers: Optional[Dict[str, str]] = {}
     response_headers: Optional[Dict[str, str]] = {}
     violations: Optional[List[ViolationDetail]] = []

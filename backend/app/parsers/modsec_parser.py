@@ -120,6 +120,7 @@ def parse_modsec_audit_json(file_path: str, log_dir: str) -> Optional[LogEntry]:
 
             country_code = geoip_manager.get_country_code(client_ip)
             source_asn_org = geoip_manager.get_asn_org(client_ip)
+            city_location = geoip_manager.get_city_location(client_ip)
             data["country"] = country_code
             data["source_asn_org"] = source_asn_org
 
@@ -184,6 +185,9 @@ def parse_modsec_audit_json(file_path: str, log_dir: str) -> Optional[LogEntry]:
                 hostname=hostname,
                 country=country_code,
                 source_asn_org=source_asn_org,
+                geo_lat=city_location["lat"] if city_location else None,
+                geo_lon=city_location["lon"] if city_location else None,
+                geo_city=city_location["city"] if city_location else "",
                 request_headers=request_headers,
                 response_headers=response_headers,
                 violations=violations,

@@ -12,12 +12,19 @@ DB_PATH = os.path.join(
 ASN_DB_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "data", "GeoLite2-ASN.mmdb"
 )
+# City edition adds lat/lon (Country only ever gave ISO code) — needed for
+# anything that plots an attacker's location rather than just naming their
+# country, e.g. the Threat Globe view.
+CITY_DB_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "GeoLite2-City.mmdb"
+)
 
 
 class GeoIPManager:
     def __init__(self):
         self.reader = None
         self.asn_reader = None
+        self.city_reader = None
         self._load_db()
 
     def _load_db(self):
@@ -44,6 +51,19 @@ class GeoIPManager:
                 logger.info("Successfully loaded MaxMind GeoLite2-ASN database.")
             except Exception as e:
                 logger.error(f"Failed to load GeoIP ASN database: {e}")
+
+        # 3. Load City DB (optional — features that don't need lat/lon keep
+        # working fine without it; get_city_location() just returns None)
+        if not os.path.exists(CITY_DB_PATH):
+            logger.warning(
+                f"GeoIP City database not found at {CITY_DB_PATH}. Lat/lon lookups will be disabled."
+            )
+        else:
+            try:
+                self.city_reader = geoip2.database.Reader(CITY_DB_PATH)
+                logger.info("Successfully loaded MaxMind GeoLite2-City database.")
+            except Exception as e:
+                logger.error(f"Failed to load GeoIP City database: {e}")
 
     def get_country_code(self, ip_address: str) -> str:
         """
@@ -106,6 +126,42 @@ class GeoIPManager:
             logger.debug(f"GeoIP ASN lookup failed for {ip_address}: {e}")
             return "Unknown"
 
+    def get_city_location(self, ip_address: str) -> dict:
+        """
+        Returns {"lat": float, "lon": float, "city": str} for the given IP,
+        or None if the address is private/loopback, the City DB isn't
+        loaded, or MaxMind has no record for it (common for IPs it can
+        only place at a country-level accuracy). Deliberately returns None
+        rather than a fabricated fallback point (e.g. a country centroid)
+        — a caller that needs a real point on a map should skip the event
+        rather than plot an attacker somewhere they weren't.
+        """
+        if not ip_address:
+            return None
+
+        try:
+            ip_obj = ipaddress.ip_address(ip_address)
+            if ip_obj.is_private or ip_obj.is_loopback:
+                return None
+        except ValueError:
+            return None
+
+        if not self.city_reader:
+            return None
+
+        try:
+            response = self.city_reader.city(ip_address)
+            lat = response.location.latitude
+            lon = response.location.longitude
+            if lat is None or lon is None:
+                return None
+            return {"lat": lat, "lon": lon, "city": response.city.name or ""}
+        except geoip2.errors.AddressNotFoundError:
+            return None
+        except Exception as e:
+            logger.debug(f"GeoIP City lookup failed for {ip_address}: {e}")
+            return None
+
     def __del__(self):
         if self.reader:
             try:
@@ -115,6 +171,11 @@ class GeoIPManager:
         if self.asn_reader:
             try:
                 self.asn_reader.close()
+            except Exception:
+                pass
+        if self.city_reader:
+            try:
+                self.city_reader.close()
             except Exception:
                 pass
 

@@ -168,6 +168,14 @@ async def lifespan(app: FastAPI):
     from app.services.heartbeat_registry import start_heartbeat_watchdog
     heartbeat_watchdog_task = asyncio.create_task(start_heartbeat_watchdog())
 
+    # One-shot: auto-detect this deployment's own location for the Threat
+    # Globe view's destination point (skipped if an admin has already set
+    # a manual override). Fire-and-forget like backfill_logs() above — not
+    # a recurring loop, so no heartbeat entry and nothing to cancel at
+    # shutdown.
+    from app.services.threat_globe_location import resolve_server_location_once
+    asyncio.ensure_future(resolve_server_location_once())
+
     yield
 
     # Shutdown event
