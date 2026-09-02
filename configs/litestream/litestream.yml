@@ -1,0 +1,80 @@
+# litestream.yml — CyberSentinel WAF continuous SQLite replication
+# =============================================================================
+# Phase A of the active-passive HA plan: continuously stream every
+# control-plane SQLite database's WAL to a replica so a second node can be
+# brought up from a near-real-time copy instead of a point-in-time backup.
+#
+# Deliberately `type: file` only, pointed at a LOCAL volume — no S3/GCS/Azure/
+# SFTP-to-a-remote-host target configured yet. This deployment's own traffic
+# is internal-only (every live request observed during this session came from
+# private IPs), so nothing here should leave the host by default. Once a
+# second node exists, change each replica's `path:` to `sftp://<node-2
+# private IP>/...` (litestream supports SFTP natively — no new tooling
+# needed) — that's the only change this file needs for Phase B. Do not point
+# this at cloud storage without deciding that deliberately; see
+# feedback_waf_security_over_convenience in project memory for why.
+#
+# Scope matches backup_service.py's own reasoning: control-plane state
+# (auth, false positives, alerts, API keys, ML event history) is replicated
+# here. ClickHouse (waf_events/ml_events analytics) is deliberately excluded,
+# same as that module — losing a few minutes of analytics on failover
+# degrades reporting, not enforcement; it doesn't need continuous streaming.
+#
+# The 3 other .db files found alongside these 5 during the audit
+# (config/users.db, data/false_positives.db, data/waf_gui.db) are confirmed
+# dead — 0 bytes, untouched for days, and not the path any service module
+# actually opens (see user_service.py's DB_DIR / db_service.py's DB_FILE).
+# Deliberately NOT included here — replicating a stale empty file only adds
+# noise. Worth deleting them separately; not done here since that's outside
+# this file's job.
+#
+# Paths below are as seen INSIDE this container (see the `litestream`
+# service in docker-compose.yml for the host-path mounts).
+
+# Every db below uses the same replica shape (type: file, a local path under
+# /backups) — that's the one field to change per db in Phase B (see header):
+# swap `type: file` + `path: /backups/<name>` for `type: sftp` + the node-2
+# connection fields. Litestream's default sync-interval (1s) already gives
+# us the freshness we want, so it's left unset rather than repeated 5 times.
+dbs:
+  # Auth: users, roles, sessions, MFA secrets. The single most
+  # security-critical file in this list.
+  - path: /data/data/users.db
+    meta-path: /litestream-meta/users-db
+    replica:
+      type: file
+      path: /backups/users-db
+
+  - path: /data/data/alerts.db
+    meta-path: /litestream-meta/alerts-db
+    replica:
+      type: file
+      path: /backups/alerts-db
+
+  - path: /data/data/api_keys.db
+    meta-path: /litestream-meta/api-keys-db
+    replica:
+      type: file
+      path: /backups/api-keys-db
+
+  # Largest of the five (~50MB and growing) — ML scoring event history.
+  - path: /data/data/ml_events.db
+    meta-path: /litestream-meta/ml-events-db
+    replica:
+      type: file
+      path: /backups/ml-events-db
+
+  # Lives under config/, not data/ — see db_service.py's DB_FILE.
+  - path: /data/config/false_positives.db
+    meta-path: /litestream-meta/false-positives-db
+    replica:
+      type: file
+      path: /backups/false-positives-db
+
+snapshot:
+  interval: 1h
+  retention: 72h
+
+logging:
+  level: info
+  type: json

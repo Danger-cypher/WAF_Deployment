@@ -410,6 +410,32 @@ services:
     networks:
       - waf-network
 
+  # Continuous SQLite replication — Phase A of the active-passive HA plan
+  # (see configs/litestream/litestream.yml for the full reasoning). Local
+  # file replica only for now: this deployment's traffic is internal-only,
+  # so nothing here should default to leaving the host. Read-only mounts on
+  # the source data — this service streams the WAL out, it never needs to
+  # write back into backend/app/config or backend/app/data.
+  litestream:
+    image: litestream/litestream:0.5.17
+    container_name: waf-litestream
+    restart: unless-stopped
+    volumes:
+      - ./backend/app/config:/data/config:ro
+      - ./backend/app/data:/data/data:ro
+      - ./configs/litestream/litestream.yml:/etc/litestream.yml:ro
+      - litestream_meta:/litestream-meta
+      - litestream_backups:/backups
+      - /etc/localtime:/etc/localtime:ro
+    command: ["replicate"]
+    deploy:
+      resources:
+        limits:
+          cpus: ${LITESTREAM_CPU_LIMIT:-0.5}
+          memory: ${LITESTREAM_MEM_LIMIT:-256M}
+    networks:
+      - waf-network
+
 networks:
   waf-network:
     driver: bridge
@@ -425,4 +451,8 @@ volumes:
   clickhouse_logs:
     driver: local
   clamav_data:
+    driver: local
+  litestream_meta:
+    driver: local
+  litestream_backups:
     driver: local
