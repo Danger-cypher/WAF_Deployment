@@ -1,4 +1,17 @@
-export function initialsFor(username) {
+// `displayName` (e.g. "Jane Doe") is optional — when present, initials
+// follow the first+last-name convention every reference product (GitHub,
+// Slack, Linear) uses, instead of just the first two characters of the
+// account's login handle, which reads oddly for anything but a single-word
+// username (e.g. "jane.doe" → "JA" instead of "JD").
+export function initialsFor(username, displayName) {
+  const name = (displayName || '').trim();
+  if (name) {
+    const words = name.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+    }
+    return words[0].slice(0, 2).toUpperCase();
+  }
   if (!username) return '?';
   return username.trim().slice(0, 2).toUpperCase();
 }
