@@ -14,7 +14,13 @@ CREATE TABLE IF NOT EXISTS cybersentinel.waf_events
 (
     -- Identity
     id                  String,
-    timestamp           DateTime('Asia/Kolkata'),
+    -- Plain (UTC) — every log parser (modsec_parser.py, nginx_errorlog_parser.py)
+    -- already converts to UTC before storage; a timezone-typed column here
+    -- previously caused a double conversion (their UTC string got
+    -- re-interpreted as IST on insert), silently storing every event 5:30
+    -- behind its real time. See ingested_at below, which was already
+    -- correctly plain UTC — this just matches it.
+    timestamp           DateTime,
 
     -- Request
     client_ip           String,
@@ -59,7 +65,7 @@ SETTINGS index_granularity = 8192;
 CREATE TABLE IF NOT EXISTS cybersentinel.ml_events
 (
     unique_id           String DEFAULT '',
-    timestamp           DateTime('Asia/Kolkata'),
+    timestamp           DateTime, -- UTC — see waf_events.timestamp's comment
     remote_addr         String DEFAULT '',
 
     -- Request features fed to ML models
@@ -103,7 +109,7 @@ CREATE TABLE IF NOT EXISTS cybersentinel.analyst_feedback
     rule_id             String DEFAULT '',
     client_ip           String DEFAULT '',
     uri                 String DEFAULT '',
-    event_timestamp     DateTime('Asia/Kolkata'),
+    event_timestamp     DateTime, -- UTC — see waf_events.timestamp's comment
 
     severity            LowCardinality(String) DEFAULT '',
     attack_type         LowCardinality(String) DEFAULT '',
