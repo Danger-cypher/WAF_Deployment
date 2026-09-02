@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getLiveStreamWsUrl, getThreatGlobeSettings, saveThreatGlobeSettings } from '../services/api';
 import { createThreatGlobeEngine } from '../utils/threatGlobeEngine';
 import { resolveDestination } from '../utils/threatGlobeDestination';
+import { classifyTier } from '../utils/threatGlobeTier';
 import worldCountries from '../data/world-countries.json';
 
 /**
@@ -19,8 +20,8 @@ import worldCountries from '../data/world-countries.json';
  * rather than plotted at a fabricated point.
  */
 
-const SEV_TOKENS = { critical: '--danger-color', high: '--sev-high', medium: '--sev-medium', low: '--sev-low' };
-const SEV_FALLBACK = { critical: '#f43f5e', high: '#f97316', medium: '#eab308', low: '#3b82f6' };
+const SEV_TOKENS = { critical: '--danger-color', high: '--sev-high', medium: '--sev-medium', low: '--sev-low', normal: '--text-secondary' };
+const SEV_FALLBACK = { critical: '#f43f5e', high: '#f97316', medium: '#eab308', low: '#3b82f6', normal: '#64748b' };
 
 function readSevColors() {
   const cs = getComputedStyle(document.documentElement);
@@ -98,6 +99,7 @@ export default function ThreatGlobe({ userRole }) {
         country: d.country || '',
         city: d.geo_city || '',
         severity: (d.severity || 'low').toLowerCase(),
+        tier: classifyTier(d),
       });
     };
     return () => ws.close();
@@ -163,10 +165,17 @@ export default function ThreatGlobe({ userRole }) {
         <div className="tg-rail-section tg-panel">
           <div className="tg-rail-title">Throughput</div>
           <div className="tg-throughput-value">
-            <span data-tg="rate">0</span><span className="tg-unit">req/s blocked</span>
+            <span data-tg="rate">0</span><span className="tg-unit">req/s observed</span>
           </div>
           <canvas className="tg-spark" data-tg="spark" width="420" height="68" />
-          <div className="tg-throughput-total">Session total <b data-tg="total">0</b> blocked</div>
+          <div className="tg-throughput-total">Session total <b data-tg="total">0</b> events</div>
+          {/* Not every logged request is an attack — ModSecurity's audit
+              log captures nearly all traffic, not just what it blocks —
+              so this breaks the total down honestly rather than implying
+              everything shown was "blocked". */}
+          <div className="tg-throughput-total" data-tg="tier-row">
+            <b data-tg="tier-blocked">0</b> blocked · <b data-tg="tier-flagged">0</b> flagged · <b data-tg="tier-normal">0</b> normal
+          </div>
           <div className="tg-throughput-total" data-tg="unmapped-row" hidden>
             <b data-tg="unmapped">0</b> from internal/private IPs — not mappable
           </div>
@@ -193,6 +202,9 @@ export default function ThreatGlobe({ userRole }) {
         <span className="tg-legend-item"><span className="tg-legend-dot" style={{ background: 'var(--danger-color)' }} />Critical</span>
         <span className="tg-legend-item"><span className="tg-legend-dot" style={{ background: 'var(--sev-high)' }} />High</span>
         <span className="tg-legend-item"><span className="tg-legend-dot" style={{ background: 'var(--sev-medium)' }} />Medium</span>
+        <span className="tg-legend-item"><span className="tg-legend-dot" style={{ background: 'var(--sev-low)' }} />Low</span>
+        <span className="tg-legend-item"><span className="tg-legend-dot" style={{ background: 'var(--sev-high)', opacity: 0.55 }} />Flagged, not blocked</span>
+        <span className="tg-legend-item"><span className="tg-legend-dot" style={{ background: 'var(--text-secondary)', opacity: 0.5 }} />Normal traffic</span>
         <span className="tg-legend-item"><span className="tg-legend-dot" style={{ background: 'var(--accent-color)' }} />Protected origin</span>
       </div>
 

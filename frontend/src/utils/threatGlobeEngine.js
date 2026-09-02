@@ -310,23 +310,34 @@ export function createThreatGlobeEngine(rootEl, worldCountries, sevColors) {
     return new THREE.Color(sevColors[key]);
   }
 
+  // Visual weight per tier — 'blocked' is the real, enforced threat and
+  // reads at full strength; 'flagged' (CRS scored it but let it through)
+  // is real signal too but dimmer, since nothing was actually stopped;
+  // 'normal' (zero rule matches) is deliberately the quietest so genuine
+  // attacks still visually dominate the globe even on a mostly-clean site.
+  const TIER_OPACITY = { blocked: 1, flagged: 0.55, normal: 0.32 };
+
   /**
-   * event: { lat, lon, country, city, severity } — severity lowercased
-   * ('critical'|'high'|'medium'|'low'). Skips the arc/comet entirely
-   * (still shows the origin marker + label) if no destination is
-   * configured yet, or silently drops the event once
+   * event: { lat, lon, country, city, severity, tier } — severity
+   * lowercased ('critical'|'high'|'medium'|'low'); tier is
+   * 'blocked'|'flagged'|'normal' (see ThreatGlobe.jsx's classifyTier —
+   * the audit log this stream is sourced from captures nearly all
+   * traffic, not just attacks, so every event must be classified before
+   * it gets here rather than assumed to be a block). Skips the arc/comet
+   * entirely (still shows the origin marker + label) if no destination
+   * is configured yet, or silently drops the event once
    * MAX_CONCURRENT_ARCS is already in flight — a burst reads as "a lot
    * of activity", not as 500 overlapping lines.
    */
   function fireAttack(event) {
     if (paused) return;
 
-    const { lat, lon, country, city, severity } = event;
+    const { lat, lon, country, city, severity, tier = "blocked" } = event;
 
     // HUD counters/feed always reflect real traffic, even when there's
     // nowhere to plot it — only the 3D visualization below is skipped.
     const mappable = lat != null && lon != null;
-    onHudEvent({ country, severity, mappable });
+    onHudEvent({ country, severity, tier, mappable });
 
     // No real point to draw for a private/loopback origin (RFC1918 has
     // no lat/lon) or a public IP the City DB couldn't resolve — the
@@ -336,10 +347,14 @@ export function createThreatGlobeEngine(rootEl, worldCountries, sevColors) {
     if (activeArcs.length >= MAX_CONCURRENT_ARCS) return; // burst safety — see module docstring
 
     const a = latLonToVector3(lat, lon, R);
-    const colorHex = severityHex(severity);
-    const colorCss = sevColors[severity] || sevColors.low;
+    // Normal traffic gets its own neutral color regardless of severity —
+    // severity is meaningless for a request no rule ever matched (it's
+    // just the model's unclassified default, not a real signal).
+    const colorHex = tier === "normal" ? severityHex("normal") : severityHex(severity);
+    const colorCss = tier === "normal" ? sevColors.normal : (sevColors[severity] || sevColors.low);
+    const tierOpacity = TIER_OPACITY[tier] ?? 1;
 
-    const originMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color: colorHex, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending }));
+    const originMarker = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color: colorHex, transparent: true, opacity: tierOpacity, depthWrite: false, blending: THREE.AdditiveBlending }));
     originMarker.position.copy(a.clone().normalize().multiplyScalar(R * 1.01));
     originMarker.scale.set(0.24, 0.24, 1);
     globe.add(originMarker);
@@ -361,7 +376,7 @@ export function createThreatGlobeEngine(rootEl, worldCountries, sevColors) {
       const line = new THREE.Line(geo, mat);
       globe.add(line);
 
-      const comet = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color: colorHex, transparent: true, opacity: reducedMotion ? 0 : 1, depthWrite: false, blending: THREE.AdditiveBlending }));
+      const comet = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTex, color: colorHex, transparent: true, opacity: reducedMotion ? 0 : tierOpacity, depthWrite: false, blending: THREE.AdditiveBlending }));
       comet.scale.set(0.2, 0.2, 1);
       comet.position.copy(a);
       globe.add(comet);
@@ -371,7 +386,7 @@ export function createThreatGlobeEngine(rootEl, worldCountries, sevColors) {
       activeArcs.push({
         line, comet, points: pts, start: now, travelMs, hasArc: true,
         lingerMs: 3200, removeAt: now + travelMs + 3200,
-        label, labelHoldMs: travelMs + 900, originMarker,
+        label, labelHoldMs: travelMs + 900, originMarker, tierOpacity,
       });
       setTimeout(() => spawnRing(b), travelMs);
     } else {
@@ -383,7 +398,7 @@ export function createThreatGlobeEngine(rootEl, worldCountries, sevColors) {
       activeArcs.push({
         line: null, comet: null, points: null, start: now, travelMs, hasArc: false,
         lingerMs: 1200, removeAt: now + travelMs + 1200,
-        label, labelHoldMs: travelMs + 400, originMarker,
+        label, labelHoldMs: travelMs + 400, originMarker, tierOpacity,
       });
     }
   }
@@ -402,23 +417,36 @@ export function createThreatGlobeEngine(rootEl, worldCountries, sevColors) {
     btnPause: rootEl.querySelector('[data-tg="btn-pause"]'),
     unmappedRow: rootEl.querySelector('[data-tg="unmapped-row"]'),
     unmapped: rootEl.querySelector('[data-tg="unmapped"]'),
+    tierBlocked: rootEl.querySelector('[data-tg="tier-blocked"]'),
+    tierFlagged: rootEl.querySelector('[data-tg="tier-flagged"]'),
+    tierNormal: rootEl.querySelector('[data-tg="tier-normal"]'),
   };
   const sparkCtx = hud.spark ? hud.spark.getContext("2d") : null;
 
-  let totalBlocked = 0;
+  const TIER_FEED_LABEL = { blocked: "Blocked", flagged: "Flagged — allowed", normal: "Normal traffic" };
+
+  let totalEvents = 0;
   let unmappedCount = 0; // private/loopback origin, or no City DB fix — counted, never plotted
   let rateWindow = [];
   const countryTally = {};
+  // Severity is only meaningful for events a rule actually matched
+  // (blocked or flagged) — 'normal' traffic is tracked separately in
+  // tierTally instead of polluting this mix with its placeholder "low"
+  // default (see classifyTier's docstring in ThreatGlobe.jsx).
   const sevTally = { critical: 0, high: 0, medium: 0, low: 0 };
+  const tierTally = { blocked: 0, flagged: 0, normal: 0 };
   const sparkHistory = new Array(40).fill(0);
 
-  function onHudEvent({ country, severity, mappable }) {
-    totalBlocked++;
+  function onHudEvent({ country, severity, tier, mappable }) {
+    totalEvents++;
     rateWindow.push(performance.now());
     const key = country || "??";
     countryTally[key] = (countryTally[key] || 0) + 1;
-    const sevKey = sevTally[severity] !== undefined ? severity : "low";
-    sevTally[sevKey]++;
+    tierTally[tier] = (tierTally[tier] ?? 0) + 1;
+    if (tier !== "normal") {
+      const sevKey = sevTally[severity] !== undefined ? severity : "low";
+      sevTally[sevKey]++;
+    }
 
     if (!mappable) {
       unmappedCount++;
@@ -426,21 +454,25 @@ export function createThreatGlobeEngine(rootEl, worldCountries, sevColors) {
       if (hud.unmappedRow) hud.unmappedRow.hidden = false;
     }
 
-    if (hud.total) hud.total.textContent = totalBlocked.toLocaleString();
-    if (hud.feedCount) hud.feedCount.textContent = `${totalBlocked.toLocaleString()} events`;
-    pushFeedRow(country, severity);
+    if (hud.total) hud.total.textContent = totalEvents.toLocaleString();
+    if (hud.feedCount) hud.feedCount.textContent = `${totalEvents.toLocaleString()} events`;
+    if (hud.tierBlocked) hud.tierBlocked.textContent = tierTally.blocked.toLocaleString();
+    if (hud.tierFlagged) hud.tierFlagged.textContent = tierTally.flagged.toLocaleString();
+    if (hud.tierNormal) hud.tierNormal.textContent = tierTally.normal.toLocaleString();
+    pushFeedRow(country, severity, tier);
     refreshVectorList();
     refreshSevMix();
   }
 
-  function pushFeedRow(country, severity) {
+  function pushFeedRow(country, severity, tier) {
     if (!hud.feedList) return;
+    const dotColor = tier === "normal" ? sevColors.normal : (sevColors[severity] || sevColors.low);
     const row = document.createElement("div");
     row.className = "tg-feed-row";
     row.innerHTML =
-      `<span class="tg-dot" style="background:${sevColors[severity] || sevColors.low}"></span>` +
+      `<span class="tg-dot" style="background:${dotColor}"></span>` +
       `<span class="tg-origin">${flagEmoji(country)} ${country || "??"}</span>` +
-      `<span class="tg-vec">Blocked request</span>` +
+      `<span class="tg-vec">${TIER_FEED_LABEL[tier] || "Event"}</span>` +
       `<span class="tg-ago">now</span>`;
     hud.feedList.insertBefore(row, hud.feedList.firstChild);
     while (hud.feedList.children.length > 40) hud.feedList.removeChild(hud.feedList.lastChild);
@@ -581,18 +613,18 @@ export function createThreatGlobeEngine(rootEl, worldCountries, sevColors) {
       if (arc.hasArc) {
         if (elapsed < arc.travelMs) {
           const t = elapsed / arc.travelMs;
-          arc.line.material.opacity = Math.min(0.55, t * 1.8);
+          arc.line.material.opacity = Math.min(0.55, t * 1.8) * arc.tierOpacity;
           const idx = Math.min(arc.points.length - 1, Math.floor(t * arc.points.length));
           arc.comet.position.copy(arc.points[idx]);
-          arc.comet.material.opacity = reducedMotion ? 0 : 1;
+          arc.comet.material.opacity = reducedMotion ? 0 : arc.tierOpacity;
         } else {
           const lingerT = (elapsed - arc.travelMs) / arc.lingerMs;
           arc.comet.material.opacity = 0;
-          arc.line.material.opacity = Math.max(0, 0.42 * (1 - lingerT));
+          arc.line.material.opacity = Math.max(0, 0.42 * (1 - lingerT)) * arc.tierOpacity;
         }
       }
 
-      arc.originMarker.material.opacity = Math.max(0, 1 - (elapsed / (arc.travelMs + arc.lingerMs)));
+      arc.originMarker.material.opacity = Math.max(0, 1 - (elapsed / (arc.travelMs + arc.lingerMs))) * arc.tierOpacity;
 
       const labelT = elapsed / arc.labelHoldMs;
       if (reducedMotion) {
