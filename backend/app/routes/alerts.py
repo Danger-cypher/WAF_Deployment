@@ -27,7 +27,11 @@ db = AlertDatabaseService()
 # (analysts need to see what channels exist), so these are masked unless
 # the caller is an admin — otherwise any analyst could read every
 # configured integration's credentials straight off this page.
-_SECRET_CONFIG_KEYS = {"password", "webhook_url", "integration_key"}
+# "url" (not "webhook_url") is the generic Webhook channel's own endpoint
+# field (WebhookChannelConfig.url) — omitted here, this leaked exactly the
+# same class of secret Slack's webhook_url is masked for, since a webhook
+# endpoint's URL commonly carries its own bearer token/signature.
+_SECRET_CONFIG_KEYS = {"password", "webhook_url", "integration_key", "url"}
 _REDACTED = "••••••••"
 
 

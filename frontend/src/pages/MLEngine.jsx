@@ -680,7 +680,7 @@ export default function MLAnalytics() {
                           {(log.xgb_prob * 100).toFixed(1)}%
                         </td>
                         <td style={{ textAlign: 'center', color: log.iso_score <= -0.1 ? 'var(--warning-color)' : 'var(--text-secondary)' }}>
-                          {log.iso_score.toFixed(3)}
+                          {(log.iso_score ?? 0).toFixed(3)}
                         </td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
