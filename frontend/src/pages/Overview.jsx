@@ -12,9 +12,11 @@ import {
 import {
   getStats, getTimeline, getAttackTypes, getTopIPs, getTopRules, getSeverityDistribution,
   getGeneralSettings, getHealth, getBackgroundTasksHealth, getAuditLog, getStatsTrend, getTopUris,
+  getLiveStreamWsUrl,
 } from '../services/api';
 import { NoTrafficEmptyState, FetchErrorState } from '../components/EmptyStates';
 import { DEFAULT_KPI_ORDER, KPI_LABELS, loadKpiPrefs, saveKpiPrefs } from '../utils/kpiPrefs';
+import { applyLiveStatsBump } from '../utils/liveStatsBump';
 
 function AnimatedNumber({ value = 0 }) {
   const safeValue = value || 0;
@@ -425,6 +427,33 @@ export default function ThreatAnalytics({ userRole, username, onNavigateToActivi
     return () => clearTimeout(timer);
   }, [refreshInterval, liveUpdates]);
 
+  // Optimistic live counters — /api/stats itself is Redis-cached for 30s
+  // server-side (deliberately, to keep ClickHouse load bounded across every
+  // connected dashboard session), so pure polling alone means a KPI card
+  // can sit on the same number for up to 30s after a real attack before it
+  // visibly moves, even though refetches are firing every few seconds.
+  // Bumping the displayed count instantly off the same live event stream
+  // the notification bell already uses gives the "moves the moment it
+  // happens" feel without shortening that cache (and its ClickHouse-load
+  // protection) for every viewer. fetchAnalytics's next poll still
+  // reconciles these to the authoritative server total, so a missed or
+  // duplicated WS frame can't drift the displayed number permanently.
+  useEffect(() => {
+    if (!liveUpdates) return undefined;
+    const ws = new WebSocket(getLiveStreamWsUrl());
+    ws.onmessage = (evt) => {
+      let msg;
+      try {
+        msg = JSON.parse(evt.data);
+      } catch {
+        return;
+      }
+      if (msg.type !== 'log') return;
+      setStats((prev) => applyLiveStatsBump(prev, msg.data));
+    };
+    return () => ws.close();
+  }, [liveUpdates]);
+
   useEffect(() => {
     const fetchHealth = () => {
       getHealth().then(setHealth).catch(err => console.error("Failed to fetch health status", err));
@@ -553,6 +582,31 @@ export default function ThreatAnalytics({ userRole, username, onNavigateToActivi
     return `${Math.round(hrs / 24)}d ago`;
   };
 
+  // log_admin_action's `details` is stored (and returned) as a JSON string,
+  // e.g. '{"status": "Reviewed"}' — without this, two genuinely different
+  // actions on the same record (say, a status flipped from Pending to
+  // Reviewed a second apart) render as identical-looking lines, since
+  // "update_status false_positive #<id>" alone doesn't say what changed.
+  // Only `status` is surfaced (the one field common enough across action
+  // types to be worth a generic suffix); anything else stays silent rather
+  // than guessing at a shape that doesn't apply to this action.
+  const changeDetailSuffix = (rawDetails) => {
+    if (!rawDetails) return '';
+    try {
+      const parsed = JSON.parse(rawDetails);
+      return parsed?.status ? ` → ${parsed.status}` : '';
+    } catch {
+      return '';
+    }
+  };
+
+  // Some entity types (false positives, exclusions) key off a full UUID —
+  // fine in the full Activity Log table, but it eats most of a line in
+  // this compact strip. Short numeric ids (rules, apps, users) pass
+  // through unchanged since there's nothing to shorten. Full value stays
+  // reachable via the title tooltip either way.
+  const shortId = (id) => (id && id.length > 8 ? `${id.slice(0, 8)}…` : id);
+
   return (
     <motion.div
       className="dashboard-grid animate-fade-in"
@@ -577,59 +631,66 @@ export default function ThreatAnalytics({ userRole, username, onNavigateToActivi
         </div>
       )}
 
-      {/* "What changed" — the last few admin actions, admin-only (the
-          endpoint itself is require_admin). Answers "what's different
-          since I last looked," which raw current-state KPIs can't. */}
-      {isAdmin && recentChanges.length > 0 && (
-        <div className="glass-panel" style={{ gridColumn: '1 / -1', padding: '10px 18px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '14px', fontSize: '12px' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.05em', flexShrink: 0 }}>
-            <History size={13} /> What Changed
-          </span>
-          {recentChanges.slice(0, 3).map((entry) => (
-            <span key={entry.id} style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-              <strong style={{ color: 'var(--text-primary)' }}>{entry.username}</strong> {entry.action} {entry.entity_type} #{entry.entity_id}
-              <span style={{ color: 'var(--text-muted)' }}> · {timeAgo(entry.timestamp)}</span>
-            </span>
-          ))}
-          {onNavigateToActivityLog && (
-            <button
-              onClick={onNavigateToActivityLog}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto', flexShrink: 0,
-                background: 'transparent', border: 'none', color: 'var(--accent-color)', fontSize: '11px',
-                fontWeight: 600, cursor: 'pointer', padding: 0,
-              }}
-            >
-              View full history <ArrowRight size={12} />
-            </button>
+      {/* Health + "what changed" — one merged panel instead of two stacked
+          glass-panel bars. Both are peripheral-awareness strips (as opposed
+          to the posture banner above, which is the primary state and reads
+          better standing alone) — separately bordered/shadowed boxes for
+          each was reading as a wall of banners before reaching the KPI
+          cards. Each row renders independently off its own data, so a
+          non-admin (no "what changed" access, that endpoint is
+          require_admin) or a still-loading health check never leaves an
+          empty second row or a divider with nothing under it. */}
+      {(health || (isAdmin && recentChanges.length > 0)) && (
+        <div className="glass-panel" style={{ gridColumn: '1 / -1', padding: 0 }}>
+          {health && (
+            <div style={{ padding: '10px 18px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '18px', fontSize: '12px' }}>
+              <span style={{ fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.05em' }}>
+                System Health
+              </span>
+              <HealthChip label="Redis" ok={health.redis_connected} />
+              <HealthChip label="ClickHouse" ok={health.clickhouse_connected} />
+              <HealthChip label="Database" ok={health.db_initialized} />
+              <HealthChip label="ML Engine" ok={health.ml_enabled} okLabel="Enabled" downLabel="Disabled" neutral={!health.ml_enabled} />
+              {isAdmin && backgroundHealth && (
+                <HealthChip
+                  label="Background Tasks"
+                  ok={backgroundHealth.all_healthy}
+                  okLabel="All on schedule"
+                  downLabel={`${Object.values(backgroundHealth.tasks || {}).filter(t => t.stale).length} stale`}
+                />
+              )}
+            </div>
           )}
-        </div>
-      )}
-
-      {/* Config-health rollup — a single compact strip, not another wall of
-          cards (six KPI cards below already cover traffic; this is purely
-          "is the platform itself healthy"). Only rendered once the first
-          health poll has come back, so it never flashes a false "down"
-          before data exists. */}
-      {health && (
-        <div className="glass-panel" style={{
-          gridColumn: '1 / -1', padding: '10px 18px', display: 'flex',
-          flexWrap: 'wrap', alignItems: 'center', gap: '18px', fontSize: '12px',
-        }}>
-          <span style={{ fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.05em' }}>
-            System Health
-          </span>
-          <HealthChip label="Redis" ok={health.redis_connected} />
-          <HealthChip label="ClickHouse" ok={health.clickhouse_connected} />
-          <HealthChip label="Database" ok={health.db_initialized} />
-          <HealthChip label="ML Engine" ok={health.ml_enabled} okLabel="Enabled" downLabel="Disabled" neutral={!health.ml_enabled} />
-          {isAdmin && backgroundHealth && (
-            <HealthChip
-              label="Background Tasks"
-              ok={backgroundHealth.all_healthy}
-              okLabel="All on schedule"
-              downLabel={`${Object.values(backgroundHealth.tasks || {}).filter(t => t.stale).length} stale`}
-            />
+          {isAdmin && recentChanges.length > 0 && (
+            <div style={{
+              padding: '10px 18px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '14px', fontSize: '12px',
+              borderTop: health ? '1px solid var(--border-color)' : 'none',
+            }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.05em', flexShrink: 0 }}>
+                <History size={13} /> What Changed
+              </span>
+              {recentChanges.slice(0, 3).map((entry) => (
+                <span key={entry.id} style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                  <strong style={{ color: 'var(--text-primary)' }}>{entry.username}</strong> {entry.action} {entry.entity_type} #<span title={entry.entity_id}>{shortId(entry.entity_id)}</span>
+                  {changeDetailSuffix(entry.details) && (
+                    <strong style={{ color: 'var(--accent-color)' }}>{changeDetailSuffix(entry.details)}</strong>
+                  )}
+                  <span style={{ color: 'var(--text-muted)' }}> · {timeAgo(entry.timestamp)}</span>
+                </span>
+              ))}
+              {onNavigateToActivityLog && (
+                <button
+                  onClick={onNavigateToActivityLog}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto', flexShrink: 0,
+                    background: 'transparent', border: 'none', color: 'var(--accent-color)', fontSize: '11px',
+                    fontWeight: 600, cursor: 'pointer', padding: 0,
+                  }}
+                >
+                  View full history <ArrowRight size={12} />
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
