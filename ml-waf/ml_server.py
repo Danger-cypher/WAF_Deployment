@@ -250,7 +250,17 @@ def write_to_clickhouse(event: dict):
             try:
                 ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
             except Exception:
-                ts = datetime.utcnow()
+                ts = datetime.now(pytz.UTC)
+        # clickhouse_connect serializes a DateTime column via int(x.timestamp())
+        # (clickhouse_connect/datatypes/temporal.py) — for a *naive* datetime,
+        # .timestamp() assumes the process's local system timezone, and this
+        # container's system tz is IST (bind-mounted /etc/localtime), not UTC.
+        # `ts` above is already a UTC wall-clock value (the caller formats it
+        # via datetime.now(pytz.UTC).strftime(...)) — tag it as UTC-aware so
+        # .timestamp() computes the correct epoch regardless of the process's
+        # local tz, instead of silently shifting it back by 5:30.
+        if isinstance(ts, datetime) and ts.tzinfo is None:
+            ts = pytz.UTC.localize(ts)
         row = [[
             str(event.get("unique_id", "")),
             ts,
