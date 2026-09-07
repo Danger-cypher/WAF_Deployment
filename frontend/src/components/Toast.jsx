@@ -15,6 +15,7 @@ export default function Toast({ toast }) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 10, scale: 0.95 }}
           role="status"
+          aria-live="polite"
           style={{
             position: 'fixed',
             bottom: '24px',

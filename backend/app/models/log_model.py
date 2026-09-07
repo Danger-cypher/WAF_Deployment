@@ -31,6 +31,19 @@ class LogEntry(BaseModel):
     geo_lat: Optional[float] = None
     geo_lon: Optional[float] = None
     geo_city: Optional[str] = ""
+    # ModSecurity's accumulated CRS anomaly score for this request, parsed
+    # out of the 949110/980130 message ("Inbound Anomaly Score Exceeded
+    # (Total Score: 23)"). None when the event is not an anomaly-scoring
+    # block — a rate-limit or Lua-originated event has no CRS score.
+    #
+    # Added for audit finding P1-02. The alert rule shipped enabled by
+    # default ("High WAF Attack Rule", condition crs_score_gt: 4) read
+    # event_data["crs_score"], which no ingested event ever carried, so it
+    # returned no-match on every one of 227,317 events over 51 days and the
+    # product delivered zero alerts. The score was already being extracted
+    # by _classify_from_message() to derive severity — it was simply never
+    # carried onto the entry.
+    crs_score: Optional[float] = None
     request_headers: Optional[Dict[str, str]] = {}
     response_headers: Optional[Dict[str, str]] = {}
     violations: Optional[List[ViolationDetail]] = []

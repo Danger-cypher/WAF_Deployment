@@ -140,14 +140,30 @@ export default function MLLogDrawer({ log, onClose, onLabelUpdate, showToast }) 
           <button className="log-drawer-close" onClick={onClose} aria-label="Close log details"><X size={16} /></button>
         </div>
 
-        {/* Tabs */}
-        <div className="log-drawer-tabs">
-          <span className={`log-drawer-tab ${modalActiveTab === 'scores' ? 'active' : ''}`} onClick={() => setModalActiveTab('scores')}>Payload Details</span>
-          <span className={`log-drawer-tab ${modalActiveTab === 'raw' ? 'active' : ''}`} onClick={() => setModalActiveTab('raw')}>CyberSentinel Engine Log</span>
+        {/* Tabs — audit finding P3-03: these were plain <span onClick>,
+            unreachable from the keyboard. Now a real tablist. */}
+        <div className="log-drawer-tabs" role="tablist" aria-label="ML log sections">
+          <span
+            id="ml-log-tab-scores" role="tab" tabIndex={modalActiveTab === 'scores' ? 0 : -1}
+            aria-selected={modalActiveTab === 'scores'} aria-controls="ml-log-panel"
+            className={`log-drawer-tab ${modalActiveTab === 'scores' ? 'active' : ''}`}
+            onClick={() => setModalActiveTab('scores')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setModalActiveTab('scores'); } }}
+          >Payload Details</span>
+          <span
+            id="ml-log-tab-raw" role="tab" tabIndex={modalActiveTab === 'raw' ? 0 : -1}
+            aria-selected={modalActiveTab === 'raw'} aria-controls="ml-log-panel"
+            className={`log-drawer-tab ${modalActiveTab === 'raw' ? 'active' : ''}`}
+            onClick={() => setModalActiveTab('raw')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setModalActiveTab('raw'); } }}
+          >CyberSentinel Engine Log</span>
         </div>
 
         {/* Body */}
-        <div className="log-drawer-body">
+        <div
+          className="log-drawer-body" id="ml-log-panel" role="tabpanel"
+          aria-labelledby={modalActiveTab === 'scores' ? 'ml-log-tab-scores' : 'ml-log-tab-raw'}
+        >
           {modalActiveTab === 'scores' ? (
             <>
               {/* Info grid */}

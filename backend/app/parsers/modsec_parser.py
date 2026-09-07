@@ -5,6 +5,7 @@ from typing import Optional
 from datetime import datetime
 import pytz
 from app.models.log_model import LogEntry
+from app.parsers.nginx_errorlog_parser import extract_crs_score
 from app.utils.attack_classifier import classify_attack
 from app.utils.geoip_manager import geoip_manager
 
@@ -182,6 +183,19 @@ def parse_modsec_audit_json(file_path: str, log_dir: str) -> Optional[LogEntry]:
                 message=message_text,
                 severity=severity,
                 attack_type=attack_type,
+                # Same extraction as the nginx-error-log path — an audit-log
+                # sourced event must carry the score too, or alert rules
+                # match only on whichever ingestion path happened to fire
+                # (audit finding P1-02). Also scans every violation message,
+                # since in the JSON audit format the anomaly total usually
+                # lives on the 949110 match rather than the top-level message.
+                crs_score=(
+                    extract_crs_score(message_text)
+                    or next(
+                        (sc for sc in (extract_crs_score(v.message) for v in violations) if sc),
+                        None,
+                    )
+                ),
                 hostname=hostname,
                 country=country_code,
                 source_asn_org=source_asn_org,

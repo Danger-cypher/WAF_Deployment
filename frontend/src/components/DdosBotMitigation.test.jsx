@@ -1,7 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import DdosBotMitigation from './DdosBotMitigation';
+import { ConfirmProvider } from '../context/ConfirmContext.jsx';
 import * as api from '../services/api';
+
+// handleDeleteRule now confirms first (audit finding P3-02), via the same
+// useConfirm() hook Settings.jsx already uses — needs its provider in
+// scope, same as any other component under it in the real app (see
+// main.jsx), or the hook throws on mount.
+function renderWithConfirm(ui) {
+  return render(<ConfirmProvider>{ui}</ConfirmProvider>);
+}
 
 // Covers just the Traffic Composition section (P1 item 5) — the rest of
 // this page (rate-limit settings, advanced rules, DDoS analytics) predates
@@ -24,7 +34,7 @@ describe('DdosBotMitigation — Traffic Composition', () => {
       { user_agent: 'GPTBot/1.0', category: 'AI Crawler', count: 200 },
     ]);
 
-    render(<DdosBotMitigation />);
+    renderWithConfirm(<DdosBotMitigation />);
 
     expect(await screen.findByText('Browser (Human)')).toBeInTheDocument();
     // "AI Crawler" appears twice — once in the breakdown bars, once as the
@@ -43,7 +53,7 @@ describe('DdosBotMitigation — Traffic Composition', () => {
     api.getBotTrafficBreakdown.mockResolvedValue([]);
     api.getTopBotIdentities.mockResolvedValue([]);
 
-    render(<DdosBotMitigation />);
+    renderWithConfirm(<DdosBotMitigation />);
 
     await waitFor(() => expect(screen.getByText('No traffic recorded yet.')).toBeInTheDocument());
     expect(screen.getByText('No non-browser traffic identified yet.')).toBeInTheDocument();
@@ -53,8 +63,62 @@ describe('DdosBotMitigation — Traffic Composition', () => {
     api.getBotTrafficBreakdown.mockResolvedValue([{ category: 'No User-Agent', count: 5, blocked_count: 3 }]);
     api.getTopBotIdentities.mockResolvedValue([{ user_agent: '', category: 'Scripted Client', count: 1 }]);
 
-    render(<DdosBotMitigation />);
+    renderWithConfirm(<DdosBotMitigation />);
 
     expect(await screen.findByText('(empty)')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3-02: deleting an advanced rate-limit rule used to save immediately with
+// no confirmation and no undo. It now confirms first, like every other
+// destructive action in the dashboard.
+// ---------------------------------------------------------------------------
+
+describe('DdosBotMitigation — advanced rule deletion', () => {
+  const RULE = {
+    id: 'rule-1', name: 'Throttle login endpoint', enabled: true,
+    parameter_type: 'URI', parameter_value: '/api/auth/login',
+    rate_limit_rps: 5, rate_limit_unit: 'r/s', burst_tolerance: 10,
+  };
+
+  function mockSettingsWithOneRule() {
+    api.getDdosBotSettings.mockResolvedValue({ advanced_rules: [RULE] });
+    api.getBotTrafficBreakdown.mockResolvedValue([]);
+    api.getTopBotIdentities.mockResolvedValue([]);
+  }
+
+  it('asks for confirmation naming the rule, and does not save if cancelled', async () => {
+    mockSettingsWithOneRule();
+    const user = userEvent.setup();
+    renderWithConfirm(<DdosBotMitigation />);
+
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/Throttle login endpoint/)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    // framer-motion's exit animation keeps the dialog mounted briefly —
+    // wait it out rather than assert on a mid-animation DOM snapshot.
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(api.saveDdosBotSettings).not.toHaveBeenCalled();
+    // The rule itself is still there — nothing was removed client-side either.
+    expect(screen.getByText('Throttle login endpoint')).toBeInTheDocument();
+  });
+
+  it('deletes and saves once the confirmation is accepted', async () => {
+    mockSettingsWithOneRule();
+    const user = userEvent.setup();
+    renderWithConfirm(<DdosBotMitigation />);
+
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('alertdialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(api.saveDdosBotSettings).toHaveBeenCalled());
+    const savedArg = api.saveDdosBotSettings.mock.calls.at(-1)[0];
+    expect(savedArg.advanced_rules).toEqual([]);
   });
 });

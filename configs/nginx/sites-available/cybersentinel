@@ -1,134 +1,49 @@
 # =============================================================================
 # CyberSentinel WAF — Dashboard Virtual Host Configuration
-# Port 3020  → Direct WAF Dashboard access (HTTP, WAF-inspected, no redirect)
+# Port 3020 → Direct WAF Dashboard access (plain HTTP, WAF-inspected)
+# Port 3443 → Same dashboard over HTTPS (audit finding P1-06)
+#
+# Both server blocks below share one body (cybersentinel-console-body.inc)
+# so ModSecurity rules, rate-limit zones and every location stay in sync —
+# only `listen`/`server_name`/TLS-only directives differ between them.
+#
+# 3020 is kept alongside 3443 rather than replaced: nginx cannot have a
+# `listen 3020 ssl;` server block and a `listen 3020;` (plain) server block
+# both bound to the same port — only one server{} can own a given
+# address:port combination, so migrating the console to HTTPS-only would
+# have meant flipping 3020 straight over, breaking every current plain-HTTP
+# session (including any tooling, bookmarks or SIEM redirect already
+# pointed at http://...:3020) the moment it was applied, with no transition
+# period. A second port sidesteps that restriction entirely: existing
+# access over :3020 is completely unaffected, and admins can move to the
+# HTTPS URL on their own schedule. :3020 can be firewalled off later once
+# everyone has migrated, at which point this file can drop that block.
 # =============================================================================
 
 server {
     listen 3020;
     listen [::]:3020;
     server_name 192.168.2.70 localhost _;
-    resolver 127.0.0.11 valid=30s ipv6=off;
-    
-    # ✅ ENABLE ModSecurity with selective rule whitelisting for admin dashboard
-    modsecurity on;
-    modsecurity_rules '
-        # Whitelist common false positives for admin JSON payloads
-        SecRuleRemoveById 920420
-        SecRuleRemoveById 920440
-        SecRuleRemoveById 942200
-        SecRuleRemoveById 942260
-        SecRuleRemoveById 942370
-        
-        # Allow SQL-like strings in legitimate settings/queries
-        SecRuleRemoveById 942100
-        SecRuleRemoveById 942150
-        SecRuleRemoveById 942410
-        SecRuleRemoveById 942430
-        SecRuleRemoveById 942440
-        
-        # Allow special characters in custom HTML responses
-        SecRuleRemoveById 941100
-        SecRuleRemoveById 941110
-        SecRuleRemoveById 941160
-        SecRuleRemoveById 941310
-        
-        # Allow legitimate admin command-like patterns
-        SecRuleRemoveById 932100
-        SecRuleRemoveById 932105
-        SecRuleRemoveById 932110
-        SecRuleRemoveById 932115
-    ';
-    
-    # Keep ML-WAF engine active (full protection)
-    access_by_lua_file /opt/ml-waf/ml_check.lua;
+    include /etc/nginx/sites-available/cybersentinel-console-body.inc;
+}
 
-    location ~* \.(php|pl|py|jsp|asp|sh|cgi)$ { deny all; }
-    location ~* (?:/\.\./|/\.\.$) { deny all; }
-    location /admin/ { allow 192.168.2.0/24; deny all; return 403; }
-    if ($bad_client) { return 403; }
-    # location / and location /api/ dispatch through ml_decide.lua (CONTENT
-    # phase) rather than proxy_pass directly — see ml_decide.lua's header
-    # comment for why (the ACCESS-phase CRS-score read in ml_check.lua
-    # can't be trusted, since nginx doesn't guarantee a dynamically-loaded
-    # module's access-phase handler — ModSecurity here — runs before a
-    # statically-linked one's — Lua here — within the same phase; it only
-    # guarantees the whole phase completes before content phase starts).
-    # ngx.exec() hands off to the named location's own proxy_pass on allow,
-    # same internal-redirect mechanism already used by `error_page 403 =
-    # @json_forbidden` elsewhere in this codebase — proxying itself is
-    # unchanged. location /api/auth/ and location /socket.io/ don't need
-    # this: /api/auth/ is exempted from ML scoring entirely (see
-    # is_admin_request in ml_check.lua/ml_decide.lua), so it never read the
-    # unreliable score either way; /socket.io/ handles the ML decision at
-    # the WebSocket handshake below, same pattern.
-    location / {
-        limit_except GET POST HEAD PUT PATCH DELETE { deny all; }
-        limit_req zone=api_limit burst=100;
-        set $waf_upstream_location "@proxy_frontend";
-        content_by_lua_file /opt/ml-waf/ml_decide.lua;
-    }
-    location @proxy_frontend {
-        set $frontend_upstream waf-frontend:80;
-        proxy_pass http://$frontend_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $http_connection;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-    location /api/auth/ {
-        limit_except GET POST HEAD PUT PATCH DELETE { deny all; }
-        
-        limit_req zone=login_limit burst=5 nodelay;
-        set $backend_auth_upstream waf-backend:8000;
-        rewrite ^/api/auth/(.*) /auth/$1 break;
-        proxy_pass http://$backend_auth_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-    location /api/ {
-        limit_except GET POST HEAD PUT PATCH DELETE { deny all; }
+server {
+    listen 3443 ssl;
+    listen [::]:3443 ssl;
+    http2 on;
+    server_name 192.168.2.70 localhost _;
 
-        limit_req zone=api_limit burst=30 nodelay;
-        # set must come before rewrite ... break — break halts the whole
-        # rewrite-phase directive chain for this location (set included),
-        # so a set placed after it never executes (confirmed live: caused
-        # every /api/* dashboard request to 500 with "$waf_upstream_location
-        # not set").
-        set $waf_upstream_location "@proxy_backend";
-        rewrite ^/api/(.*) /$1 break;
-        content_by_lua_file /opt/ml-waf/ml_decide.lua;
-    }
-    location @proxy_backend {
-        set $backend_upstream waf-backend:8000;
-        proxy_pass http://$backend_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-    location /socket.io/ {
-        limit_except GET POST HEAD { deny all; }
-        limit_conn ws_conn_limit 20;
-        limit_req zone=api_limit burst=20 nodelay;
-        set $waf_upstream_location "@proxy_socketio";
-        content_by_lua_file /opt/ml-waf/ml_decide.lua;
-    }
-    location @proxy_socketio {
-        set $socket_upstream waf-backend:8000;
-        proxy_pass http://$socket_upstream;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;
+    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;
+
+    # Deliberately NOT sending Strict-Transport-Security here, unlike the
+    # customer-facing :443 gateway (sites-enabled/mssp). HSTS is host-scoped,
+    # not port-scoped: a browser that ever receives it from this host caches
+    # it and then force-upgrades ALL subsequent requests to this host —
+    # every port, including the still-plain-HTTP :3020 above — to HTTPS,
+    # which that port doesn't speak. That would hang every request on
+    # :3020 (including the SSO landing page) waiting on a TLS handshake it
+    # will never get. Add it here only once :3020 is fully retired.
+
+    include /etc/nginx/sites-available/cybersentinel-console-body.inc;
 }

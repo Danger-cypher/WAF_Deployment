@@ -23,6 +23,7 @@ _health_cache: dict = {}
 _HEALTH_CACHE_TTL = 60      # seconds for parsed_files count
 _REDIS_CHECK_TTL = 15       # seconds for Redis connectivity check
 _CLICKHOUSE_CHECK_TTL = 15  # seconds for ClickHouse connectivity check
+_ML_CHECK_TTL = 15          # seconds for ML engine connectivity check
 
 
 def check_db_initialized():
@@ -53,7 +54,7 @@ async def health_check():
     parsed_files count and Redis check are cached to avoid 1.4s ClickHouse scan
     on every health poll.
     """
-    global _db_initialized, _db_init_error
+    global _db_init_error
     now = time.monotonic()
 
     log_dir_exists = os.path.exists(settings.LOG_DIR) and os.path.isdir(
@@ -101,14 +102,25 @@ async def health_check():
         _health_cache["redis_ts"] = now
     redis_ok = _health_cache["redis_ok"]
 
-    # ML engine availability (env var check — instant). docker-compose sets
-    # ML_API (e.g. http://waf-ml:9000), not ML_HOST — this previously always
-    # read the wrong var and reported ml_enabled=false even when the ML
-    # engine was reachable and working (confirmed via /ml/stats).
-    ml_enabled = bool(os.environ.get("ML_API", ""))
+    # ML engine availability. This used to be `bool(os.environ.get("ML_API",
+    # ""))` — an env var *presence* check, not a connectivity check. ML_API
+    # is a static docker-compose setting that's always non-empty regardless
+    # of whether the waf-ml container is actually up, so this field reported
+    # ml_enabled=true throughout any ML engine outage/crash — the same blind
+    # spot clickhouse_ok was added to close above, just left open for ML
+    # (audit finding P2-02). Real check: hits waf-ml's own /health endpoint
+    # via the same helper app/routes/ml.py's /ml/model-info already uses,
+    # cached the same way as the Redis/ClickHouse checks above so this
+    # frequently-polled endpoint doesn't add a network round trip per poll.
+    if "ml_ok" not in _health_cache or (now - _health_cache.get("ml_ts", 0)) > _ML_CHECK_TTL:
+        from app.routes.ml import _ml_api_request
+        ml_health = await _ml_api_request("GET", "/health")
+        _health_cache["ml_ok"] = ml_health.get("status") != "error"
+        _health_cache["ml_ts"] = now
+    ml_enabled = _health_cache["ml_ok"]
 
     return HealthResponse(
-        status="ok" if (db_ok and clickhouse_ok) else "warning",
+        status="ok" if (db_ok and clickhouse_ok and redis_ok and ml_enabled) else "warning",
         log_directory_exists=log_dir_exists,
         total_parsed_files=parsed_files,
         db_initialized=db_ok,
@@ -244,7 +256,6 @@ async def log_retention_status(current_user: TokenData = Depends(require_admin))
     """
     Get current log retention policy and storage usage stats.
     """
-    import shutil
     from datetime import datetime, timedelta, timezone
     from app.services.log_retention_service import (
         _parse_retention_days, _count_stale_audit_dirs, MODSEC_AUDIT_DIR,

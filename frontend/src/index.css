@@ -590,6 +590,11 @@ body::before {
   padding: 0 10px;
 }
 .nav-item {
+  /* audit finding P3-03: now a real <button> for keyboard access — reset
+     the native button chrome so it still looks like the plain row it was. */
+  background: none;
+  border: none;
+  text-align: left;
   display: flex;
   align-items: center;
   gap: 11px;
@@ -649,6 +654,10 @@ body::before {
 
 /* Sidebar Toggle — sits outside sidebar bounds; needs sidebar overflow:visible */
 .sidebar-toggle {
+  /* audit finding P3-03: now a real <button> — zero out default button
+     padding/font so the 26px circle sizes exactly as it did as a <div>. */
+  padding: 0;
+  font: inherit;
   position: absolute;
   /* Move the button fully outside: left edge of button aligns with sidebar right edge */
   right: -13px;
@@ -2476,6 +2485,12 @@ body::before {
   flex-shrink: 0;
 }
 .log-drawer-tab {
+  /* audit finding P3-03: now role="tab" with a real focus target, still a
+     <span> (activated via onKeyDown) rather than a <button>, so no native
+     button chrome to reset here — just an explicit border reset since the
+     rule below only overrides border-bottom. */
+  background: none;
+  border: none;
   padding: 12px 0;
   margin-right: 24px;
   font-size: 12px;

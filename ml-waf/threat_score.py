@@ -66,10 +66,18 @@ def get_routing_outcome(score: float, crs_score: float) -> str:
     crs_score = float(crs_score or 0.0)
     score = float(score or 0.0)
     
-    # TODO(security): High-certainty attack threshold bypass.
-    # If the rule engine is absolutely sure of an attack (CRS score >= 20),
-    # do not allow ML scores to override the block.
-    if crs_score >= 20.0:
+    # High-certainty attack override: if the rule engine itself is nearly
+    # sure this is an attack, don't let a low ML score talk it back down to
+    # "allow". This was `>= 20.0` — unreachable in this deployment.
+    # ModSecurity's own access-phase blocking rule (949110) already denies
+    # anything scoring >= tx.inbound_anomaly_score_threshold (5 in
+    # rules-override.conf) before this function's caller (ml_decide.lua,
+    # content phase) ever runs, so crs_score arriving here overwhelmingly
+    # scores well under 5 — a threshold of 20 could never fire (audit
+    # finding P2-01, alongside ml_decide.lua's identical CRS_BLOCK_THRESHOLD
+    # bug). Set to one point below that configured threshold, same
+    # reasoning as there: keep the two in sync if it ever changes.
+    if crs_score >= 4.0:
         return "block"
         
     # Decision Matrix Routing Outcomes

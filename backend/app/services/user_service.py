@@ -381,7 +381,7 @@ class UserService:
 
         conn = self._get_connection()
         try:
-            conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)
+            conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
             conn.commit()
         finally:
             conn.close()

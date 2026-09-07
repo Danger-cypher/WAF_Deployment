@@ -1,7 +1,7 @@
 """
 System-level API endpoints for WAF configuration and administrative actions.
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import socket
@@ -287,7 +287,7 @@ class RestoreRequest(BaseModel):
 
 
 @router.post("/backups")
-async def create_backup_endpoint(current_user: TokenData = Depends(require_admin)):
+async def create_backup_endpoint(request: Request, current_user: TokenData = Depends(require_admin)):
     """
     Snapshots nginx config + control-plane SQLite DBs into a downloadable
     archive. See backup_service.py for exactly what's included/excluded.
@@ -303,6 +303,7 @@ async def create_backup_endpoint(current_user: TokenData = Depends(require_admin
     log_admin_action(
         "system", "backup", "create", current_user,
         details={"filename": result["filename"], "size_bytes": result["size_bytes"]},
+        request=request,
     )
     return result
 
@@ -317,11 +318,13 @@ async def download_backup_endpoint(backup_id: int, current_user: TokenData = Dep
     record = backup_service.get_backup_archive_path(backup_id)
     if not record:
         raise HTTPException(status_code=404, detail="Backup not found or its archive file is missing on disk.")
-    return FileResponse(record["path"], filename=record["filename"], media_type="application/gzip")
+    # Fernet-encrypted (audit finding P2-08) — no longer plain gzip bytes,
+    # so application/gzip would mislead a client into trying to gunzip it.
+    return FileResponse(record["path"], filename=record["filename"], media_type="application/octet-stream")
 
 
 @router.post("/backups/{backup_id}/restore")
-async def restore_backup_endpoint(
+async def restore_backup_endpoint(request: Request,
     backup_id: int, payload: RestoreRequest, current_user: TokenData = Depends(require_admin)
 ):
     """
@@ -348,6 +351,7 @@ async def restore_backup_endpoint(
     log_admin_action(
         "system", "backup", "restore", current_user,
         details={"backup_id": backup_id, "success": success, "message": message},
+        request=request,
     )
     if not success:
         raise HTTPException(status_code=500, detail=message)
@@ -355,9 +359,9 @@ async def restore_backup_endpoint(
 
 
 @router.delete("/backups/{backup_id}")
-async def delete_backup_endpoint(backup_id: int, current_user: TokenData = Depends(require_admin)):
+async def delete_backup_endpoint(request: Request, backup_id: int, current_user: TokenData = Depends(require_admin)):
     success, message = backup_service.delete_backup(backup_id)
     if not success:
         raise HTTPException(status_code=404, detail=message)
-    log_admin_action("system", "backup", "delete", current_user, details={"backup_id": backup_id})
+    log_admin_action("system", "backup", "delete", current_user, details={"backup_id": backup_id}, request=request)
     return {"status": "success", "message": message}

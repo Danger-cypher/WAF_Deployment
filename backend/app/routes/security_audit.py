@@ -2,12 +2,12 @@
 Security Audit Logging Endpoint
 Provides endpoints to view and analyze security audit logs.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime
 
-from app.utils.security import security_audit_logger, SecurityAuditLogger
+from app.utils.security import security_audit_logger
 from app.services.auth import require_any_role, TokenData
 
 router = APIRouter()

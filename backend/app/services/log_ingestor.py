@@ -18,10 +18,8 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime
-from typing import List
 
-from watchdog.events import FileCreatedEvent, FileSystemEventHandler
+from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from app.config.settings import settings
@@ -136,6 +134,7 @@ async def _flush_loop():
                         _consecutive_flush_failures,
                     )
                 _consecutive_flush_failures = 0
+                await _broadcast_and_alert(buffer)
                 buffer = []
             else:
                 # Keep the batch and retry next cycle instead of dropping it —
@@ -147,6 +146,53 @@ async def _flush_loop():
                 _consecutive_flush_failures += 1
                 await _alert_on_flush_failure(_consecutive_flush_failures, len(buffer))
                 await asyncio.sleep(FLUSH_INTERVAL)
+
+
+async def _broadcast_and_alert(entries: list) -> None:
+    """
+    Pushes each newly-ingested entry out over the live WebSocket feed and
+    through real-time alert-rule evaluation.
+
+    This is the ONLY place that does either — a real, product-breaking
+    gap found 2026-09-04: websocket/connection_manager.py's own
+    NewLogHandler (a second, separate watchdog observer on the same audit
+    directory) already had this exact logic, but the function that starts
+    it (start_log_watcher) was imported in main.py and never called. Two
+    real features were silently dead as a result: the Threat Globe and
+    Overview pages' live feeds both explicitly filter for
+    `msg.type === 'log'` on this websocket and got nothing, ever; and
+    "attack_detected" — the event type behind the default-seeded "High
+    WAF Attack Rule" — was triggered from nowhere else in the codebase, so
+    that alert (and any admin-created rule using the same event type)
+    never fired regardless of real attack volume.
+
+    Hooked in here instead of resurrecting that second watcher: this flush
+    loop is the one place that already sees every ingested entry
+    regardless of source (ModSecurity audit JSON via the file watcher,
+    or the nginx-error-log fallback — including native rate-limit and
+    WAF-LUA-BLOCK entries now that nginx_errorlog_parser.py understands
+    them), so running it here covers all of them uniformly instead of
+    duplicating this logic per source.
+    """
+    from app.websocket.connection_manager import manager
+    from app.services.alert_manager import alert_manager
+
+    for entry in entries:
+        try:
+            d = entry.dict() if hasattr(entry, "dict") else dict(entry)
+        except Exception as e:
+            logger.warning("Failed to serialize entry for broadcast/alert: %s", e)
+            continue
+
+        try:
+            await manager.broadcast_log(d)
+        except Exception as e:
+            logger.error("Live log broadcast failed for entry %s: %s", d.get("id"), e)
+
+        try:
+            await alert_manager.trigger_event("attack_detected", d)
+        except Exception as e:
+            logger.error("attack_detected alert evaluation failed for entry %s: %s", d.get("id"), e)
 
 
 def _flush_to_clickhouse(entries: list) -> bool:
@@ -221,7 +267,6 @@ async def _alert_on_flush_failure(consecutive_failures: int, batch_size: int) ->
 # ---------------------------------------------------------------------------
 # Nginx error log polling (supplemental source)
 # ---------------------------------------------------------------------------
-_last_nginx_parse_time: float = 0.0
 _NGINX_POLL_INTERVAL: float = 30.0   # seconds
 
 _seen_nginx_ids: set = set()          # track IDs already enqueued from nginx
@@ -232,8 +277,6 @@ async def _nginx_poll_loop():
     Periodically parse the nginx error log for ModSecurity block entries
     that may not have an audit JSON file (e.g., very old entries or permission issues).
     """
-    global _last_nginx_parse_time
-
     while True:
         await asyncio.sleep(_NGINX_POLL_INTERVAL)
         try:
@@ -275,10 +318,9 @@ async def backfill_logs():
     all_files = list_newest_log_files(limit=100_000)
     logger.info("Backfill: %d audit files found on disk", len(all_files))
 
-    # Check which IDs are already in ClickHouse in chunks to avoid huge IN clauses
-    already_stored: set = set()
-    # We can't easily get IDs without parsing — so we parse and then dedup by ID
-    # Strategy: parse in chunks, batch-check IDs, insert missing ones
+    # Check which IDs are already in ClickHouse in chunks to avoid huge IN clauses.
+    # Can't easily get IDs without parsing, so: parse in chunks, batch-check
+    # IDs (existing_ids below), insert only what's missing.
 
     ingested = 0
     skipped = 0

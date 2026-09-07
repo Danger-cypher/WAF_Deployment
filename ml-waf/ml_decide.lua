@@ -93,7 +93,22 @@ if not upstream_location or upstream_location == "" then
     ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR)
 end
 
-if is_admin_request(request_path()) then
+-- Mirrors ml_check.lua's is_control_plane(): the path exemption list above
+-- is a control-plane concern only. It exists so the dashboard's own 3s
+-- polling isn't scored by the engine it administers (feedback loops, and
+-- the 2026-09-04 self-lockout). Applied on the data plane it was a scoring
+-- bypass — `GET /anything.js?<payload>` against a protected application
+-- skipped the ML engine entirely, since the query string is stripped before
+-- matching (audit finding P1-03, confirmed live against ml_events).
+--
+-- pcall-guarded for the same reason as everywhere else in these two files:
+-- reading an nginx variable that is never `set` in any server block raises.
+local function is_control_plane()
+    local ok, v = pcall(function() return ngx.var.waf_control_plane end)
+    return ok and v == "1"
+end
+
+if is_control_plane() and is_admin_request(request_path()) then
     return ngx.exec(upstream_location)
 end
 
@@ -105,6 +120,45 @@ local headers = ngx.req.get_headers()
 local crs_score = tonumber(ngx.var.modsecurity_anomaly_score) or 0.0
 local matched_vars = ngx.var.modsec_matched_var_names or ""
 
+-- JA4 fingerprint, cached by ja4.lua during the TLS handshake — a short,
+-- independent Redis round trip (own connect/keepalive, same shape as
+-- bot_challenge.check_risk_triggered()'s own connection further down in
+-- this file) rather than threading it through from ml_check.lua's access-
+-- phase connection, which is already closed out by the time this
+-- content-phase script runs. Empty string, not nil, when unavailable —
+-- ml_server.py's RequestTelemetry field defaults to "" and treats that as
+-- "no fingerprint", so a degraded Redis here just means this request
+-- doesn't contribute to JA4 reputation, same fail-open shape as
+-- ml_check.lua's own checks.
+local ja4 = ""
+do
+    local red = waf_redis.connect()
+    if red then
+        local v = red:get("ja4:" .. (ngx.var.remote_addr or ""))
+        if v and v ~= ngx.null then
+            ja4 = v
+        end
+        red:set_keepalive(10000, 100)
+    end
+end
+
+-- $geoip2_data_asn only exists as an nginx variable when nginx_manager.py's
+-- DDoS config generator actually emitted the ASN geoip2 {} block
+-- (GEOIP2_MODULE_ENABLED=true and the ASN MMDB present) — same pcall-guard
+-- reasoning as ml_check.lua's get_geo_country(): an undeclared nginx
+-- variable raises a Lua error on access rather than returning nil, so this
+-- must stay guarded even though the block is expected to exist in this
+-- deployment. Empty string (not nil) when unavailable, same convention as
+-- ja4 above — ml_server.py's RequestTelemetry field defaults to "" and
+-- treats that as "no ASN", not an error.
+local asn = ""
+do
+    local ok, v = pcall(function() return ngx.var.geoip2_data_asn end)
+    if ok and v and v ~= "" then
+        asn = v
+    end
+end
+
 local payload = {
     unique_id = ngx.var.unique_id or ngx.var.request_id or "",
     crs_score = crs_score,
@@ -115,21 +169,44 @@ local payload = {
     body_len = tonumber(headers["Content-Length"]) or 0,
     ct = headers["Content-Type"] or "",
     ua = headers["User-Agent"] or "",
-    remote_addr = ngx.var.remote_addr or ""
+    remote_addr = ngx.var.remote_addr or "",
+    ja4 = ja4,
+    asn = asn
 }
 
 local httpc = http.new()
 httpc:set_timeouts(500, 500, 500)
 
--- CRS-only fallback threshold: if ML daemon is unavailable, only block requests where
--- the ModSecurity CRS score already indicates a clear attack (score >= 20).
--- This prevents a self-inflicted DoS if the ML daemon restarts during model retraining.
-local CRS_BLOCK_THRESHOLD = 20.0
+-- CRS-only fallback threshold: if the ML daemon is unavailable, only block
+-- requests where the ModSecurity CRS score already indicates a clear
+-- attack, so a brief ML outage (e.g. daemon restart during model
+-- retraining) doesn't turn into a self-inflicted DoS.
+--
+-- This was 20.0 — effectively unreachable in this deployment. This script
+-- runs in the CONTENT phase, after ModSecurity's own access-phase blocking
+-- rule (949110) has already evaluated tx.inbound_anomaly_score_threshold,
+-- configured to 5 in rules-override.conf — a request scoring >= 5 is
+-- normally blocked there and never reaches this code (a prior audit did
+-- record one exception at crs_score=10 out of 108,870 ml_events, most
+-- likely a per-rule exclusion overriding that specific match's action
+-- while still letting the score accumulate — not something to design
+-- around). A threshold of 20 was consequently dead code: real traffic
+-- reaching here overwhelmingly scores well under 5, so it could never
+-- fire. Set to one point below the configured block threshold instead —
+-- the highest-confidence signal actually reachable under normal
+-- operation, meaning "CRS was one point from blocking this outright on
+-- its own." If tx.inbound_anomaly_score_threshold in rules-override.conf
+-- ever changes, update this to match (one less than that value).
+local CRS_BLOCK_THRESHOLD = 4.0
 
 local function crs_only_fallback(reason)
     ngx.log(ngx.WARN, "ML-WAF: ", reason, " — falling back to CRS-only mode.")
     if crs_score >= CRS_BLOCK_THRESHOLD then
         ngx.log(ngx.WARN, "ML-WAF CRS fallback: blocking request with CRS score=", crs_score)
+        -- WAF-LUA-BLOCK: see ml_check.lua's mTLS check for the full
+        -- explanation of this tag — feeds this decision into waf_events
+        -- alongside ModSecurity's own audit-log-sourced events.
+        ngx.log(ngx.WARN, "WAF-LUA-BLOCK reason=crs_fallback code=403 client=", ngx.var.remote_addr or "", " uri=", ngx.var.request_uri or "")
         ngx.status = ngx.HTTP_FORBIDDEN
         ngx.header.content_type = "text/html; charset=UTF-8"
         ngx.say("<h1>403 Forbidden</h1><p>Blocked by WAF (CRS Rule Enforcement)</p>")
@@ -153,6 +230,14 @@ if not ok then
     return crs_only_fallback("ML daemon unreachable: " .. (err or "unknown"))
 end
 
+-- Same shared secret the backend uses for waf-ml's admin endpoints (see
+-- ml_server.py's verify_internal_key docstring — audit finding P3-04:
+-- /predict previously had no auth of its own, relying entirely on Docker
+-- network topology). Empty when unset, matching verify_internal_key's own
+-- degrade-to-topology-only behavior on that side — never blocks this hot
+-- path just because the key hasn't been configured in this environment.
+local internal_key = os.getenv("INTERNAL_ALERT_TRIGGER_KEY") or ""
+
 local res, err = httpc:request({
     path = "/predict",
     method = "POST",
@@ -160,6 +245,7 @@ local res, err = httpc:request({
     headers = {
         ["Host"] = string.match(ml_host, "^unix:") and "127.0.0.1" or ml_host,
         ["Content-Type"] = "application/json",
+        ["X-Internal-Key"] = internal_key,
     }
 })
 
@@ -171,12 +257,16 @@ end
 httpc:close()
 
 if res.status == 401 then
+    -- WAF-LUA-BLOCK: see ml_check.lua's mTLS check for the full
+    -- explanation of this tag.
+    ngx.log(ngx.WARN, "WAF-LUA-BLOCK reason=ml_engine code=403 client=", ngx.var.remote_addr or "", " uri=", ngx.var.request_uri or "")
     ngx.status = ngx.HTTP_FORBIDDEN
     ngx.header.content_type = "text/html; charset=UTF-8"
     ngx.say("<h1>403 Forbidden</h1><p>Blocked by WAF (ML Threat Engine)</p>")
     ngx.exit(ngx.HTTP_FORBIDDEN)
 
 elseif res.status == 429 then
+    ngx.log(ngx.WARN, "WAF-LUA-BLOCK reason=ml_engine_throttle code=429 client=", ngx.var.remote_addr or "", " uri=", ngx.var.request_uri or "")
     ngx.status = 429
     ngx.header["Retry-After"] = "60"
     ngx.header.content_type = "text/html; charset=UTF-8"

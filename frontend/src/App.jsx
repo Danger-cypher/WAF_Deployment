@@ -166,11 +166,6 @@ function App() {
     setIsFpModalOpen(true);
   };
 
-  const handleNavigateToActivityLog = () => {
-    setPendingSettingsTab('activity-log');
-    setActiveTab('settings');
-  };
-
   const handleCreateRuleFromLog = (log) => {
     const reqHeaders = log.request_headers || {};
     setPendingRuleContext({
@@ -409,7 +404,7 @@ function App() {
         <Suspense fallback={<TabLoadingFallback />}>
           {/* Overview Tab */}
           {activeTab === 'overview' && (
-            <ThreatAnalytics key="overview" userRole={userRole} username={username} onNavigateToActivityLog={userRole === 'admin' ? handleNavigateToActivityLog : undefined} onFilterEvents={handleOverviewFilterEvents} />
+            <ThreatAnalytics key="overview" username={username} onFilterEvents={handleOverviewFilterEvents} />
           )}
 
           {/* Apps & DDoS Shield Tab (id: 'protection') — Virtual Hosts (protected apps, SSL, LB) + DDoS/Bot sub-tabs */}

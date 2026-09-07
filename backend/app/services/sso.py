@@ -18,7 +18,6 @@ Two verification modes, staged per the SIEM's rollout plan:
 import re
 import ssl
 import logging
-import secrets
 from typing import Any, Dict, Optional
 
 import jwt

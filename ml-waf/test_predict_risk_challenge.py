@@ -45,15 +45,14 @@ def _payload(**overrides):
     return base
 
 
-def _predict_with_models(monkeypatch, xgb_prob, iso_score, crs_score=0.0):
+def _predict_with_models(monkeypatch, xgb_prob, iso_score, crs_score=0.0, redis_rep=0.0, abuse_score=0.0):
     monkeypatch.setattr(ml_server, "PASSIVE_MODE", False)
     monkeypatch.setattr(ml_server, "xgb_model", _FixedProbaModel(xgb_prob, iso_score))
     monkeypatch.setattr(ml_server, "iso_model", _FixedProbaModel(xgb_prob, iso_score))
-    # Real Redis isn't available in this test environment and isn't what's
-    # under test here — score/decision are computed from crs_score + the
-    # two model outputs above regardless of what this returns.
+    # Real Redis isn't available in this test environment — reputation
+    # inputs are injected directly via this stub's return value instead.
     monkeypatch.setattr(
-        ml_server.redis_features, "get_redis_metrics", lambda ip: (0.0, 0.0, 0.0)
+        ml_server.redis_features, "get_redis_metrics", lambda ip: (0.0, redis_rep, abuse_score)
     )
     return client.post("/predict", json=_payload(crs_score=crs_score))
 
@@ -80,8 +79,12 @@ def test_routing_outcome_high_crs_forces_block_regardless_of_score():
 # ---------------------------------------------------------------------------
 
 def test_predict_log_band_sets_risk_challenge_header(monkeypatch):
-    # score = crs_norm(10/20=0.5)*0.50 + xgb_prob(0.6)*0.30 = 0.25 + 0.18 = 0.43
-    resp = _predict_with_models(monkeypatch, xgb_prob=0.6, iso_score=0.0, crs_score=10.0)
+    # crs_score deliberately stays under 4.0 (P2-01's high-certainty
+    # override threshold — see test_routing_outcome_high_crs_forces_block_
+    # regardless_of_score below) so this exercises the score-band path
+    # specifically, not the override.
+    # score = crs_norm(0/20=0)*0.50 + xgb_prob(1.0)*0.30 + iso_norm(1.0)*0.20 = 0.50
+    resp = _predict_with_models(monkeypatch, xgb_prob=1.0, iso_score=-0.5, crs_score=0.0)
     assert resp.status_code == 200
     body = resp.json()
     assert body["decision"] == "log"
@@ -89,8 +92,8 @@ def test_predict_log_band_sets_risk_challenge_header(monkeypatch):
     assert resp.headers.get("x-waf-risk-challenge") == "1"
     # P1-2: named sub-scores travel alongside the blended total.
     assert body["sub_scores"]["total"] == body["threat_score"]
-    assert body["sub_scores"]["crs"] == 0.5
-    assert body["sub_scores"]["xgb"] == 0.6
+    assert body["sub_scores"]["crs"] == 0.0
+    assert body["sub_scores"]["xgb"] == 1.0
 
 
 def test_predict_allow_band_does_not_set_risk_challenge_header(monkeypatch):
@@ -109,10 +112,52 @@ def test_predict_block_band_does_not_set_risk_challenge_header(monkeypatch):
 
 
 def test_predict_rate_limit_band_does_not_set_risk_challenge_header(monkeypatch):
-    # score = crs_norm(18/20=0.9)*0.50 + xgb_prob(1.0)*0.30 = 0.45 + 0.30 = 0.75
-    # (crs_score stays under the 20.0 hard-block override, so this exercises
-    # the score-threshold rate_limit path specifically, not the override.)
-    resp = _predict_with_models(monkeypatch, xgb_prob=1.0, iso_score=0.0, crs_score=18.0)
+    # crs_score stays at 0 (well under P2-01's 4.0 override threshold), so
+    # this exercises the score-threshold rate_limit path specifically, not
+    # the override. Reputation inputs make up the rest of the band since
+    # crs/xgb/iso alone can't reach 0.70 without crs_score crossing 4.0:
+    # score = xgb_prob(1.0)*0.30 + iso_norm(1.0)*0.20
+    #       + rep_boost(min(5*0.03,0.15)=0.15) + abuse_boost(min(50/100*0.15,0.15)=0.075)
+    #       = 0.30 + 0.20 + 0.15 + 0.075 = 0.725
+    resp = _predict_with_models(
+        monkeypatch, xgb_prob=1.0, iso_score=-0.5, crs_score=0.0,
+        redis_rep=5.0, abuse_score=50.0,
+    )
     assert resp.status_code == 429
     assert resp.json()["decision"] == "rate_limit"
     assert "x-waf-risk-challenge" not in resp.headers
+
+
+# ---------------------------------------------------------------------------
+# P3-04 — /predict now authenticates like every other internal endpoint.
+# Every test above runs with INTERNAL_ALERT_TRIGGER_KEY unset (the default
+# test environment), which is verify_internal_key's own degrade-to-no-op
+# path — real, but it doesn't prove enforcement actually fires when a key
+# IS configured. These do.
+# ---------------------------------------------------------------------------
+
+def test_predict_rejects_missing_key_when_one_is_configured(monkeypatch):
+    monkeypatch.setattr(ml_server, "INTERNAL_ALERT_TRIGGER_KEY", "the-real-shared-secret")
+    resp = client.post("/predict", json=_payload())
+    assert resp.status_code == 403
+
+
+def test_predict_rejects_wrong_key(monkeypatch):
+    monkeypatch.setattr(ml_server, "INTERNAL_ALERT_TRIGGER_KEY", "the-real-shared-secret")
+    resp = client.post("/predict", json=_payload(), headers={"X-Internal-Key": "wrong-guess"})
+    assert resp.status_code == 403
+
+
+def test_predict_accepts_the_matching_key(monkeypatch):
+    monkeypatch.setattr(ml_server, "PASSIVE_MODE", False)
+    monkeypatch.setattr(ml_server, "xgb_model", _FixedProbaModel(0.0, 0.0))
+    monkeypatch.setattr(ml_server, "iso_model", _FixedProbaModel(0.0, 0.0))
+    monkeypatch.setattr(
+        ml_server.redis_features, "get_redis_metrics", lambda ip: (0.0, 0.0, 0.0)
+    )
+    monkeypatch.setattr(ml_server, "INTERNAL_ALERT_TRIGGER_KEY", "the-real-shared-secret")
+    resp = client.post(
+        "/predict", json=_payload(),
+        headers={"X-Internal-Key": "the-real-shared-secret"},
+    )
+    assert resp.status_code == 200

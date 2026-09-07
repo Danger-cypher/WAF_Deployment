@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config.settings import settings
@@ -28,10 +28,9 @@ from app.routes import (
     virtual_patches,
     ws,
     auto_learning as auto_learning_route,
+    siem,
 )
-from app.services.log_reader import scan_log_directory
 from app.services.log_ingestor import backfill_logs, start_ingestor, start_ingestor_tasks
-from app.websocket.connection_manager import start_log_watcher
 from app.services.log_retention_service import start_log_retention_service
 
 # Configure logging
@@ -162,6 +161,12 @@ async def lifespan(app: FastAPI):
     from app.services.malware_scan_service import start_malware_scan_monitor
     malware_scan_task = asyncio.create_task(start_malware_scan_monitor())
 
+    # Start the verified-good-bot allowlist sync (Googlebot/Bingbot's own
+    # published IP ranges -> Redis, disabled by default via Settings) — see
+    # good_bot_service.py for why this exists.
+    from app.services.good_bot_service import start_good_bot_service
+    good_bot_task = asyncio.create_task(start_good_bot_service())
+
     # Start the heartbeat watchdog — checks whether the background tasks
     # above are actually still cycling, and alerts on the transition into
     # "stale" instead of relying on someone noticing a silent outage.
@@ -254,6 +259,13 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    # Cancel the good-bot allowlist sync task
+    good_bot_task.cancel()
+    try:
+        await good_bot_task
+    except asyncio.CancelledError:
+        pass
+
     # Cancel the heartbeat watchdog task
     heartbeat_watchdog_task.cancel()
     try:
@@ -262,7 +274,21 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+# docs_url/redoc_url/openapi_url are disabled on the app itself and
+# re-registered below behind require_admin. FastAPI's defaults serve the
+# full OpenAPI schema (every route, parameter and response model) and an
+# interactive Swagger UI to anyone, unauthenticated — confirmed live
+# reachable at /api/docs, /api/redoc and /api/openapi.json with no session
+# at all (audit finding P2-11). That's a full API map handed to an
+# unauthenticated attacker for free; nothing about these routes needs to be
+# public for the product to function.
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 from fastapi.responses import HTMLResponse
 from app.services.settings_manager import settings_manager
@@ -296,6 +322,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Re-registered docs routes (see the FastAPI(...) call above for why the
+# built-in ones are disabled) — an admin session is now required for all
+# three. Path names (/openapi.json, /docs, /redoc) are unchanged, so
+# nothing that already links to them needs updating.
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.openapi.utils import get_openapi as _build_openapi_schema
+from app.services.auth import require_admin, TokenData
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def protected_openapi_schema(current_user: TokenData = Depends(require_admin)):
+    return JSONResponse(
+        _build_openapi_schema(
+            title=app.title, version=app.version, routes=app.routes
+        )
+    )
+
+
+@app.get("/docs", include_in_schema=False)
+async def protected_swagger_ui(current_user: TokenData = Depends(require_admin)):
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Docs")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def protected_redoc(current_user: TokenData = Depends(require_admin)):
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
 
 
 from fastapi.responses import JSONResponse
@@ -361,9 +415,25 @@ async def add_security_headers(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; frame-ancestors 'none';"
-    )
+    if request.url.path in ("/docs", "/redoc", "/openapi.json"):
+        # Swagger UI / ReDoc (re-registered above behind require_admin) load
+        # their JS/CSS bundle from jsdelivr — the blanket `default-src
+        # 'none'` every other response gets would block that bundle from
+        # ever loading, leaving an authenticated admin staring at a blank
+        # page. Scoped to just these three now-gated paths.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https://cdn.jsdelivr.net; "
+            "font-src 'self' data: https://cdn.jsdelivr.net; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none';"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none';"
+        )
 
     # Dynamic Infrastructure Hardening & Server Cloaking (cached — no disk I/O per request)
     try:
@@ -438,6 +508,7 @@ app.include_router(users.router, tags=["Users"], dependencies=csrf_deps)
 app.include_router(api_keys.router, tags=["API Keys"], dependencies=csrf_deps)
 app.include_router(virtual_patches.router, tags=["Virtual Patches"], dependencies=csrf_deps)
 app.include_router(auto_learning_route.router, tags=["Auto-Learning"], dependencies=csrf_deps)
+app.include_router(siem.router, tags=["SIEM Export"], dependencies=csrf_deps)
 # No csrf_deps: the WebSocket handshake has no Request object for the
 # double-submit CSRF check to inspect. Auth is instead done inside the
 # handler itself by reading the session cookie directly (see routes/ws.py).

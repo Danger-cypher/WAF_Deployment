@@ -1,9 +1,9 @@
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.services import db_service, rule_manager, auto_learning
 from app.services.auth import require_admin, require_any_role, TokenData

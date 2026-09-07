@@ -55,6 +55,10 @@ DEFAULT_SETTINGS = {
         "server_cloaking": True,
         "ip_blacklist": [],
         "ip_whitelist": [],
+        # Known-bad TLS-client (JA4) fingerprints — see ml-waf/ja4.lua.
+        # Exact-match only; admin-curated (own observations or pasted from
+        # external threat intel), not auto-learned yet.
+        "ja4_blacklist": [],
     },
     # Distinct from hardening.ip_whitelist/ip_blacklist above, which gates
     # ALL site traffic through nginx/ml_check.lua. This one gates only the
@@ -76,8 +80,43 @@ DEFAULT_SETTINGS = {
     "threat_intel": {
         "enabled": False,
         "sync_interval_hours": 24,
+        # Per-source opt-in — see threat_intel_service.py's DEFAULT_SOURCES
+        # for why tor_exit_nodes defaults off while the other two don't.
+        "sources": {
+            "spamhaus": True,
+            "emerging_threats": True,
+            "tor_exit_nodes": False,
+        },
         "last_sync_at": None,
         "last_sync_count": 0,
+        "last_sync_counts": {},
+        "last_sync_status": "never_run",
+        "last_sync_error": None,
+    },
+    # Verified-good-crawler allowlist — see good_bot_service.py. Distinct
+    # from nginx_manager.py's static $is_bad_bot UA map (which only ever
+    # lists known-BAD tool signatures, never Google/Bing — it doesn't
+    # block legitimate crawlers today). This exists because nothing else
+    # in the stack recognizes Googlebot/Bingbot as special: a real
+    # crawler's fast, sequential, referrer-less request pattern is exactly
+    # the shape the ML engine's adaptive reputation throttle is designed
+    # to flag as suspicious. UA string alone is trivially spoofable, so
+    # this only trusts a request when its source IP matches that crawler's
+    # own officially-published IP ranges (Google's/Bing's own JSON feeds)
+    # AND the UA claims that crawler — verified IP is what actually
+    # matters; the UA check just scopes which crawler's range to check
+    # against. Disabled by default, same convention as threat_intel/
+    # malware_scanning/Positive Security.
+    "good_bots": {
+        "enabled": False,
+        "sync_interval_hours": 24,
+        "sources": {
+            "googlebot": True,
+            "bingbot": True,
+        },
+        "last_sync_at": None,
+        "last_sync_count": 0,
+        "last_sync_counts": {},
         "last_sync_status": "never_run",
         "last_sync_error": None,
     },
@@ -378,6 +417,14 @@ class SettingsManager:
         self.settings["threat_intel"] = data
         self.save_settings(self.settings)
         return self.settings["threat_intel"]
+
+    def get_good_bots(self) -> Dict[str, Any]:
+        return self.settings.get("good_bots", DEFAULT_SETTINGS["good_bots"])
+
+    def update_good_bots(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["good_bots"] = data
+        self.save_settings(self.settings)
+        return self.settings["good_bots"]
 
     def get_auto_reputation(self) -> Dict[str, Any]:
         return self.settings.get("auto_reputation", DEFAULT_SETTINGS["auto_reputation"])

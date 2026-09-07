@@ -73,6 +73,189 @@ def _load_document(content: str) -> Dict[str, Any]:
     return doc
 
 
+def _resolve_local_ref(doc: Dict[str, Any], ref: str) -> Optional[Dict[str, Any]]:
+    """
+    Resolves a same-document JSON-pointer $ref (OpenAPI 3.x's
+    '#/components/schemas/Foo', Swagger 2.0's '#/definitions/Foo'). Returns
+    None for anything else — an external ref (a URL, or a path outside
+    this document) is deliberately never followed: this parser runs on
+    admin-uploaded spec content, and fetching an arbitrary URL embedded in
+    that content to resolve a $ref would be an SSRF vector. An unresolved
+    ref just means "no field-level schema available for this operation",
+    same as if the spec had no requestBody at all — never an error.
+    """
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        return None
+    node: Any = doc
+    for part in ref[2:].split("/"):
+        part = part.replace("~1", "/").replace("~0", "~")  # JSON Pointer escaping
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node if isinstance(node, dict) else None
+
+
+def _resolve_schema(doc: Dict[str, Any], schema: Any, _depth: int = 0) -> Optional[Dict[str, Any]]:
+    """Follows local $ref indirection (a schema can $ref another schema
+    that itself $refs a third). _depth caps this at a small constant so a
+    circular reference in a malformed/hostile upload can't hang the
+    parser — real specs never nest more than one or two levels deep."""
+    if not isinstance(schema, dict):
+        return None
+    if _depth > 5:
+        return None
+    if "$ref" in schema:
+        resolved = _resolve_local_ref(doc, schema["$ref"])
+        if resolved is None:
+            return None
+        return _resolve_schema(doc, resolved, _depth + 1)
+    return schema
+
+
+# JSON Schema type -> schema_validate.lua's field_types.type. "integer" and
+# "number" both collapse to Lua's single numeric type (Lua doesn't
+# distinguish int/float); "array"/"object"/unset have no equivalent check
+# in schema_validate.lua and are left unconstrained rather than guessed at.
+_JSON_SCHEMA_TYPE_MAP = {"string": "string", "integer": "number", "number": "number", "boolean": "boolean"}
+
+
+def _field_type_spec(prop_schema: Any) -> Optional[Dict[str, Any]]:
+    """Converts one JSON Schema property definition into one field_types
+    entry (routes/apps.py's ApiFieldTypeSpec shape), or None if there's
+    nothing this importer can represent (object/array/untyped properties,
+    or no schema at all)."""
+    if not isinstance(prop_schema, dict):
+        return None
+
+    enum_vals = prop_schema.get("enum")
+    if isinstance(enum_vals, list) and enum_vals:
+        return {"type": "enum", "enum": enum_vals}
+
+    lua_type = _JSON_SCHEMA_TYPE_MAP.get(prop_schema.get("type"))
+    if not lua_type:
+        return None
+
+    spec: Dict[str, Any] = {"type": lua_type}
+    if lua_type == "string":
+        max_len = prop_schema.get("maxLength")
+        if isinstance(max_len, int) and max_len > 0:
+            spec["max_length"] = max_len
+        pattern = prop_schema.get("pattern")
+        if isinstance(pattern, str) and pattern:
+            spec["pattern"] = pattern
+    return spec
+
+
+def _request_body_schema(doc: Dict[str, Any], operation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extracts + resolves one operation's JSON request-body schema,
+    whichever form this document uses: OpenAPI 3.x
+    (requestBody.content['application/json'].schema) or Swagger 2.0 (a
+    `parameters` entry with in: 'body'). None if this operation has no
+    JSON body (a GET, or a body of some other content type)."""
+    request_body = operation.get("requestBody")
+    if isinstance(request_body, dict):
+        content = request_body.get("content")
+        if isinstance(content, dict):
+            json_content = content.get("application/json")
+            if isinstance(json_content, dict):
+                return _resolve_schema(doc, json_content.get("schema"))
+
+    for param in operation.get("parameters", []) or []:
+        if isinstance(param, dict) and param.get("in") == "body":
+            return _resolve_schema(doc, param.get("schema"))
+
+    return None
+
+
+def extract_positive_security_schema(content: str) -> Dict[str, Any]:
+    """
+    Parses an OpenAPI 3.x/Swagger 2.0 document into schema_validate.lua's
+    per-app endpoint-declaration format (routes/apps.py's
+    ApiSchemaEndpoint list, PUT /apps/{id}/schema) — reuses
+    _load_document() for the same safe JSON/YAML parsing as parse_spec()
+    above. Returns a PREVIEW only; nothing is written to Redis or the DB
+    here — the caller (routes/apps.py) hands this back to the admin to
+    review/edit, same "never auto-apply" convention as this codebase's
+    other suggestion-generating features (e.g. Auto-Learning), and the
+    actual save still goes through PUT /apps/{id}/schema's existing
+    validation, not a second copy of it here.
+
+    Deliberately excludes any path containing a {parameter} template
+    segment: schema_validate.lua's find_endpoint() does an EXACT string
+    match against the request URI, with no path-templating support —
+    importing "/users/{id}" as a literal endpoint would silently produce a
+    rule that can never match real traffic ("/users/42"). An admin seeing
+    it in the schema list would reasonably assume it's being enforced,
+    which would be worse than not importing it — so it's reported in
+    `skipped` instead, visible rather than silently dropped.
+
+    Raises ValueError on anything unparseable, same convention as
+    parse_spec() (caller turns this into a 400, not a 500).
+    """
+    doc = _load_document(content)
+
+    paths = doc.get("paths")
+    if not isinstance(paths, dict):
+        raise ValueError("No 'paths' object found — doesn't look like an OpenAPI/Swagger document.")
+
+    endpoints: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, str]] = []
+
+    for path_template, path_item in paths.items():
+        if not isinstance(path_item, dict):
+            continue
+
+        if "{" in path_template:
+            for method in path_item.keys():
+                if method.lower() in _VALID_HTTP_METHODS:
+                    skipped.append({
+                        "method": method.upper(),
+                        "path": path_template,
+                        "reason": "templated path — this WAF's schema enforcement only matches exact, literal paths",
+                    })
+            continue
+
+        for method, operation in path_item.items():
+            if method.lower() not in _VALID_HTTP_METHODS or not isinstance(operation, dict):
+                continue
+
+            entry: Dict[str, Any] = {
+                "method": method.upper(),
+                "path": path_template,
+                "required_fields": [],
+                "allowed_fields": [],
+                "field_types": {},
+            }
+
+            body_schema = _request_body_schema(doc, operation)
+            if isinstance(body_schema, dict) and body_schema.get("type", "object") == "object":
+                properties = body_schema.get("properties")
+                if isinstance(properties, dict) and properties:
+                    required = body_schema.get("required")
+                    if isinstance(required, list):
+                        entry["required_fields"] = [f for f in required if isinstance(f, str)]
+
+                    # Only a strict allowlist when the spec itself says so —
+                    # JSON Schema's default is additionalProperties: true,
+                    # so populating this from `properties` regardless would
+                    # turn every imported endpoint into a stricter contract
+                    # than the spec actually declares, rejecting legitimate
+                    # extra fields the real API accepts.
+                    if body_schema.get("additionalProperties") is False:
+                        entry["allowed_fields"] = list(properties.keys())
+
+                    field_types = {}
+                    for prop_name, prop_schema in properties.items():
+                        spec = _field_type_spec(prop_schema)
+                        if spec:
+                            field_types[prop_name] = spec
+                    entry["field_types"] = field_types
+
+            endpoints.append(entry)
+
+    return {"endpoints": endpoints, "skipped": skipped}
+
+
 def path_template_to_regex(template: str) -> re.Pattern:
     """
     Convert an OpenAPI path template ("/users/{id}/orders/{orderId}")

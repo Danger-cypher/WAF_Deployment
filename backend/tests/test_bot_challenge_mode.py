@@ -1,10 +1,16 @@
 """
 Covers the new "JS Challenge" bot-mitigation mode: apply_ddos_settings()
-must skip applying the existing waf_bot_req rate-limit (1r/m, burst=1 —
-which would otherwise reject the JS-challenge page's own self-triggered
-reload before ml-waf/bot_challenge.lua ever sees it) and instead expose a
-config-time boolean ($waf_bot_challenge_enabled) that Lua reads to decide
-whether to serve the interstitial.
+must skip applying the bad-bot rate limit (1r/m equivalent — which would
+otherwise reject the JS-challenge page's own self-triggered reload before
+ml-waf/bot_challenge.lua ever sees it) and instead expose a config-time
+boolean ($waf_bot_challenge_enabled) that Lua reads to decide whether to
+serve the interstitial.
+
+The bad-bot rate limit itself moved from a native nginx limit_req_zone to
+ml_check.lua's check_bad_bot_rate_limit() as part of the P2-07 fix (see
+test_p2_07_bot_status.py) — $waf_bot_mitigation_status (444/429/0) is now
+how Python tells that Lua check what to do, replacing the
+"limit_req zone=waf_bot_req" lines this file used to assert on directly.
 """
 from app.services import nginx_manager
 
@@ -34,7 +40,8 @@ def test_js_challenge_mode_skips_bot_rate_limit_and_sets_flag(monkeypatch):
     settings = {**BASE_SETTINGS, "bot_mitigation_action": "JS Challenge"}
     config = _capture_generated_ddos_config(monkeypatch, settings)
 
-    assert "limit_req zone=waf_bot_req burst=1 nodelay;" not in config
+    assert "waf_bot_req" not in config
+    assert "map $host $waf_bot_mitigation_status {\n    default 0;\n}" in config
     assert "map $host $waf_bot_challenge_enabled {" in config
     assert "    default 1;" in config
 
@@ -43,7 +50,7 @@ def test_silent_drop_mode_still_applies_bot_rate_limit_and_clears_flag(monkeypat
     settings = {**BASE_SETTINGS, "bot_mitigation_action": "Silent Drop"}
     config = _capture_generated_ddos_config(monkeypatch, settings)
 
-    assert "limit_req zone=waf_bot_req burst=1 nodelay;" in config
+    assert "map $host $waf_bot_mitigation_status {\n    default 444;\n}" in config
     assert "map $host $waf_bot_challenge_enabled {" in config
     assert "    default 0;" in config
 
@@ -52,7 +59,7 @@ def test_block_mode_still_applies_bot_rate_limit_and_clears_flag(monkeypatch):
     settings = {**BASE_SETTINGS, "bot_mitigation_action": "Block"}
     config = _capture_generated_ddos_config(monkeypatch, settings)
 
-    assert "limit_req zone=waf_bot_req burst=1 nodelay;" in config
+    assert "map $host $waf_bot_mitigation_status {\n    default 429;\n}" in config
     assert "    default 0;" in config
 
 

@@ -143,7 +143,7 @@ class ApiKeyService:
         conn = self._get_connection()
         try:
             rows = conn.execute(
-                f"SELECT {_PUBLIC_COLUMNS} FROM api_keys ORDER BY created_at DESC"
+                f"SELECT {_PUBLIC_COLUMNS} FROM api_keys ORDER BY created_at DESC"  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
             ).fetchall()
             return [self._row_to_dict(r) for r in rows]
         finally:
@@ -153,7 +153,7 @@ class ApiKeyService:
         conn = self._get_connection()
         try:
             row = conn.execute(
-                f"SELECT {_PUBLIC_COLUMNS} FROM api_keys WHERE id = ?", (key_id,)
+                f"SELECT {_PUBLIC_COLUMNS} FROM api_keys WHERE id = ?", (key_id,)  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
             ).fetchone()
             return self._row_to_dict(row) if row else None
         finally:
@@ -185,11 +185,9 @@ class ApiKeyService:
         conn = self._get_connection()
         try:
             row = conn.execute(
-                f"""
-                SELECT {_PUBLIC_COLUMNS} FROM api_keys
-                WHERE key_hash = ? AND enabled = 1
-                AND (expires_at IS NULL OR expires_at > datetime('now'))
-                """,
+                f"SELECT {_PUBLIC_COLUMNS} FROM api_keys "  # nosec B608 — _PUBLIC_COLUMNS is a fixed module-level constant, never user input; key_hash below is parameterized
+                "WHERE key_hash = ? AND enabled = 1 "
+                "AND (expires_at IS NULL OR expires_at > datetime('now'))",
                 (key_hash,),
             ).fetchone()
             if row is None:

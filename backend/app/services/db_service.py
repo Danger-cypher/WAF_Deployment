@@ -2,7 +2,6 @@ import os
 import sqlite3
 import logging
 import json
-import uuid
 from typing import Optional, Any, Union, List
 
 from app.services import clickhouse_service
@@ -210,7 +209,6 @@ def init_db():
                 "ssl_cert_path TEXT DEFAULT NULL",
                 "ssl_key_path TEXT DEFAULT NULL",
             ]:
-                col_name = col_def.split()[0]
                 try:
                     cursor.execute(
                         f"ALTER TABLE protected_apps ADD COLUMN {col_def}"
@@ -226,7 +224,6 @@ def init_db():
                 "auth_check_type TEXT NOT NULL DEFAULT 'header'",
                 "auth_header_name TEXT NOT NULL DEFAULT 'Authorization'",
             ]:
-                col_name = col_def.split()[0]
                 try:
                     cursor.execute(
                         f"ALTER TABLE protected_apps ADD COLUMN {col_def}"
@@ -268,6 +265,40 @@ def init_db():
             try:
                 cursor.execute(
                     "ALTER TABLE protected_apps ADD COLUMN additional_origins TEXT DEFAULT NULL"
+                )
+            except Exception:
+                pass  # Column already exists — expected on re-init
+
+            # mTLS for API auth (roadmap item), scoped to each app's /api
+            # path only — see ml_check.lua's check_mtls() and
+            # nginx_manager.py's per-app server-block generation. Disabled
+            # by default; mtls_mode defaults to 'log' (request+record, never
+            # block) so enabling never immediately locks out real clients —
+            # an admin explicitly flips to 'enforce' once real client certs
+            # are confirmed working, same safety pattern as Positive
+            # Security / API Schema's log-then-enforce modes.
+            for col_def in [
+                "mtls_enabled INTEGER NOT NULL DEFAULT 0",
+                "mtls_mode TEXT NOT NULL DEFAULT 'log'",
+                "mtls_ca_cert_path TEXT DEFAULT NULL",
+            ]:
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE protected_apps ADD COLUMN {col_def}"
+                    )
+                except Exception:
+                    pass  # Column already exists — expected on re-init
+
+            # Basic per-app response caching (roadmap item). Disabled by
+            # default — an admin must opt in per app, same as every other
+            # optional enforcement toggle in this codebase. See
+            # nginx_manager.py's cache-zone generation for what this
+            # actually turns on (relies on nginx's own Set-Cookie/
+            # GET-HEAD-only caching safety defaults rather than reinventing
+            # them).
+            try:
+                cursor.execute(
+                    "ALTER TABLE protected_apps ADD COLUMN enable_response_cache INTEGER NOT NULL DEFAULT 0"
                 )
             except Exception:
                 pass  # Column already exists — expected on re-init
@@ -399,12 +430,10 @@ def _get_exclusion_link_map(log_ids: List[str]) -> dict:
             cursor = conn.cursor()
             placeholders = ",".join("?" for _ in log_ids)
             cursor.execute(
-                f"""
-                SELECT fp.log_id, e.id AS exclusion_id
-                FROM exclusions e
-                JOIN false_positives fp ON fp.id = e.false_positive_id
-                WHERE fp.log_id IN ({placeholders})
-                """,
+                "SELECT fp.log_id, e.id AS exclusion_id "  # nosec B608 — placeholders is just repeated "?" chars, never log_ids' values; those are parameterized below
+                "FROM exclusions e "
+                "JOIN false_positives fp ON fp.id = e.false_positive_id "
+                f"WHERE fp.log_id IN ({placeholders})",
                 log_ids,
             )
             return {row["log_id"]: row["exclusion_id"] for row in cursor.fetchall()}
@@ -1465,6 +1494,7 @@ def create_protected_app(
     auth_check_type: str = "header",
     auth_header_name: str = "Authorization",
     additional_origins: str = None,
+    enable_response_cache: int = 0,
 ):
     try:
         with get_connection() as conn:
@@ -1473,15 +1503,16 @@ def create_protected_app(
                 INSERT INTO protected_apps
                     (name, domain, upstream_host, upstream_port, protocol, is_active,
                      rate_limit_rps, burst_tolerance, ssl_option, ssl_cert_path, ssl_key_path,
-                     require_auth, auth_check_type, auth_header_name, additional_origins)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     require_auth, auth_check_type, auth_header_name, additional_origins,
+                     enable_response_cache)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 name, domain.strip().lower(), upstream_host.strip(),
                 upstream_port, protocol.strip().lower(), is_active,
                 rate_limit_rps, burst_tolerance,
                 ssl_option, ssl_cert_path, ssl_key_path,
                 require_auth, auth_check_type, auth_header_name,
-                additional_origins,
+                additional_origins, enable_response_cache,
             ))
             conn.commit()
             new_id = cursor.lastrowid
@@ -1508,6 +1539,7 @@ def update_protected_app(
     auth_check_type: str = "header",
     auth_header_name: str = "Authorization",
     additional_origins: str = None,
+    enable_response_cache: int = 0,
 ):
     try:
         with get_connection() as conn:
@@ -1520,7 +1552,7 @@ def update_protected_app(
                     ssl_cert_path = COALESCE(?, ssl_cert_path),
                     ssl_key_path  = COALESCE(?, ssl_key_path),
                     require_auth = ?, auth_check_type = ?, auth_header_name = ?,
-                    additional_origins = ?
+                    additional_origins = ?, enable_response_cache = ?
                 WHERE id = ?
             """, (
                 name, domain.strip().lower(), upstream_host.strip(),
@@ -1528,13 +1560,50 @@ def update_protected_app(
                 rate_limit_rps, burst_tolerance,
                 ssl_option, ssl_cert_path, ssl_key_path,
                 require_auth, auth_check_type, auth_header_name,
-                additional_origins,
+                additional_origins, enable_response_cache,
                 app_id,
             ))
             conn.commit()
             return get_protected_app_by_id(app_id)
     except Exception as e:
         logger.error(f"Error updating protected app: {e}")
+        return None
+
+
+def update_app_mtls(app_id: int, mtls_enabled: int, mtls_mode: str):
+    """Settings-only update (enabled + mode) — the CA cert file path is
+    set separately by set_app_mtls_ca_cert(), same separation as the SSL
+    cert upload routes keep from the main app fields."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE protected_apps SET mtls_enabled = ?, mtls_mode = ? WHERE id = ?",
+                (mtls_enabled, mtls_mode, app_id),
+            )
+            conn.commit()
+            return get_protected_app_by_id(app_id)
+    except Exception as e:
+        logger.error(f"Error updating mTLS settings for app {app_id}: {e}")
+        return None
+
+
+def set_app_mtls_ca_cert(app_id: int, ca_cert_path: str):
+    """ca_cert_path is None to clear (also implicitly disables mTLS —
+    the route calling this is responsible for also clearing mtls_enabled
+    when removing the cert, same as this doesn't happen automatically at
+    the DB layer for any other field either)."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE protected_apps SET mtls_ca_cert_path = ? WHERE id = ?",
+                (ca_cert_path, app_id),
+            )
+            conn.commit()
+            return get_protected_app_by_id(app_id)
+    except Exception as e:
+        logger.error(f"Error setting mTLS CA cert path for app {app_id}: {e}")
         return None
 
 

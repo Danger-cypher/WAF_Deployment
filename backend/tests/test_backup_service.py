@@ -3,16 +3,34 @@ Tests for backup_service.py and its routes (system.py: /system/backups*) —
 replaces the old, stale backup_waf_config.sh with something actually
 wired into this deployment, tested end-to-end: create, list, download,
 restore (including the nginx-validation-failure rollback path), delete.
+
+Also covers audit finding P2-08: these archives bundle users.db/api_keys.db
+(password/key hashes), yet were written to disk in plain tar.gz form.
+backup_service.py now Fernet-encrypts every archive and refuses to
+create/restore one at all without a valid BACKUP_ENCRYPTION_KEY, rather
+than ever silently falling back to writing one unencrypted.
 """
 import os
 import tarfile
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
+from app.config.settings import settings
 from app.services import db_service
 from app.services import backup_service
 from app.services import nginx_manager
 from app.main import app as fastapi_app
+
+
+@pytest.fixture(autouse=True)
+def _backup_encryption_key(monkeypatch):
+    """Every existing test in this file predates encryption and expects
+    create/restore to just work — give them a real key so they keep
+    testing what they were written to test. The key-*missing* behavior
+    gets its own tests further down, which override this back to "".
+    """
+    monkeypatch.setattr(settings, "BACKUP_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 
 @pytest.fixture
@@ -57,11 +75,11 @@ def client(isolated_user_service, isolated_db_service):
 def test_create_backup_produces_archive_with_expected_trees(isolated_db_service, isolated_backup_paths):
     result = backup_service.create_backup(triggered_by="tester", trigger_type="manual")
 
-    assert result["filename"].endswith(".tar.gz")
+    assert result["filename"].endswith(".tar.gz.enc")
     archive_path = os.path.join(isolated_backup_paths["backup_dir"], result["filename"])
     assert os.path.exists(archive_path)
 
-    with tarfile.open(archive_path, "r:gz") as tar:
+    with backup_service._open_encrypted_tar(archive_path) as tar:
         names = tar.getnames()
     assert any(n.startswith("nginx/") or n == "nginx/nginx.conf" for n in names)
     assert any("config/false_positives.db" in n for n in names)
@@ -185,7 +203,9 @@ def test_download_backup_route(client, admin_session, isolated_backup_paths):
 
     r2 = client.get(f"/system/backups/{backup_id}/download")
     assert r2.status_code == 200
-    assert r2.headers["content-type"] in ("application/gzip", "application/x-gzip")
+    # No longer application/gzip — the bytes are a Fernet token now, not a
+    # gzip stream a client could just gunzip.
+    assert r2.headers["content-type"] == "application/octet-stream"
 
 
 def test_download_missing_backup_route_404s(client, admin_session, isolated_backup_paths):
@@ -240,3 +260,54 @@ def test_delete_backup_route(client, admin_session, isolated_backup_paths):
 
     r3 = client.get(f"/system/backups/{backup_id}/download")
     assert r3.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# P2-08 — archives are encrypted at rest, and refuse to exist without a key
+# ---------------------------------------------------------------------------
+
+def test_archive_on_disk_is_not_a_readable_tar_gz(isolated_db_service, isolated_backup_paths):
+    # The literal bug: before this fix, the bytes on disk were a plain
+    # tar.gz — openable by anyone with filesystem access, no key needed.
+    result = backup_service.create_backup(triggered_by="tester")
+    archive_path = os.path.join(isolated_backup_paths["backup_dir"], result["filename"])
+    with pytest.raises(tarfile.ReadError):
+        with tarfile.open(archive_path, "r:gz"):
+            pass
+
+
+def test_create_backup_refuses_without_a_key(isolated_db_service, isolated_backup_paths, monkeypatch):
+    monkeypatch.setattr(settings, "BACKUP_ENCRYPTION_KEY", "")
+    with pytest.raises(backup_service.BackupEncryptionError):
+        backup_service.create_backup(triggered_by="tester")
+    # Nothing partially written — no archive, no catalogued record.
+    assert backup_service.list_backups() == []
+    assert not os.listdir(isolated_backup_paths["backup_dir"]) if os.path.isdir(isolated_backup_paths["backup_dir"]) else True
+
+
+def test_create_backup_refuses_with_an_invalid_key(isolated_db_service, isolated_backup_paths, monkeypatch):
+    monkeypatch.setattr(settings, "BACKUP_ENCRYPTION_KEY", "not-a-real-fernet-key")
+    with pytest.raises(backup_service.BackupEncryptionError):
+        backup_service.create_backup(triggered_by="tester")
+
+
+def test_restore_refuses_without_a_key(isolated_db_service, isolated_backup_paths, monkeypatch):
+    result = backup_service.create_backup(triggered_by="tester")
+    monkeypatch.setattr(settings, "BACKUP_ENCRYPTION_KEY", "")
+    with pytest.raises(backup_service.BackupEncryptionError):
+        backup_service.restore_backup(result["id"], triggered_by="tester")
+
+
+def test_restore_refuses_with_the_wrong_key(isolated_db_service, isolated_backup_paths, monkeypatch):
+    result = backup_service.create_backup(triggered_by="tester")
+    monkeypatch.setattr(settings, "BACKUP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    with pytest.raises(backup_service.BackupEncryptionError):
+        backup_service.restore_backup(result["id"], triggered_by="tester")
+
+
+def test_create_backup_route_fails_cleanly_without_a_key(client, admin_session, isolated_backup_paths, monkeypatch):
+    monkeypatch.setattr(settings, "BACKUP_ENCRYPTION_KEY", "")
+    client, csrf, _ = admin_session
+    r = client.post("/system/backups", headers={"X-XSRF-TOKEN": csrf})
+    assert r.status_code >= 500 or r.status_code == 400
+    assert backup_service.list_backups() == []

@@ -8,7 +8,7 @@ authenticated on subsequent requests.
 import logging
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, Field
 
 from app.services.api_key_service import api_key_service
@@ -55,7 +55,7 @@ async def list_api_keys(current_user: TokenData = Depends(require_admin)):
 
 
 @router.post("/api-keys", response_model=ApiKeyCreateResponse, status_code=status.HTTP_201_CREATED)
-async def create_api_key(payload: ApiKeyCreate, current_user: TokenData = Depends(require_admin)):
+async def create_api_key(request: Request, payload: ApiKeyCreate, current_user: TokenData = Depends(require_admin)):
     """Create a new API key (Admin only). The raw key is returned exactly
     once in this response — copy it now, it cannot be retrieved again."""
     record, raw_key = api_key_service.create_key(
@@ -67,12 +67,13 @@ async def create_api_key(payload: ApiKeyCreate, current_user: TokenData = Depend
     log_admin_action(
         "api_key", str(record["id"]), "create", current_user,
         details={"name": payload.name, "role": payload.role, "expires_in_days": payload.expires_in_days},
+        request=request,
     )
     return {**record, "api_key": raw_key}
 
 
 @router.post("/api-keys/{key_id}/revoke", response_model=ApiKeyOut)
-async def revoke_api_key(key_id: int, current_user: TokenData = Depends(require_admin)):
+async def revoke_api_key(request: Request, key_id: int, current_user: TokenData = Depends(require_admin)):
     """Revoke an API key (Admin only). Takes effect immediately — the next
     request made with this key gets a 401, same as a disabled user account
     getting rejected on its next request rather than waiting out a TTL."""
@@ -81,5 +82,5 @@ async def revoke_api_key(key_id: int, current_user: TokenData = Depends(require_
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found.")
 
     api_key_service.revoke_key(key_id)
-    log_admin_action("api_key", str(key_id), "revoke", current_user, details={"name": existing["name"]})
+    log_admin_action("api_key", str(key_id), "revoke", current_user, details={"name": existing["name"]}, request=request)
     return api_key_service.get_by_id(key_id)

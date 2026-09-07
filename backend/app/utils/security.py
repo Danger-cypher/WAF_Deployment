@@ -7,7 +7,7 @@ import re
 import html
 import json
 import ipaddress
-from typing import Any, Dict, List, Union, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import Request

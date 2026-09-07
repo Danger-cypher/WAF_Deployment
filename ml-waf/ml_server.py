@@ -3,6 +3,7 @@ import pickle
 import logging
 import re
 import sqlite3
+import subprocess
 import json
 import threading
 import time
@@ -51,6 +52,10 @@ try:
             _ch_thread_local.client = client
             return client
         except Exception as exc:
+            # Previously swallowed with zero logging — a ClickHouse outage
+            # here would silently stop CRS-score enrichment with no signal
+            # anywhere that it broke.
+            logger.warning(f"ClickHouse connection failed: {exc}")
             return None
     _CLICKHOUSE_AVAILABLE = True
 except ImportError:
@@ -79,10 +84,16 @@ def _try_load_models() -> bool:
     """Attempt to load both model binaries. Returns True on success."""
     global xgb_model, iso_model
     try:
+        # XGB_PATH/ISO_PATH are this service's own model artifacts, written
+        # only by its own retrain pipeline (retrain.sh / /ml/retrain) and
+        # restored only from its own prior backups (/ml/rollback) — never
+        # user-uploaded or fetched from an external source. Anyone able to
+        # write these files already controls the ml-engine container, at
+        # which point pickle's deserialization risk isn't the weakest link.
         with open(XGB_PATH, "rb") as f:
-            xgb_model = pickle.load(f)
+            xgb_model = pickle.load(f)  # nosec B301
         with open(ISO_PATH, "rb") as f:
-            iso_model = pickle.load(f)
+            iso_model = pickle.load(f)  # nosec B301
         logger.info("Model binaries loaded into memory successfully.")
         return True
     except Exception as e:
@@ -106,7 +117,10 @@ def _bootstrap_and_load():
     python_bin = venv_python if os.path.exists(venv_python) else "python3"
 
     logger.info("PASSIVE MODE: Bootstrapping placeholder models via generate_dummy_models.py ...")
-    ret = os.system(f"{python_bin} {bootstrap_script}")
+    # subprocess.run with an argument list (not os.system) — no shell
+    # involved at all, so neither path can be reinterpreted by one even
+    # though both are fixed, config-derived values with no user input.
+    ret = subprocess.run([python_bin, bootstrap_script]).returncode
     if ret == 0 and _try_load_models():
         PASSIVE_MODE = False
         logger.info("Bootstrap complete. Switched from PASSIVE MODE to ACTIVE MODE.")
@@ -187,7 +201,12 @@ def init_sqlite_db():
 
         conn.close()
         try:
-            os.chmod(DB_PATH, 0o666)
+            # ml_events.db is a shared bind mount (backend/app/data), but
+            # both the backend and ml-engine containers run as root — root
+            # bypasses these bits either way, so 0o666's extra write access
+            # for "other" bought nothing (same class of finding as audit
+            # P1-01's world-writable configs/secrets).
+            os.chmod(DB_PATH, 0o644)
         except Exception:
             pass
         logger.info("Successfully initialized ML events SQLite database with abuse_score column.")
@@ -210,12 +229,12 @@ def verify_internal_key(x_internal_key: str = Header(default=None)) -> None:
     Previously these had no auth of their own and relied entirely on Docker
     network topology (waf-ml is `expose`d, not `ports`-published) — any other
     container on waf-network could otherwise trigger a model rollback or
-    retrain. /health and /predict are intentionally NOT guarded: /health is
-    polled by Docker's own healthcheck with no header, and /predict is the
-    per-request hot path called by OpenResty's access_by_lua_file on every
-    request, which is out of scope for this fix (see PRODUCTION_GUIDE / audit
-    notes — wiring auth into the Lua request path is a separate, higher-risk
-    change to the live traffic-blocking path).
+    retrain, or (via /predict) directly manipulate what the WAF's live
+    block/allow decisions see. /predict is now guarded too (audit finding
+    P3-04) — see its own route for what ml_decide.lua sends and how a
+    rejected request degrades. /health stays unguarded: it's polled by
+    Docker's own healthcheck with no header, and carries no ability to
+    influence a decision either way.
     """
     if not INTERNAL_ALERT_TRIGGER_KEY:
         # No key configured (e.g. local dev without .env) — degrade to
@@ -236,6 +255,8 @@ class RequestTelemetry(BaseModel):
     ct: str = Field(default="", description="Content-Type header value")
     ua: str = Field(default="", description="User-Agent header value")
     remote_addr: str = Field(default="", description="IP address of the client")
+    ja4: str = Field(default="", description="JA4 TLS-client fingerprint, if captured for this connection (empty if unavailable)")
+    asn: str = Field(default="", description="Numeric autonomous system number for the client IP, from nginx's geoip2 module (empty if unavailable)")
 
 def write_to_clickhouse(event: dict):
     """Primary ML event persistence — writes to ClickHouse cybersentinel.ml_events."""
@@ -523,22 +544,45 @@ def trigger_retrain(background_tasks: BackgroundTasks):
 
 @app.get("/retrain/status", dependencies=[Depends(verify_internal_key)])
 def get_retrain_status():
-    """Returns the current retraining pipeline status and tail of training log file."""
+    """Returns the current retraining pipeline status and a short tail of
+    the training log file.
+
+    Kept deliberately small (previously the whole file, up to 20000 chars
+    of it) — this endpoint is polled every few seconds by the dashboard's
+    Management tab, and that dashboard has no DNS name so it's proxied
+    through the same WAF/CRS pipeline as any protected app. A large raw
+    dump of retrain.sh/sklearn output routinely matched CRS's generic
+    "PHP Information Leakage" response-body rule (953100) — real incident,
+    2026-09-04: repeated 403s on this exact endpoint fed the auto-
+    reputation repeat-offender tier and auto-blacklisted the admin's own
+    IP. A short tail is both cheaper to ship every poll and far less
+    likely to contain a false-positive phrase match.
+    """
     log_path = os.path.join(BASE_DIR, "logs/retrain.log")
     logs = ""
+    TAIL_BYTES = 4000
     if os.path.exists(log_path):
         try:
-            with open(log_path, "r") as f:
-                logs = f.read()
+            # Seek directly to the tail instead of reading the whole file
+            # (already 80KB+ and only grows with every retrain run) just
+            # to slice it afterward.
+            with open(log_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - TAIL_BYTES))
+                raw = f.read()
+            logs = raw.decode("utf-8", errors="replace")
+            if size > TAIL_BYTES:
+                logs = "...(truncated)...\n" + logs
         except Exception as e:
             logs = f"Error reading logs: {e}"
-            
+
     return {
         "status": retrain_state["status"],
         "start_time": retrain_state["start_time"],
         "end_time": retrain_state["end_time"],
         "error": retrain_state["error"],
-        "logs": logs[-20000:]
+        "logs": logs
     }
 
 @app.get("/models/backups", dependencies=[Depends(verify_internal_key)])
@@ -746,12 +790,20 @@ def send_backend_alert(event_type: str, event_data: dict, message: str = None):
         logger.error(f"Failed to send alert to backend: {e}")
 
 
-@app.post("/predict")
+@app.post("/predict", dependencies=[Depends(verify_internal_key)])
 def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, response: Response):
     """
     Main evaluation pipeline endpoint.
     Retrieves Redis behavioral metrics, constructs the feature vector,
     scores the request, updates Redis counters, and schedules logging.
+
+    Authenticated (audit finding P3-04) — ml_decide.lua sends the same
+    X-Internal-Key every other internal endpoint requires. A rejected
+    request never reaches ngx.exit()'s "ML blocked this" 401 path — a bad
+    key returns 403 here, which ml_decide.lua's status-handling `else`
+    branch already treats as "unexpected daemon response", falling back to
+    crs_only_fallback() (P2-01's fixed, reachable CRS-only threshold) —
+    degraded, not silently bypassed.
     """
     ip = payload.remote_addr or "unknown"
     
@@ -806,20 +858,50 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
     # Run requests tracker for every evaluation
     background_tasks.add_task(redis_features.increment_request_counters, ip)
 
+    # Mirrors the IP-keyed reputation update below, but keyed by JA4 TLS
+    # fingerprint (rep:ja4:{fingerprint}) instead — only when one was
+    # actually captured for this connection. See redis_features.py's
+    # increment_ja4_reputation()/decay_ja4_reputation() and
+    # ml_check.lua's check_adaptive_throttle() for why this exists: it's
+    # what lets reputation survive an attacker rotating source IPs while
+    # reusing the same TLS stack.
+    ja4 = payload.ja4
+
+    # Mirrors ja4 above, but keyed by the client IP's autonomous system
+    # number (rep:asn:{asn}) — lets reputation accumulate across an
+    # attacker rotating IPs *within the same hosting ASN*, which JA4
+    # reputation doesn't catch if they also change TLS stacks (e.g. a
+    # different tool/library per attempt) but the hosting provider stays
+    # the same. See redis_features.py's increment_asn_reputation()/
+    # decay_asn_reputation() and ml_check.lua's check_adaptive_throttle().
+    asn = payload.asn
+
     if decision == "block":
         # ML hard block -> increment reputation penalty heavily
         background_tasks.add_task(redis_features.increment_reputation, ip)
+        if ja4:
+            background_tasks.add_task(redis_features.increment_ja4_reputation, ja4)
+        if asn:
+            background_tasks.add_task(redis_features.increment_asn_reputation, asn)
         response.status_code = status.HTTP_401_UNAUTHORIZED
 
     elif decision == "rate_limit":
         # Partial threat (score 0.70-0.85) -> return 429, also penalise reputation
         # so that repeated rate-limited requests escalate toward a hard block.
         background_tasks.add_task(redis_features.increment_reputation, ip)
+        if ja4:
+            background_tasks.add_task(redis_features.increment_ja4_reputation, ja4)
+        if asn:
+            background_tasks.add_task(redis_features.increment_asn_reputation, asn)
         response.status_code = status.HTTP_429_TOO_MANY_REQUESTS
 
     else:
         # "log" or "allow" -> clean or low-risk request, slowly decay reputation
         background_tasks.add_task(redis_features.decay_reputation, ip)
+        if ja4:
+            background_tasks.add_task(redis_features.decay_ja4_reputation, ja4)
+        if asn:
+            background_tasks.add_task(redis_features.decay_asn_reputation, asn)
         response.status_code = status.HTTP_200_OK
         if decision == "log":
             # "log" (score 0.40-0.70) is real signal, just not certain

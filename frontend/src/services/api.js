@@ -738,9 +738,10 @@ export async function getDdosBotSettings() {
 /**
  * Fetch DDoS analytics
  */
-export async function getDdosAnalytics() {
+export async function getDdosAnalytics(hours) {
   try {
-    const response = await fetch(`${BASE_URL}/ddos/analytics`, { cache: 'no-store' });
+    const url = hours ? `${BASE_URL}/ddos/analytics?hours=${hours}` : `${BASE_URL}/ddos/analytics`;
+    const response = await fetch(url, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch DDoS analytics:", error);
@@ -1370,6 +1371,51 @@ export async function syncThreatIntelNow() {
 }
 
 /**
+ * Fetch verified-good-bot allowlist (Googlebot/Bingbot official IP ranges) settings
+ */
+export async function getGoodBotSettings() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/good-bots`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch good-bot settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Save verified-good-bot allowlist settings
+ */
+export async function saveGoodBotSettings(settings) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/good-bots`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save good-bot settings:", error);
+    throw error;
+  }
+}
+
+/**
+ * Trigger an immediate good-bot IP-range sync, bypassing the enabled check
+ */
+export async function syncGoodBotsNow() {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/good-bots/sync-now`, {
+      method: 'POST'
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to trigger good-bot sync:", error);
+    throw error;
+  }
+}
+
+/**
  * Self-learned IP reputation (P1-7): auto-blocks repeat WAF-block
  * offenders from this deployment's own traffic, on top of the manual
  * blacklist and the external threat-intel feed.
@@ -1847,6 +1893,25 @@ export async function saveAppSchema(appId, payload) {
 }
 
 /**
+ * Parse an uploaded OpenAPI/Swagger document into this app's schema
+ * format. Preview only — does not save; the caller still calls
+ * saveAppSchema() with the (possibly admin-edited) result.
+ */
+export async function importAppSchemaFromOpenApi(appId, filename, content) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}/schema/import-openapi`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, content })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to import OpenAPI schema for app ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Trigger Let's Encrypt certificate provisioning for a protected app's domain
  */
 export async function provisionLetsEncrypt(appId) {
@@ -1857,6 +1922,61 @@ export async function provisionLetsEncrypt(appId) {
     return await handleResponse(response);
   } catch (error) {
     console.error(`Failed to provision Let's Encrypt certificate for app ${appId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * mTLS for API auth — client-certificate verification scoped to an app's
+ * /api path (see backend/app/routes/apps.py's mTLS section for the full
+ * design). Settings (enabled/mode) and the CA cert file are separate
+ * calls, same split as the backend routes.
+ */
+export async function getAppMtls(appId) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}/mtls`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to fetch mTLS settings for app ${appId}:`, error);
+    throw error;
+  }
+}
+
+export async function saveAppMtls(appId, payload) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}/mtls`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to save mTLS settings for app ${appId}:`, error);
+    throw error;
+  }
+}
+
+export async function uploadMtlsCaCert(appId, caFile) {
+  try {
+    const formData = new FormData();
+    formData.append('ca_file', caFile);
+    const response = await fetch(`${BASE_URL}/apps/${appId}/mtls/ca-cert`, {
+      method: 'POST',
+      body: formData
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to upload mTLS CA certificate for app ${appId}:`, error);
+    throw error;
+  }
+}
+
+export async function removeMtlsCaCert(appId) {
+  try {
+    const response = await fetch(`${BASE_URL}/apps/${appId}/mtls/ca-cert`, { method: 'DELETE' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to remove mTLS CA certificate for app ${appId}:`, error);
     throw error;
   }
 }

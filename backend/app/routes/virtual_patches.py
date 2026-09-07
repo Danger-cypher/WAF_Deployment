@@ -6,7 +6,7 @@ for a specific CVE's virtual patch. See virtual_patch_service.py.
 import logging
 from typing import Dict, List, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from pydantic import BaseModel
 
 from app.services import virtual_patch_service
@@ -48,7 +48,7 @@ async def get_virtual_patch_hits(
 
 
 @router.post("/virtual-patches/{cve_id}/deploy")
-async def deploy_virtual_patch(
+async def deploy_virtual_patch(request: Request,
     cve_id: str, payload: DeployRequest, current_user: TokenData = Depends(require_admin)
 ):
     """Deploy (or redeploy — e.g. to switch mode) a virtual patch (Admin
@@ -66,12 +66,13 @@ async def deploy_virtual_patch(
     log_admin_action(
         "virtual_patch", cve_id, "deploy", current_user,
         details={"mode": payload.mode, "title": template["title"]},
+        request=request,
     )
     return {"message": f"{cve_id} deployed in {payload.mode} mode."}
 
 
 @router.post("/virtual-patches/{cve_id}/undeploy")
-async def undeploy_virtual_patch(cve_id: str, current_user: TokenData = Depends(require_admin)):
+async def undeploy_virtual_patch(request: Request, cve_id: str, current_user: TokenData = Depends(require_admin)):
     """Remove a deployed virtual patch (Admin only)."""
     template = virtual_patch_service.get_template(cve_id)
     if template is None:
@@ -81,5 +82,5 @@ async def undeploy_virtual_patch(cve_id: str, current_user: TokenData = Depends(
     if not success:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err_msg)
 
-    log_admin_action("virtual_patch", cve_id, "undeploy", current_user, details={"title": template["title"]})
+    log_admin_action("virtual_patch", cve_id, "undeploy", current_user, details={"title": template["title"]}, request=request)
     return {"message": f"{cve_id} removed."}

@@ -12,12 +12,17 @@ router = APIRouter()
 
 
 @router.get("/ddos/analytics", response_model=Dict[str, Any])
-async def ddos_analytics(current_user: TokenData = Depends(require_admin)):
+async def ddos_analytics(
+    hours: int = Query(24, ge=1, le=168, description="Time window in hours (default 24, max 1 week)"),
+    current_user: TokenData = Depends(require_admin),
+):
     """
-    Returns the latest DDoS/Bot mitigation traffic graph and top blocked IPs.
+    Returns the latest DDoS/Bot mitigation traffic graph, top blocked IPs,
+    and a per-mechanism breakdown, over a real time window (not a raw log
+    line count — see ddos_analytics.get_ddos_analytics's docstring).
     """
     try:
-        return await asyncio.to_thread(get_ddos_analytics)
+        return await asyncio.to_thread(get_ddos_analytics, hours)
     except Exception as e:
         # Returning a fake "0 total_blocks" 200 here is the worst possible
         # failure mode: if this breaks (e.g. ClickHouse unreachable) during

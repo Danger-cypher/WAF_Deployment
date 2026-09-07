@@ -8,7 +8,9 @@ Architecture (post-ClickHouse migration):
 - All reads delegate to clickhouse_service
 - File-listing utilities (list_newest_log_files, scan_log_directory) are
   KEPT for use by log_ingestor.py during startup backfill
-- The in-memory parsed_entries dict is removed — ClickHouse is the single source of truth
+- parsed_entries is kept as a backward-compatibility dict (see its own
+  comment below) — still written to by anti_defacement.py and cleared by
+  routes/system.py — not actually removed despite this file's history
 
 Compatibility:
 - All function signatures are unchanged so routes/logs.py requires zero edits
@@ -18,14 +20,10 @@ Compatibility:
 import os
 import logging
 import re
-import time
-from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from app.config.settings import settings
 from app.models.log_model import LogEntry, ViolationDetail
-from app.parsers.modsec_parser import parse_modsec_audit_json
-from app.parsers.nginx_errorlog_parser import parse_nginx_error_log
 from app.services import clickhouse_service
 
 logger = logging.getLogger(__name__)

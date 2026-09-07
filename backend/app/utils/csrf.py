@@ -1,4 +1,4 @@
-from fastapi import Request, HTTPException, status, Depends
+from fastapi import Request, HTTPException, status
 import secrets
 
 def verify_csrf_token(request: Request):

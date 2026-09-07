@@ -7,7 +7,18 @@ PyJWT==2.13.0
 # RS256 support in PyJWT (SIEM SSO's JWKS phase) needs this — PyJWT raises
 # MissingCryptographyError at the RS256 verify call without it, since the
 # base PyJWT install doesn't pull it in.
-cryptography==44.0.1
+# 44.0.1 fixed CVE-2024-12797 (bundled OpenSSL) but was itself six releases
+# behind by the time of the audit, missing fixes for a buffer overflow
+# (CVE-2026-39892), an X.509 name-constraints bypass on wildcard SAN certs
+# (CVE-2026-34073), a private-key-revealing binary-elliptic-curve attack
+# (CVE-2026-26007), and a Bleichenbacher timing oracle in PKCS#7 decryption
+# (CVE-2026-69247) — audit finding P2-09. Nothing in this codebase imports
+# `cryptography` directly; it's pulled in solely for PyJWT's RS256 support
+# (see the comment above), so the real compatibility question was PyJWT
+# 2.13.0 against this version, not any code here. Verified: full backend
+# suite (566 tests, including every SSO/JWT/websocket-auth test) passes
+# unmodified against 50.0.1.
+cryptography==50.0.1
 bcrypt==4.2.1
 python-multipart==0.0.32
 email-validator==2.3.0

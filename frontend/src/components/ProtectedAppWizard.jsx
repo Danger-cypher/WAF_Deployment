@@ -34,6 +34,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
     requireAuth: false,
     authCheckType: 'header',
     authHeaderName: 'Authorization',
+    enableResponseCache: false,
   };
 
   const [formData, setFormData] = useState(emptyFormData);
@@ -74,6 +75,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
         requireAuth: Boolean(existingApp.require_auth),
         authCheckType: existingApp.auth_check_type || 'header',
         authHeaderName: existingApp.auth_header_name || 'Authorization',
+        enableResponseCache: Boolean(existingApp.enable_response_cache),
       });
     } else {
       setFormData(emptyFormData);
@@ -135,6 +137,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
         require_auth: formData.requireAuth ? 1 : 0,
         auth_check_type: formData.authCheckType,
         auth_header_name: formData.authHeaderName.trim() || 'Authorization',
+        enable_response_cache: formData.enableResponseCache ? 1 : 0,
       };
 
       const result = existingApp
@@ -487,6 +490,22 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                   </span>
                 </div>
 
+                <div className="form-group" style={{ marginTop: '16px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={formData.enableResponseCache}
+                      onChange={(e) => setFormData({ ...formData, enableResponseCache: e.target.checked })}
+                    />
+                    Enable response caching
+                  </label>
+                  <span className="input-hint">
+                    Cache this app's cacheable GET/HEAD responses at the WAF gateway. Respects the
+                    backend's own Cache-Control headers — a response that sets a cookie or says
+                    "no-store" is never cached. Off by default.
+                  </span>
+                </div>
+
                 {formData.requireAuth && (
                   <div className="form-row">
                     <div className="form-group">
@@ -764,6 +783,10 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                           ? `Required (${formData.authCheckType === 'cookie' ? 'cookie' : 'header'}: ${formData.authHeaderName})`
                           : 'Not required'}
                       </span>
+                    </div>
+                    <div className="summary-item">
+                      <span className="summary-label">Response Caching:</span>
+                      <span className="summary-value">{formData.enableResponseCache ? 'Enabled' : 'Disabled'}</span>
                     </div>
                   </div>
                 </div>

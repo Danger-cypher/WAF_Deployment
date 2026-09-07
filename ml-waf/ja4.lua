@@ -9,17 +9,18 @@
 -- ngx.ssl.clienthello's functions work in, since that's before OpenSSL has
 -- finished processing the ClientHello into a normal SSL session.
 --
--- Phase 1, capture only: this module computes and stores a fingerprint per
--- connection. Nothing reads it yet — no blocking, challenging, or scoring
--- decision is wired to it. That's deliberate: unlike bot_challenge.lua's
--- waf_bot_challenge_enabled or ml_check.lua's
--- waf_adaptive_throttle_enabled, there's no settings-driven enable/disable
--- toggle here, because there's no user-visible behavior to gate — this
--- never blocks, delays, or challenges a real connection, only writes a
--- Redis key. The enforcement side (what to actually DO with a fingerprint
--- — known-bad JA4 blocklist, anomaring diversity-per-IP, etc.) is
--- unbuilt and scoped separately; add a real toggle when that lands, the
--- same way every other opt-in mechanism in this codebase has one.
+-- This module computes and stores a fingerprint per connection; it never
+-- blocks, delays, or challenges anything itself, only writes a Redis key.
+-- There's deliberately no settings-driven enable/disable toggle here
+-- (unlike bot_challenge.lua's waf_bot_challenge_enabled or ml_check.lua's
+-- waf_adaptive_throttle_enabled) because capture itself has no
+-- user-visible behavior to gate.
+--
+-- First consumer: ml_check.lua's check_ja4_block() reads this cached
+-- fingerprint back and blocks it if it's in the admin-curated
+-- waf:blacklist:ja4 set (Settings > Hardening). That's an exact-match
+-- known-bad list only — reputation/diversity-based enforcement on top of
+-- the fingerprint is unbuilt and scoped separately.
 --
 -- The whole computation is pcall-wrapped: this runs on every TLS
 -- handshake, and an uncaught Lua error here would fail the handshake for
@@ -94,6 +95,59 @@ local function sha256_12(input_str)
   return resty_str.to_hex(digest):sub(1, 12)
 end
 
+-- Capability probe, evaluated once per worker rather than per handshake.
+--
+-- The header comment above asserts that everything this module needs is part
+-- of OpenResty's official ngx.ssl.clienthello API "since 1.21.4.1". That is
+-- true of get_client_hello_server_name(), get_client_hello_ext(),
+-- get_client_hello_ext_present() and get_supported_versions() — but NOT of
+-- get_client_hello_ciphers(), which upstream lua-resty-core does not ship at
+-- all. This image is stock openresty:1.25.3.2 plus two ModSecurity patches
+-- (openresty/patches/), neither of which touches lua-resty-core.
+--
+-- So compute() called a nil field on every single TLS handshake. Because the
+-- call is pcall-wrapped it never broke a connection — it just logged
+-- "attempt to call field 'get_client_hello_ciphers' (a nil value)" and
+-- returned no fingerprint, forever. Measured on the running deployment:
+-- 956 handshakes, 956 errors, 0 fingerprints ever stored. Every downstream
+-- consumer therefore degraded silently — ml_check.lua's check_ja4_block()
+-- never had a fingerprint to match against the waf:blacklist:ja4 set, and
+-- ml_decide.lua always sent ja4="" to the ML engine (audit finding P1-07).
+--
+-- The cipher list is not recoverable from the rest of the API: it lives in
+-- the ClientHello body, not in an extension, so get_client_hello_ext() cannot
+-- reach it. And JA4 needs it twice over — part B hashes it, and part A
+-- encodes its length — so there is no reduced-but-still-JA4 fallback either.
+-- Genuine JA4 support requires exposing the cipher list from the connector,
+-- i.e. a third entry in openresty/patches/ and an image rebuild.
+--
+-- Until that exists, fail honestly: detect the missing capability once, say
+-- so once at a severity an operator will actually see, and then no-op. A
+-- security control that cannot work must announce that it is off, not
+-- emit an error per request and let the dashboard imply it is running.
+local _capability = nil -- nil = unprobed, true = usable, false = unavailable
+
+local function ja4_supported()
+  if _capability ~= nil then
+    return _capability
+  end
+  if type(ssl_clt.get_client_hello_ciphers) ~= "function"
+     or type(ssl_clt.get_client_hello_ext_present) ~= "function" then
+    _capability = false
+    ngx.log(ngx.CRIT,
+      "ja4: DISABLED — this OpenResty build's ngx.ssl.clienthello does not expose ",
+      "get_client_hello_ciphers(); the cipher list is required for JA4 parts A and B ",
+      "and cannot be derived from the rest of the API. No TLS fingerprints will be ",
+      "captured, so JA4 blocklisting (Settings > Hardening) will never match and the ",
+      "ML engine will score every request with an empty ja4 feature. Fix: add a ",
+      "lua-resty-core patch exposing the ClientHello cipher list under ",
+      "openresty/patches/ and rebuild the openresty image. Logged once per worker.")
+    return false
+  end
+  _capability = true
+  return true
+end
+
 local function compute()
   local ciphers = ssl_clt.get_client_hello_ciphers()
   local exts = ssl_clt.get_client_hello_ext_present()
@@ -152,6 +206,12 @@ end
 -- ml_check.lua/bot_challenge.lua fails open rather than fails the
 -- connection.
 function M.capture()
+  -- Cheap boolean after the first handshake in each worker; keeps a build
+  -- without cipher-list support from logging a stack trace per connection.
+  if not ja4_supported() then
+    return
+  end
+
   local ok, result = pcall(compute)
   if not ok then
     ngx.log(ngx.WARN, "ja4.capture: computation error, skipping: ", tostring(result))

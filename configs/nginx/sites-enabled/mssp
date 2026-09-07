@@ -39,10 +39,8 @@ server {
     ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;
     ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;
 
-    # Only sent from here — the one server{} on this host that actually
-    # terminates TLS. See nginx.conf's global headers block for why this
-    # must never be global (it would poison the browser's HSTS cache for
-    # the whole host and break the plain-HTTP :3020 SSO landing page).
+    ssl_client_hello_by_lua_file /opt/ml-waf/ja4_entry.lua;
+
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
     resolver 127.0.0.11 valid=30s ipv6=off;
@@ -92,6 +90,11 @@ server {
         proxy_next_upstream error timeout http_502 http_503;
         proxy_next_upstream_tries 3;
         proxy_next_upstream_timeout 10s;
+        proxy_hide_header X-Powered-By;
+        proxy_hide_header X-AspNet-Version;
+        proxy_hide_header X-AspNetMvc-Version;
+        proxy_hide_header X-Runtime;
+        proxy_hide_header X-Generator;
     }
 }
 

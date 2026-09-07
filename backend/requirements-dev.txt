@@ -1,3 +1,7 @@
 -r requirements.txt
 pytest==9.1.1
 httpx==0.28.1
+# CI's security-scan job (see .github/workflows/ci.yml) runs these same
+# tools — installed here too so they can be run locally before pushing.
+bandit==1.9.4
+pip-audit==2.10.1

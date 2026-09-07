@@ -209,9 +209,36 @@ async def test_channel(channel_id: int, req: TestAlertRequest, current_user: Tok
 # Alert Rules API
 # ============================================================================
 
+def _validate_channel_ids(channel_ids) -> None:
+    """Rejects a rule that references an alert channel which does not exist.
+
+    Nothing validated this before (audit finding P1-02). All three seeded
+    default rules ship with channels [1, 3]; channel 3 has never existed in
+    this deployment. trigger_event() silently skips an unresolvable id, so
+    the rule kept presenting in the UI as wired to two destinations while
+    only ever being able to reach one — and a rule whose ONLY channel was
+    deleted would match, dispatch to nothing, and report success.
+
+    Raises 400 with the offending ids named, so the admin can see which
+    reference is stale rather than discovering it during an incident.
+    """
+    if not channel_ids:
+        return
+    missing = [c_id for c_id in channel_ids if db.get_channel(c_id) is None]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Alert channel(s) not found: {', '.join(str(m) for m in missing)}. "
+                "Create the channel first, or remove it from this rule."
+            ),
+        )
+
+
 @router.post("/alerts/rules", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
 async def create_rule(rule: AlertRuleCreate, current_user: TokenData = Depends(require_admin)):
     """Create a new alert rule (Admin only)"""
+    _validate_channel_ids(rule.channels)
     try:
         rule_id = db.create_rule(
             name=rule.name,
@@ -283,6 +310,7 @@ async def update_rule(rule_id: int, rule: AlertRuleUpdate, current_user: TokenDa
     if rule.conditions is not None:
         update_data["conditions"] = rule.conditions
     if rule.channels is not None:
+        _validate_channel_ids(rule.channels)
         update_data["channels"] = rule.channels
     if rule.throttle_minutes is not None:
         update_data["throttle_minutes"] = rule.throttle_minutes

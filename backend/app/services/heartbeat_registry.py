@@ -60,6 +60,7 @@ EXPECTED_TASKS: Dict[str, float] = {
     # whether the monitor's own loop is still running. See
     # malware_scan_service.py.
     "malware_scan_monitor": 60,
+    "good_bots": 24 * 3600,  # configurable at runtime; this is a display default
 }
 
 # A task is "stale" once it's gone this many multiples of its own

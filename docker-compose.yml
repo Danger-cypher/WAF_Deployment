@@ -301,6 +301,10 @@ services:
     ports:
       # Port 3020 — direct WAF Dashboard access (HTTP, WAF-inspected)
       - "${DASHBOARD_PORT:-3020}:3020"
+      # Port 3443 — same dashboard over HTTPS (audit finding P1-06). Kept
+      # alongside 3020 rather than replacing it — see the header comment in
+      # configs/nginx/sites-available/cybersentinel for why.
+      - "${DASHBOARD_TLS_PORT:-3443}:3443"
       # Port 80 — intercepts all plain HTTP, redirects to HTTPS 443
       - "${HTTP_PORT:-80}:80"
       # Port 443 — HTTPS WAF gateway (TLS + ModSecurity + ML-WAF)
@@ -324,6 +328,13 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       ML_HOST: waf-ml
       ML_PORT: 9000
+      # ml_decide.lua's per-request POST /predict call now authenticates
+      # with this (audit finding P3-04) — same shared secret waf-ml already
+      # required from the backend for its admin endpoints. Previously
+      # /predict had no auth of its own, relying entirely on Docker network
+      # topology (waf-ml is `expose`d, not `ports`-published); this closes
+      # that gap in depth without changing the topology.
+      INTERNAL_ALERT_TRIGGER_KEY: ${INTERNAL_ALERT_TRIGGER_KEY}
     depends_on:
       backend:
         condition: service_healthy

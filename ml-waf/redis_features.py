@@ -98,6 +98,59 @@ def decay_reputation(ip: str):
     except redis.RedisError as e:
         logger.warning(f"Redis reputation decay failed for IP {ip}: {e}")
 
+def increment_ja4_reputation(ja4: str):
+    """
+    JA4-fingerprint-keyed counterpart to increment_reputation() — same
+    +1.0 penalty, same 24h TTL, but keyed by TLS-client fingerprint
+    (rep:ja4:{fingerprint}) instead of IP. Read back by ml_check.lua's
+    check_adaptive_throttle() alongside rep:{ip}, so a client that rotates
+    source IPs but keeps reusing the same TLS stack carries its reputation
+    across that rotation instead of resetting to zero each time.
+    """
+    try:
+        pipe = r.pipeline()
+        pipe.incrbyfloat(f"rep:ja4:{ja4}", 1.0)
+        pipe.expire(f"rep:ja4:{ja4}", 86400)
+        pipe.execute()
+    except redis.RedisError as e:
+        logger.warning(f"Redis JA4 reputation increment failed for {ja4}: {e}")
+
+def decay_ja4_reputation(ja4: str):
+    """JA4 counterpart to decay_reputation() — same -0.1 decay, same key shape as increment_ja4_reputation()."""
+    try:
+        r.incrbyfloat(f"rep:ja4:{ja4}", -0.1)
+        r.expire(f"rep:ja4:{ja4}", 86400)
+    except redis.RedisError as e:
+        logger.warning(f"Redis JA4 reputation decay failed for {ja4}: {e}")
+
+def increment_asn_reputation(asn: str):
+    """
+    ASN-keyed counterpart to increment_reputation() — same +1.0 penalty,
+    same 24h TTL, but keyed by the client IP's autonomous system number
+    (rep:asn:{asn}) instead. Read back by ml_check.lua's
+    check_adaptive_throttle() alongside rep:{ip}/rep:ja4:{fingerprint},
+    against a deliberately much higher threshold there (see that file's
+    ADAPTIVE_THROTTLE_ASN_REP_THRESHOLD comment) — a single ASN can host
+    thousands of unrelated tenants, so this must accumulate a lot more
+    signal before it's treated as elevated, unlike IP/JA4 which each
+    identify something close to one real client.
+    """
+    try:
+        pipe = r.pipeline()
+        pipe.incrbyfloat(f"rep:asn:{asn}", 1.0)
+        pipe.expire(f"rep:asn:{asn}", 86400)
+        pipe.execute()
+    except redis.RedisError as e:
+        logger.warning(f"Redis ASN reputation increment failed for {asn}: {e}")
+
+def decay_asn_reputation(asn: str):
+    """ASN counterpart to decay_reputation() — same -0.1 decay, same key shape as increment_asn_reputation()."""
+    try:
+        r.incrbyfloat(f"rep:asn:{asn}", -0.1)
+        r.expire(f"rep:asn:{asn}", 86400)
+    except redis.RedisError as e:
+        logger.warning(f"Redis ASN reputation decay failed for {asn}: {e}")
+
 def save_abuse_score(ip: str, score: float):
     """
     Caches the AbuseIPDB abuse score in Redis with a 24-hour TTL (86400s).

@@ -26,6 +26,7 @@ clickhouse-backup integration is a reasonable future addition if/when
 long-term analytics retention becomes a stated requirement, not assumed
 here.
 """
+import io
 import os
 import secrets
 import shutil
@@ -36,9 +37,56 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from cryptography.fernet import Fernet, InvalidToken
+
+from app.config.settings import settings
 from app.services import db_service
 
 logger = logging.getLogger(__name__)
+
+
+class BackupEncryptionError(RuntimeError):
+    """Raised when a backup can't be created or restored because
+    BACKUP_ENCRYPTION_KEY is missing or invalid — never silently falls back
+    to writing/reading an unencrypted archive (audit finding P2-08: these
+    archives bundle the control-plane SQLite databases, including
+    users.db's password hashes and api_keys.db's key hashes)."""
+
+
+def _get_fernet() -> Fernet:
+    key = settings.BACKUP_ENCRYPTION_KEY
+    if not key:
+        raise BackupEncryptionError(
+            "BACKUP_ENCRYPTION_KEY is not set — refusing to create or read an "
+            "unencrypted backup archive. setup.sh generates this automatically "
+            "for a fresh install; for an existing .env, add one yourself: "
+            "python3 -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\" and set "
+            "BACKUP_ENCRYPTION_KEY to the output, then restart the backend."
+        )
+    try:
+        return Fernet(key.encode())
+    except Exception as e:
+        raise BackupEncryptionError(f"BACKUP_ENCRYPTION_KEY is not a valid Fernet key: {e}")
+
+
+def _open_encrypted_tar(path: str) -> tarfile.TarFile:
+    """Decrypts a .tar.gz.enc archive into memory and returns it opened as
+    a TarFile — the read-side counterpart of create_backup()'s encrypt
+    step. Raises BackupEncryptionError (wrong/rotated key, or the file
+    isn't actually a Fernet token — e.g. hand-corrupted) rather than ever
+    silently reading it as if it were a plain tar.gz."""
+    with open(path, "rb") as f:
+        ciphertext = f.read()
+    try:
+        plaintext = _get_fernet().decrypt(ciphertext)
+    except InvalidToken:
+        raise BackupEncryptionError(
+            f"Could not decrypt '{os.path.basename(path)}' — either "
+            "BACKUP_ENCRYPTION_KEY doesn't match the key this backup was "
+            "created with, or the file is corrupted."
+        )
+    return tarfile.open(fileobj=io.BytesIO(plaintext), mode="r:gz")
 
 NGINX_DIR = "/etc/nginx"
 CONFIG_DIR = str(Path(__file__).resolve().parent.parent / "config")
@@ -67,6 +115,10 @@ def create_backup(triggered_by: str, trigger_type: str = "manual") -> dict:
     the `backups` table. Blocking (file I/O) — callers on the FastAPI event
     loop must run this via asyncio.to_thread, same convention as every
     other blocking nginx/config operation in this codebase."""
+    # Checked before any file I/O — fail fast rather than build a whole
+    # archive only to discover it can't be encrypted.
+    fernet = _get_fernet()
+
     os.makedirs(BACKUP_DIR, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     # restore_backup() can create two backups (the target's own pre-restore
@@ -74,23 +126,36 @@ def create_backup(triggered_by: str, trigger_type: str = "manual") -> dict:
     # within the same second — second-resolution alone collided on
     # `backups.filename`'s UNIQUE constraint in exactly that path.
     unique_suffix = secrets.token_hex(3)
-    filename = f"cybersentinel-backup-{timestamp}-{unique_suffix}.tar.gz"
+    # .tar.gz.enc, not .tar.gz: the archive is Fernet-encrypted below (audit
+    # finding P2-08 — these bundle users.db/api_keys.db's password/key
+    # hashes) — the extension makes that visible to anyone who downloads or
+    # `ls`s the backups directory directly, rather than implying a plain
+    # tarball that gunzip/tar could open.
+    filename = f"cybersentinel-backup-{timestamp}-{unique_suffix}.tar.gz.enc"
     archive_path = os.path.join(BACKUP_DIR, filename)
 
-    # Write to a .part path and rename on success, so a backup that fails
-    # partway through (disk full, killed process) never leaves a
-    # corrupt-but-catalogued archive behind for a later restore to trip on.
+    # Write the plaintext tar.gz to a .part path, encrypt it into a second
+    # .enc.part path, atomically rename that to the real archive_path, then
+    # remove the plaintext — so a failure at any point (disk full, killed
+    # process) never leaves a corrupt-but-catalogued archive, a stray
+    # plaintext copy, or a partially-written encrypted file behind.
     tmp_path = archive_path + ".part"
+    enc_tmp_path = archive_path + ".enc.part"
     try:
         with tarfile.open(tmp_path, "w:gz") as tar:
             _add_tree(tar, NGINX_DIR, "nginx")
             _add_tree(tar, CONFIG_DIR, "config")
             _add_tree(tar, DATA_DIR, "data", exclude_top_level=_DATA_DIR_EXCLUDE)
-        os.replace(tmp_path, archive_path)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
+        with open(tmp_path, "rb") as f:
+            plaintext = f.read()
+        ciphertext = fernet.encrypt(plaintext)
+        with open(enc_tmp_path, "wb") as f:
+            f.write(ciphertext)
+        os.replace(enc_tmp_path, archive_path)
+    finally:
+        for p in (tmp_path, enc_tmp_path):
+            if os.path.exists(p):
+                os.remove(p)
 
     size_bytes = os.path.getsize(archive_path)
     created_at = datetime.now(timezone.utc).isoformat()
@@ -168,7 +233,7 @@ def restore_backup(backup_id: int, triggered_by: str) -> tuple[bool, str]:
     safety = create_backup(triggered_by=triggered_by, trigger_type="pre_restore_safety")
 
     with tempfile.TemporaryDirectory() as stage:
-        with tarfile.open(record["path"], "r:gz") as tar:
+        with _open_encrypted_tar(record["path"]) as tar:
             tar.extractall(stage)  # nosec B202 -- archive is CyberSentinel's own prior backup, not arbitrary user upload
 
         staged_config = os.path.join(stage, "config")
@@ -198,8 +263,8 @@ def restore_backup(backup_id: int, triggered_by: str) -> tuple[bool, str]:
             valid, err_msg = test_nginx_config()
             if not valid:
                 with tempfile.TemporaryDirectory() as rollback_stage:
-                    with tarfile.open(
-                        os.path.join(BACKUP_DIR, safety["filename"]), "r:gz"
+                    with _open_encrypted_tar(
+                        os.path.join(BACKUP_DIR, safety["filename"])
                     ) as safety_tar:
                         safety_tar.extractall(rollback_stage)  # nosec B202 -- our own just-created safety snapshot
                     rolled_back_nginx = os.path.join(rollback_stage, "nginx")

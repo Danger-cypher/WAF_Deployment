@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Trash2, Edit2, Server, Globe, Power, Shield, Activity, ArrowRight, Lock, ChevronDown, ChevronUp, Zap, Network, Key, CheckCircle2, X, FileJson } from 'lucide-react';
-import { getProtectedApps, deleteProtectedApp, toggleProtectedApp, getDdosBotSettings, saveDdosBotSettings, getAppSchema, saveAppSchema } from '../services/api';
+import { getProtectedApps, deleteProtectedApp, toggleProtectedApp, getDdosBotSettings, saveDdosBotSettings, getAppSchema, saveAppSchema, importAppSchemaFromOpenApi, getAppMtls, saveAppMtls, uploadMtlsCaCert, removeMtlsCaCert } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import { useConfirm } from '../hooks/useConfirm';
@@ -261,6 +261,25 @@ export default function ProtectedApps({ onOpenWizard }) {
   const [apiSchemaJsonError, setApiSchemaJsonError] = useState('');
   const [savingApiSchema, setSavingApiSchema] = useState(false);
   const [loadingApiSchema, setLoadingApiSchema] = useState(false);
+  // OpenAPI/Swagger import — parses into the same endpoint format above
+  // and replaces the textarea's contents with the result; the admin still
+  // has to review and click Save Schema, same as hand-typing it. Nothing
+  // is applied by the import call itself.
+  const openApiFileInputRef = useRef(null);
+  const [importingOpenApiSchema, setImportingOpenApiSchema] = useState(false);
+
+  // mTLS for API auth — client-cert verification scoped to /api. Own
+  // small modal, same load-on-open / save-on-submit shape as the API
+  // Schema modal above, since it's a completely independent feature.
+  const [mtlsTarget, setMtlsTarget] = useState(null);
+  useEscapeToClose(() => setMtlsTarget(null), !!mtlsTarget);
+  const [mtlsEnabled, setMtlsEnabled] = useState(false);
+  const [mtlsMode, setMtlsMode] = useState('log');
+  const [mtlsCaUploaded, setMtlsCaUploaded] = useState(false);
+  const [loadingMtls, setLoadingMtls] = useState(false);
+  const [savingMtls, setSavingMtls] = useState(false);
+  const [uploadingMtlsCa, setUploadingMtlsCa] = useState(false);
+  const mtlsCaFileInputRef = useRef(null);
 
   const fetchApps = async () => {
     setLoading(true);
@@ -405,6 +424,108 @@ export default function ProtectedApps({ onOpenWizard }) {
       showToast("Failed to save API schema: " + (err.message || "Unknown error"), "error");
     } finally {
       setSavingApiSchema(false);
+    }
+  };
+
+  const handleOpenApiFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    // Clear immediately so re-selecting the same file still fires onChange
+    if (openApiFileInputRef.current) openApiFileInputRef.current.value = '';
+    if (!file || !apiSchemaTarget) return;
+
+    setImportingOpenApiSchema(true);
+    try {
+      const content = await file.text();
+      const result = await importAppSchemaFromOpenApi(apiSchemaTarget.id, file.name, content);
+      // Replaces the textarea, doesn't merge — importing twice (or after
+      // hand edits) shouldn't leave stale entries around. The admin still
+      // has to click Save Schema to actually apply this; nothing is
+      // written by the import call itself.
+      setApiSchemaEndpointsText(JSON.stringify(result.endpoints, null, 2));
+      setApiSchemaJsonError('');
+      const skippedNote = result.skipped.length > 0
+        ? ` ${result.skipped.length} skipped (templated paths aren't supported).`
+        : '';
+      showToast(`Parsed ${result.endpoints.length} endpoint(s) from ${file.name}.${skippedNote} Review below, then Save Schema to apply.`);
+    } catch (err) {
+      showToast('Failed to parse OpenAPI/Swagger spec: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setImportingOpenApiSchema(false);
+    }
+  };
+
+  const openMtlsModal = async (app) => {
+    setMtlsTarget(app);
+    setLoadingMtls(true);
+    try {
+      const current = await getAppMtls(app.id);
+      setMtlsEnabled(!!current?.enabled);
+      setMtlsMode(current?.mode || 'log');
+      setMtlsCaUploaded(!!current?.ca_cert_uploaded);
+    } catch (err) {
+      showToast('Failed to load mTLS settings: ' + (err.message || 'Unknown error'), 'error');
+      setMtlsEnabled(false);
+      setMtlsMode('log');
+      setMtlsCaUploaded(false);
+    } finally {
+      setLoadingMtls(false);
+    }
+  };
+
+  const closeMtlsModal = () => setMtlsTarget(null);
+
+  const handleMtlsCaFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    if (mtlsCaFileInputRef.current) mtlsCaFileInputRef.current.value = '';
+    if (!file || !mtlsTarget) return;
+
+    setUploadingMtlsCa(true);
+    try {
+      await uploadMtlsCaCert(mtlsTarget.id, file);
+      setMtlsCaUploaded(true);
+      showToast(`CA certificate uploaded for ${mtlsTarget.name}. Save to apply.`);
+    } catch (err) {
+      showToast('Failed to upload CA certificate: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setUploadingMtlsCa(false);
+    }
+  };
+
+  const handleRemoveMtlsCa = async () => {
+    if (!mtlsTarget) return;
+    if (!(await confirm({
+      title: 'Remove CA certificate',
+      message: `Remove the mTLS CA certificate for ${mtlsTarget.name}? This also disables mTLS for this app.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    }))) {
+      return;
+    }
+    try {
+      await removeMtlsCaCert(mtlsTarget.id);
+      setMtlsCaUploaded(false);
+      setMtlsEnabled(false);
+      showToast('CA certificate removed; mTLS disabled.');
+    } catch (err) {
+      showToast('Failed to remove CA certificate: ' + (err.message || 'Unknown error'), 'error');
+    }
+  };
+
+  const handleSaveMtls = async (e) => {
+    e.preventDefault();
+    if (mtlsEnabled && !mtlsCaUploaded) {
+      showToast('Upload a CA certificate before enabling mTLS.', 'error');
+      return;
+    }
+    setSavingMtls(true);
+    try {
+      await saveAppMtls(mtlsTarget.id, { enabled: mtlsEnabled, mode: mtlsMode });
+      showToast(`mTLS settings saved for ${mtlsTarget.name}.`);
+      closeMtlsModal();
+    } catch (err) {
+      showToast('Failed to save mTLS settings: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setSavingMtls(false);
     }
   };
 
@@ -644,6 +765,26 @@ export default function ProtectedApps({ onOpenWizard }) {
                   API Schema
                 </button>
                 <button
+                  onClick={() => openMtlsModal(app)}
+                  disabled={actionLoading}
+                  title="Require a client certificate for this app's /api requests"
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--surface-hover)',
+                    background: 'var(--surface-subtle)',
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '12px'
+                  }}
+                >
+                  <Lock size={12} />
+                  mTLS
+                </button>
+                <button
                   onClick={() => onOpenWizard(app)}
                   disabled={actionLoading}
                   style={{
@@ -841,6 +982,30 @@ export default function ProtectedApps({ onOpenWizard }) {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <input
+                    ref={openApiFileInputRef}
+                    type="file"
+                    accept=".json,.yaml,.yml,application/json,text/yaml"
+                    style={{ display: 'none' }}
+                    onChange={handleOpenApiFileSelected}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={FileJson}
+                    disabled={importingOpenApiSchema}
+                    onClick={() => openApiFileInputRef.current?.click()}
+                  >
+                    {importingOpenApiSchema ? 'Parsing...' : 'Import from OpenAPI / Swagger spec'}
+                  </Button>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    Replaces the endpoints below with the parsed result — review before saving.
+                    Paths with a {'{'}parameter{'}'} segment can't be imported (exact-path matching only).
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label htmlFor="pa-api-schema-endpoints" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Endpoints (JSON array)</label>
                   <textarea
                     id="pa-api-schema-endpoints"
@@ -861,6 +1026,121 @@ export default function ProtectedApps({ onOpenWizard }) {
                   </Button>
                   <button type="submit" disabled={savingApiSchema} className="modal-btn primary" style={{ margin: 0 }}>
                     {savingApiSchema ? 'Saving...' : 'Save Schema'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {mtlsTarget && createPortal(
+        <div
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+          onClick={closeMtlsModal}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'rgba(20, 20, 20, 0.97)', border: '1px solid var(--border-strong)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '560px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: 'var(--text-primary)' }}>mTLS for API Auth</h3>
+                <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                  {mtlsTarget.domain}
+                </div>
+              </div>
+              <Button variant="ghost" size="md" icon={X} onClick={closeMtlsModal} aria-label="Close" />
+            </div>
+
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: 0, marginBottom: '18px', lineHeight: 1.5 }}>
+              Requires a client certificate for requests to this app's <code>/api</code> path only —
+              the rest of the app (its normal UI) stays reachable by regular browsers. Upload the CA
+              certificate you trust to verify client certs, then enable. "Log" mode requests the
+              client cert and records whether it verified, without blocking anyone — confirm real
+              clients pass before switching to "Enforce".
+            </p>
+
+            {loadingMtls ? (
+              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>Loading...</div>
+            ) : (
+              <form onSubmit={handleSaveMtls} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <input
+                    ref={mtlsCaFileInputRef}
+                    type="file"
+                    accept=".crt,.pem,.cer"
+                    style={{ display: 'none' }}
+                    onChange={handleMtlsCaFileSelected}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={uploadingMtlsCa}
+                      onClick={() => mtlsCaFileInputRef.current?.click()}
+                    >
+                      {uploadingMtlsCa ? 'Uploading...' : mtlsCaUploaded ? 'Replace CA Certificate' : 'Upload CA Certificate'}
+                    </Button>
+                    {mtlsCaUploaded && (
+                      <span style={{ fontSize: '12px', color: 'var(--good-color, #2e7d52)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <CheckCircle2 size={13} /> Uploaded
+                      </span>
+                    )}
+                  </div>
+                  {mtlsCaUploaded && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveMtlsCa}
+                      style={{ alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--danger-color)', fontSize: '11px', cursor: 'pointer', padding: 0 }}
+                    >
+                      Remove CA certificate
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable mTLS</span>
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      {mtlsCaUploaded ? 'Applies to /api only' : 'Upload a CA certificate first'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={mtlsEnabled}
+                    aria-label="Enable mTLS"
+                    disabled={!mtlsCaUploaded}
+                    className={`toggle-switch ${mtlsEnabled ? 'active' : ''}`}
+                    onClick={() => setMtlsEnabled(!mtlsEnabled)}
+                  >
+                    <div className="toggle-knob"></div>
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label htmlFor="pa-mtls-mode" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Mode</label>
+                  <select
+                    id="pa-mtls-mode"
+                    className="settings-input"
+                    style={{ width: '100%', fontSize: '14px' }}
+                    value={mtlsMode}
+                    onChange={(e) => setMtlsMode(e.target.value)}
+                  >
+                    <option value="log">Log only (request + record, never block)</option>
+                    <option value="enforce">Enforce (reject missing/invalid cert with 403)</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '4px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                  <Button type="button" variant="secondary" onClick={closeMtlsModal}>
+                    Cancel
+                  </Button>
+                  <button type="submit" disabled={savingMtls} className="modal-btn primary" style={{ margin: 0 }}>
+                    {savingMtls ? 'Saving...' : 'Save mTLS Settings'}
                   </button>
                 </div>
               </form>
