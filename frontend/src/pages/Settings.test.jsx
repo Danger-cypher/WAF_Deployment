@@ -129,7 +129,7 @@ describe('Settings — Security & Danger Zone', () => {
   });
 
   it('creates an API key and reveals it once, with a Copy/Dismiss control', async () => {
-    api.createApiKey.mockResolvedValue({ name: 'CI key', api_key: 'sk_live_abcdef123456' });
+    api.createApiKey.mockResolvedValue({ name: 'CI key', api_key: 'waf_mock_key_abcdef123456' });
     const user = userEvent.setup();
     renderPage();
     await openSecurityTab(user);
@@ -137,9 +137,9 @@ describe('Settings — Security & Danger Zone', () => {
     await user.click(screen.getByRole('button', { name: 'Create Key' }));
 
     await waitFor(() => expect(api.createApiKey).toHaveBeenCalledWith({ name: 'CI key', role: 'analyst' }));
-    expect(await screen.findByText('sk_live_abcdef123456')).toBeInTheDocument();
+    expect(await screen.findByText('waf_mock_key_abcdef123456')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Dismiss' }));
-    expect(screen.queryByText('sk_live_abcdef123456')).not.toBeInTheDocument();
+    expect(screen.queryByText('waf_mock_key_abcdef123456')).not.toBeInTheDocument();
   });
 
   it('revokes an existing API key', async () => {

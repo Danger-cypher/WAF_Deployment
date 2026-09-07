@@ -166,7 +166,7 @@ jobs:
         run: docker build -t waf-${{ matrix.service }}:ci ./${{ matrix.service }}
 
       - name: Scan ${{ matrix.service }} image for OS/package CVEs (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         # Informational for now, not blocking — this is CI's first pass at
         # image scanning (audit finding P2-10) and hasn't had a real run
         # against these specific base images yet to know what it turns up.
