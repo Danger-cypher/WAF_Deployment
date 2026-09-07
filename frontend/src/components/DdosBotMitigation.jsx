@@ -4,6 +4,7 @@ import { AlertTriangle, Activity, Database, Server, Bot } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { getDdosBotSettings, saveDdosBotSettings, getDdosAnalytics, getBotTrafficBreakdown, getTopBotIdentities } from '../services/api';
 import { useToast } from '../hooks/useToast';
+import { useConfirm } from '../hooks/useConfirm';
 import Toast from './Toast';
 
 // Fixed per-category color, independent of rank/sort order (dataviz rule:
@@ -11,6 +12,19 @@ import Toast from './Toast';
 // existing-accent-tokens convention Overview.jsx's Attack Vectors/Threat
 // Severity sections already use, reused here rather than inventing a
 // second categorical palette for the app.
+// Human-readable labels for ddos_analytics.py's `by_reason` keys — every
+// mechanism this page's own settings control that can actually reject a
+// request and that logs a recognizable line for it. "rate_limit" covers
+// nginx's own native L7 Rate Limit / Burst Tolerance / Advanced Rules
+// (all the same underlying limit_req/limit_conn mechanism, just different
+// zones) — broken out further would need per-zone tagging, a possible
+// future refinement, not a correctness requirement today.
+const BLOCK_REASON_LABELS = {
+  rate_limit: 'Rate Limit / Burst (native)',
+  adaptive_throttle: 'Adaptive Throttle',
+  api_enum: 'API Enumeration Detection',
+};
+
 const BOT_CATEGORY_COLORS = {
   'AI Crawler': 'var(--ml-color)',
   'Search Engine Bot': 'var(--cyan-color)',
@@ -29,6 +43,7 @@ export default function DdosBotMitigation() {
   const [botMitigationAction, setBotMitigationAction] = useState("Silent Drop");
   const [riskChallengeEnabled, setRiskChallengeEnabled] = useState(false);
   const [adaptiveThrottleEnabled, setAdaptiveThrottleEnabled] = useState(false);
+  const [apiEnumProtectionEnabled, setApiEnumProtectionEnabled] = useState(false);
 
   // Advanced Rate Limiting State
   const [advancedRules, setAdvancedRules] = useState([]);
@@ -41,12 +56,15 @@ export default function DdosBotMitigation() {
 
   const [loadingAction, setLoadingAction] = useState(false);
   const { toast, showToast } = useToast();
+  const confirm = useConfirm();
 
   const [analytics, setAnalytics] = useState({
     timeline: [],
     top_ips: [],
     total_blocks: 0,
-    total_unique_ips: 0
+    total_unique_ips: 0,
+    by_reason: {},
+    window_hours: 24
   });
 
   const fetchSettings = async () => {
@@ -59,6 +77,7 @@ export default function DdosBotMitigation() {
         if (ddos.bot_mitigation_action) setBotMitigationAction(ddos.bot_mitigation_action);
         if (ddos.risk_challenge_enabled !== undefined) setRiskChallengeEnabled(ddos.risk_challenge_enabled);
         if (ddos.adaptive_throttle_enabled !== undefined) setAdaptiveThrottleEnabled(ddos.adaptive_throttle_enabled);
+        if (ddos.api_enum_protection_enabled !== undefined) setApiEnumProtectionEnabled(ddos.api_enum_protection_enabled);
         if (ddos.advanced_rules !== undefined) setAdvancedRules(ddos.advanced_rules);
       }
     } catch (err) {
@@ -131,6 +150,7 @@ export default function DdosBotMitigation() {
         bot_mitigation_action: botMitigationAction,
         risk_challenge_enabled: riskChallengeEnabled,
         adaptive_throttle_enabled: adaptiveThrottleEnabled,
+        api_enum_protection_enabled: apiEnumProtectionEnabled,
         advanced_rules: advancedRules
       });
       showToast("Anti-DDoS & Bot Mitigation settings updated successfully.");
@@ -152,6 +172,7 @@ export default function DdosBotMitigation() {
         bot_mitigation_action: botMitigationAction,
         risk_challenge_enabled: riskChallengeEnabled,
         adaptive_throttle_enabled: adaptiveThrottleEnabled,
+        api_enum_protection_enabled: apiEnumProtectionEnabled,
         advanced_rules: updatedRules
       });
       setAdvancedRules(updatedRules);
@@ -195,7 +216,15 @@ export default function DdosBotMitigation() {
     saveWithRules(updated);
   };
 
-  const handleDeleteRule = (ruleId) => {
+  const handleDeleteRule = async (ruleId) => {
+    // Every other destructive action on this page (and elsewhere in the
+    // dashboard) confirms first — this one saved immediately with no
+    // dialog and no undo (audit finding P3-02).
+    const rule = advancedRules.find(r => r.id === ruleId);
+    if (!(await confirm({
+      message: `Delete rate-limit rule "${rule?.name || ruleId}"? This takes effect immediately and cannot be undone.`,
+      danger: true,
+    }))) return;
     const updated = advancedRules.filter(r => r.id !== ruleId);
     saveWithRules(updated);
   };
@@ -327,6 +356,23 @@ export default function DdosBotMitigation() {
             </div>
           </div>
 
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={apiEnumProtectionEnabled}
+                onChange={(e) => setApiEnumProtectionEnabled(e.target.checked)}
+              />
+              Detect sequential API-ID enumeration
+            </label>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+              Flags a client hitting the same endpoint (e.g. /api/users/&#123;id&#125;) with numeric IDs
+              that keep stepping up or down — a classic API scanning pattern nothing else here looks
+              for, since every other check scores one request at a time. Soft-throttles (429), not a
+              hard block. Off by default — untuned against real traffic, so start cautious.
+            </div>
+          </div>
+
           <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ marginTop: '4px', alignSelf: 'flex-start' }}>
             {loadingAction ? 'Applying to NGINX...' : 'Enforce Policy'}
           </button>
@@ -346,7 +392,7 @@ export default function DdosBotMitigation() {
             <div className="metric-value" style={{ color: 'var(--danger-color)' }}>{analytics.total_blocks.toLocaleString()}</div>
             <div className="metric-trend trend-up">
               <div className="pulse-dot" style={{ marginRight: '6px' }}></div>
-              <span>Live enforcement active</span>
+              <span>Last {analytics.window_hours}h — genuine rejections only</span>
             </div>
           </div>
 
@@ -360,6 +406,42 @@ export default function DdosBotMitigation() {
             <div className="metric-trend trend-down">
               <span>Distinct offenders tracked</span>
             </div>
+          </div>
+        </div>
+
+        {/* Per-mechanism breakdown — makes every toggle on the left form
+            actually verifiable here, instead of one opaque aggregate that
+            (before 2026-09-04) was blind to everything except native
+            rate-limiting. JS Challenge / "Challenge moderate-risk traffic"
+            are deliberately not listed: a passed-vs-stuck-on-challenge
+            outcome is invisible to server-side logs by design (that's the
+            whole point of a silent JS interstitial), so this never claims
+            to count them rather than showing a fake zero. */}
+        <div className="glass-panel" style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+            Blocked by mechanism (last {analytics.window_hours}h)
+          </div>
+          {Object.keys(analytics.by_reason || {}).length === 0 ? (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No blocks recorded in this window.</div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              {Object.entries(analytics.by_reason).sort((a, b) => b[1] - a[1]).map(([reason, count]) => (
+                <div key={reason} style={{
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  background: 'var(--surface-subtle)', border: '1px solid var(--surface-hover)',
+                  borderRadius: '8px', padding: '6px 12px', fontSize: '12px'
+                }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                    {BLOCK_REASON_LABELS[reason] || reason}
+                  </span>
+                  <span style={{ color: 'var(--danger-color)', fontWeight: 600 }}>{count.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '10px' }}>
+            JS Challenge and ML-risk challenge outcomes aren't included — whether a client passed or
+            got stuck on the interstitial is invisible to server-side logs by design.
           </div>
         </div>
 

@@ -60,7 +60,7 @@ async def list_users(current_user: TokenData = Depends(require_admin)):
 
 
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def create_user(payload: UserCreate, current_user: TokenData = Depends(require_admin)):
+async def create_user(request: Request, payload: UserCreate, current_user: TokenData = Depends(require_admin)):
     """Create a new dashboard user account (Admin only)"""
     if user_service.get_by_username(payload.username):
         raise HTTPException(
@@ -82,12 +82,12 @@ async def create_user(payload: UserCreate, current_user: TokenData = Depends(req
         )
     if payload.role == "app_admin" and payload.app_ids:
         db_service.set_app_access_for_user(payload.username, payload.app_ids)
-    log_admin_action("user", str(user_id), "create", current_user, details={"username": payload.username, "role": payload.role, "app_ids": payload.app_ids})
+    log_admin_action("user", str(user_id), "create", current_user, details={"username": payload.username, "role": payload.role, "app_ids": payload.app_ids}, request=request)
     return _enrich_with_app_ids(user_service.get_by_id(user_id))
 
 
 @router.patch("/users/{user_id}", response_model=UserOut)
-async def update_user(
+async def update_user(request: Request,
     user_id: int, payload: UserUpdate, current_user: TokenData = Depends(require_admin)
 ):
     """Update a user's role, enabled state, display name, or email (Admin only)"""
@@ -121,12 +121,13 @@ async def update_user(
     log_admin_action(
         "user", str(user_id), "update", current_user,
         details={"role": payload.role, "enabled": payload.enabled, "target_username": target["username"], "app_ids": payload.app_ids},
+        request=request,
     )
     return _enrich_with_app_ids(result)
 
 
 @router.post("/users/{user_id}/reset-password")
-async def reset_password(
+async def reset_password(request: Request,
     user_id: int, payload: AdminPasswordReset, current_user: TokenData = Depends(require_admin)
 ):
     """Admin-issued password reset for another account (Admin only)"""
@@ -134,12 +135,12 @@ async def reset_password(
     if not target:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     user_service.set_password(user_id, payload.new_password)
-    log_admin_action("user", str(user_id), "admin_reset_password", current_user, details={"target_username": target["username"]})
+    log_admin_action("user", str(user_id), "admin_reset_password", current_user, details={"target_username": target["username"]}, request=request)
     return {"message": "Password reset successfully."}
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: int, current_user: TokenData = Depends(require_admin)):
+async def delete_user(request: Request, user_id: int, current_user: TokenData = Depends(require_admin)):
     """Delete a dashboard user account (Admin only)"""
     target = user_service.get_by_id(user_id)
     if not target:
@@ -151,7 +152,7 @@ async def delete_user(user_id: int, current_user: TokenData = Depends(require_ad
     _guard_last_admin(target, will_demote=False, will_disable=True)
     user_service.delete_user(user_id)
     db_service.set_app_access_for_user(target["username"], [])
-    log_admin_action("user", str(user_id), "delete", current_user, details={"target_username": target["username"]})
+    log_admin_action("user", str(user_id), "delete", current_user, details={"target_username": target["username"]}, request=request)
     return {"message": "User deleted successfully."}
 
 
@@ -325,7 +326,7 @@ async def disable_my_mfa(
 
 
 @router.post("/users/{user_id}/mfa/disable", response_model=MfaStatus)
-async def admin_disable_user_mfa(user_id: int, current_user: TokenData = Depends(require_admin)):
+async def admin_disable_user_mfa(request: Request, user_id: int, current_user: TokenData = Depends(require_admin)):
     """Admin recovery path: force-disable MFA on another account (e.g. the
     user lost their authenticator device). No code/password needed since
     the admin is already authenticated and authorized (Admin only)."""
@@ -337,7 +338,7 @@ async def admin_disable_user_mfa(user_id: int, current_user: TokenData = Depends
         f"MFA force-disabled for user '{target['username']}' (id={user_id}) "
         f"by admin '{current_user.username}'."
     )
-    log_admin_action("user", str(user_id), "admin_disable_mfa", current_user, details={"target_username": target["username"]})
+    log_admin_action("user", str(user_id), "admin_disable_mfa", current_user, details={"target_username": target["username"]}, request=request)
     return {"enabled": False}
 
 
@@ -358,7 +359,7 @@ async def list_user_sessions(user_id: int, current_user: TokenData = Depends(req
 
 
 @router.delete("/users/{user_id}/sessions/{session_id}")
-async def revoke_user_session(
+async def revoke_user_session(request: Request,
     user_id: int, session_id: str, current_user: TokenData = Depends(require_admin)
 ):
     """Admin revoke of one specific session on another account (Admin
@@ -370,6 +371,7 @@ async def revoke_user_session(
     if not session_service.revoke_session(target["username"], session_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
     log_admin_action(
-        "session", session_id, "revoke", current_user, details={"target_username": target["username"]}
+        "session", session_id, "revoke", current_user, details={"target_username": target["username"]},
+        request=request,
     )
     return {"message": "Session revoked."}

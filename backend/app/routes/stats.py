@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from typing import List, Dict, Any, Optional
 import csv
@@ -21,8 +21,6 @@ from app.services.stats_calculator import (
 
 router = APIRouter()
 
-
-from fastapi import APIRouter, Depends, Query
 
 @router.get("/stats", response_model=StatsResponse)
 async def get_general_stats(

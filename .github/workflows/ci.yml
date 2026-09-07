@@ -90,9 +90,61 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      - name: Audit dependencies (npm audit)
+        working-directory: frontend
+        # --audit-level=high: block on High/Critical, same threshold pip-audit
+        # and bandit's `-ll` use below — a Low/Moderate finding in some
+        # transitive dev-tooling dependency shouldn't block every PR.
+        run: npm audit --audit-level=high
+
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  security-scan:
+    name: Security scanning (audit finding P2-10 — CI had none of this)
+    runs-on: ubuntu-latest
+    steps:
+      # gitleaks needs real commit history to scan, not just the tip —
+      # actions/checkout defaults to a 1-commit shallow clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install scanners
+        # Pinned to match backend/requirements-dev.txt so a local run and
+        # CI's run behave identically.
+        run: pip install bandit==1.9.4 pip-audit==2.10.1
+
+      - name: Dependency vulnerability scan (pip-audit)
+        run: |
+          pip-audit -r backend/requirements.txt
+          pip-audit -r ml-waf/requirements.txt
+
+      - name: Static analysis (bandit) — backend
+        # Two invocations: clickhouse_service.py has B608 (SQL-injection
+        # shaped f-strings) specifically skipped there, and only there —
+        # every value bandit flags in that file is actually passed through
+        # clickhouse-connect's %(name)s parameter binding one level down,
+        # which bandit's static analysis can't see through. Verified by
+        # hand, file-by-file, 2026-09-05 — see that file's own module
+        # docstring before touching this. Every other file still gets the
+        # full B608 check, same as bandit's default behavior.
+        run: |
+          bandit -r backend/app --exclude backend/app/services/clickhouse_service.py -ll -q
+          bandit backend/app/services/clickhouse_service.py --skip B608 -ll -q
+
+      - name: Static analysis (bandit) — ML engine
+        run: bandit -r ml-waf -ll -q
+
+      - name: Secret scanning (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker-build:
     name: Docker build sanity check
@@ -112,3 +164,15 @@ jobs:
 
       - name: Build ${{ matrix.service }} image
         run: docker build -t waf-${{ matrix.service }}:ci ./${{ matrix.service }}
+
+      - name: Scan ${{ matrix.service }} image for OS/package CVEs (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        # Informational for now, not blocking — this is CI's first pass at
+        # image scanning (audit finding P2-10) and hasn't had a real run
+        # against these specific base images yet to know what it turns up.
+        # Flip to failing once a first run has been reviewed.
+        continue-on-error: true
+        with:
+          image-ref: "waf-${{ matrix.service }}:ci"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"

@@ -6,10 +6,13 @@ import sqlite3
 import json
 import hashlib
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 import logging
 
+from cryptography.fernet import Fernet, InvalidToken
+
+from app.config.settings import settings
 from app.services import clickhouse_service
 
 logger = logging.getLogger(__name__)
@@ -18,6 +21,49 @@ logger = logging.getLogger(__name__)
 DB_DIR = Path(__file__).parent.parent / "data"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 ALERTS_DB_PATH = DB_DIR / "alerts.db"
+
+
+class ChannelEncryptionError(RuntimeError):
+    """Raised when alert_channels.config can't be encrypted or decrypted
+    because CHANNEL_ENCRYPTION_KEY is missing or invalid — never falls
+    back to writing it in plaintext (audit finding P2-03: this column
+    holds real SMTP passwords and webhook URLs)."""
+
+
+def _get_channel_fernet() -> Fernet:
+    key = settings.CHANNEL_ENCRYPTION_KEY
+    if not key:
+        raise ChannelEncryptionError(
+            "CHANNEL_ENCRYPTION_KEY is not set — refusing to create or read "
+            "an alert channel's config unencrypted. Generate one with: "
+            "python3 -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\" and set "
+            "CHANNEL_ENCRYPTION_KEY to the output, then restart the backend."
+        )
+    try:
+        return Fernet(key.encode())
+    except Exception as e:
+        raise ChannelEncryptionError(f"CHANNEL_ENCRYPTION_KEY is not a valid Fernet key: {e}")
+
+
+def _encrypt_channel_config(config: Dict[str, Any]) -> str:
+    return _get_channel_fernet().encrypt(json.dumps(config).encode()).decode()
+
+
+def _decrypt_channel_config(raw: str) -> Dict[str, Any]:
+    """Reverses _encrypt_channel_config. Raises ChannelEncryptionError on a
+    missing/wrong key or corrupted ciphertext — callers decide whether
+    that should fail the whole request or degrade one row (see get_channel/
+    get_channels below)."""
+    try:
+        plaintext = _get_channel_fernet().decrypt(raw.encode())
+    except InvalidToken:
+        raise ChannelEncryptionError(
+            "Could not decrypt this channel's config — either "
+            "CHANNEL_ENCRYPTION_KEY doesn't match the key it was encrypted "
+            "with, or the stored value is corrupted."
+        )
+    return json.loads(plaintext)
 
 
 class AlertDatabaseService:
@@ -163,15 +209,28 @@ class AlertDatabaseService:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alert_history_severity ON alert_history(severity)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alert_agg_rule_sig ON alert_aggregations(rule_id, event_signature)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alert_agg_last_notified ON alert_aggregations(last_notified_at)")
-            # Seed default notification channel if empty
+            # Seed default notification channel if empty. This runs at
+            # application startup (every AlertDatabaseService instantiation
+            # on a fresh DB), where refusing to start over a missing
+            # CHANNEL_ENCRYPTION_KEY would be far more disruptive than it
+            # is for the explicit, admin-triggered create/update paths
+            # above — so this degrades to skipping the seed (logging why)
+            # rather than writing it unencrypted or crashing startup. An
+            # admin who configures the key afterward can add this channel
+            # normally through the API.
             cursor.execute("SELECT COUNT(*) FROM alert_channels")
             if cursor.fetchone()[0] == 0:
-                default_config = json.dumps({"url": "http://localhost:8000/alerts/trigger", "method": "POST"})
-                cursor.execute("""
-                    INSERT INTO alert_channels (name, channel_type, config, enabled)
-                    VALUES ('Default Log webhook', 'webhook', ?, 1)
-                """, (default_config,))
-                
+                try:
+                    default_config = _encrypt_channel_config(
+                        {"url": "http://localhost:8000/alerts/trigger", "method": "POST"}
+                    )
+                    cursor.execute("""
+                        INSERT INTO alert_channels (name, channel_type, config, enabled)
+                        VALUES ('Default Log webhook', 'webhook', ?, 1)
+                    """, (default_config,))
+                except ChannelEncryptionError as e:
+                    logger.warning(f"Skipping default alert channel seed — {e}")
+
             # Seed default alert rules if empty
             cursor.execute("SELECT COUNT(*) FROM alert_rules")
             if cursor.fetchone()[0] == 0:
@@ -213,7 +272,7 @@ class AlertDatabaseService:
             cursor.execute("""
                 INSERT INTO alert_channels (name, channel_type, config, enabled)
                 VALUES (?, ?, ?, ?)
-            """, (name, channel_type, json.dumps(config), enabled))
+            """, (name, channel_type, _encrypt_channel_config(config), enabled))
             
             conn.commit()
             channel_id = cursor.lastrowid
@@ -224,31 +283,53 @@ class AlertDatabaseService:
         finally:
             conn.close()
     
+    def _decrypt_channel_row(self, channel: Dict[str, Any]) -> Dict[str, Any]:
+        """_row_to_dict's generic JSON-field parser leaves `config` as the
+        raw stored string only when it *doesn't* parse as JSON — Fernet
+        ciphertext never does, so this is where decryption actually
+        happens. A row written before this fix (plain JSON) parses
+        successfully there instead, so it comes back through unchanged
+        rather than failing to decrypt — deliberate: a pre-existing
+        channel keeps working as before until it's next saved through
+        create_channel/update_channel, which always encrypts. Genuinely
+        undecryptable ciphertext (missing/rotated key, corruption) instead
+        degrades to an error placeholder on that one row, rather than
+        failing the whole list."""
+        raw = channel.get("config")
+        if not isinstance(raw, str):
+            return channel
+        try:
+            channel["config"] = _decrypt_channel_config(raw)
+        except ChannelEncryptionError as e:
+            logger.error(f"Channel {channel.get('id')} config undecryptable: {e}")
+            channel["config"] = {"_encryption_error": str(e)}
+        return channel
+
     def get_channel(self, channel_id: int) -> Optional[Dict[str, Any]]:
         """Get channel by ID"""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             cursor.execute("SELECT * FROM alert_channels WHERE id = ?", (channel_id,))
             row = cursor.fetchone()
-            return self._row_to_dict(row) if row else None
+            return self._decrypt_channel_row(self._row_to_dict(row)) if row else None
         finally:
             conn.close()
-    
+
     def get_channels(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
         """Get all alert channels"""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         try:
             query = "SELECT * FROM alert_channels"
             if enabled_only:
                 query += " WHERE enabled = 1"
             query += " ORDER BY created_at DESC"
-            
+
             cursor.execute(query)
-            return [self._row_to_dict(row) for row in cursor.fetchall()]
+            return [self._decrypt_channel_row(self._row_to_dict(row)) for row in cursor.fetchall()]
         finally:
             conn.close()
     
@@ -268,7 +349,7 @@ class AlertDatabaseService:
                     values.append(value)
                 elif key == 'config':
                     updates.append("config = ?")
-                    values.append(json.dumps(value))
+                    values.append(_encrypt_channel_config(value))
             
             if not updates:
                 return False
@@ -276,7 +357,7 @@ class AlertDatabaseService:
             updates.append("updated_at = CURRENT_TIMESTAMP")
             values.append(channel_id)
             
-            query = f"UPDATE alert_channels SET {', '.join(updates)} WHERE id = ?"
+            query = f"UPDATE alert_channels SET {', '.join(updates)} WHERE id = ?"  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
             cursor.execute(query, values)
             conn.commit()
             
@@ -382,7 +463,7 @@ class AlertDatabaseService:
             updates.append("updated_at = CURRENT_TIMESTAMP")
             values.append(rule_id)
             
-            query = f"UPDATE alert_rules SET {', '.join(updates)} WHERE id = ?"
+            query = f"UPDATE alert_rules SET {', '.join(updates)} WHERE id = ?"  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
             cursor.execute(query, values)
             conn.commit()
             
@@ -602,6 +683,47 @@ class AlertDatabaseService:
         finally:
             conn.close()
     
+    def count_recent_notifications(self, rule_id: int, minutes: int = 60) -> int:
+        """Number of alerts this rule has actually dispatched in the last
+        `minutes`, across every event signature.
+
+        Backs the per-rule notification ceiling in alert_manager (audit
+        finding P1-02). should_throttle_alert() above dedupes per
+        (rule_id, client_ip, uri) signature, which is the right shape for
+        "stop repeating the same alert" but provides no ceiling at all on a
+        rule that matches broadly: every distinct IP/URI pair opens its own
+        throttle bucket, so a mis-thresholded rule on a busy site produces
+        effectively unbounded notifications.
+
+        That is not hypothetical here. The seeded "ML Novelty Anomaly" rule
+        matches on Isolation Forest anomaly strength, and the deployed model
+        scores 100% of real traffic above that bar (108,018 events, highest
+        iso_score -0.3456 — nothing was ever classified normal). Repairing
+        the rule evaluator without also adding a ceiling would have turned a
+        product that sent no alerts into one that sent an alert per request.
+
+        Counts alert_history rather than keeping a separate counter: it is
+        the authoritative record of what was really dispatched, needs no new
+        state to keep consistent, and is indexed on created_at.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            threshold = datetime.now() - timedelta(minutes=minutes)
+            cursor.execute("""
+                SELECT COUNT(*) FROM alert_history
+                WHERE rule_id = ? AND created_at > ?
+            """, (rule_id, threshold.isoformat(sep=" ", timespec="seconds")))
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+        except Exception as e:
+            # Never let a counting failure block a real alert — fail toward
+            # delivering, same lenient posture as the rest of this service.
+            logger.error(f"count_recent_notifications failed for rule {rule_id}: {e}")
+            return 0
+        finally:
+            conn.close()
+
     def update_aggregation(self, rule_id: int, event_signature: str, notified: bool = False):
         """Update or create alert aggregation entry"""
         conn = self._get_connection()
@@ -804,7 +926,11 @@ class AlertDatabaseService:
         }
         
         sig_string = json.dumps(sig_fields, sort_keys=True)
-        return hashlib.md5(sig_string.encode()).hexdigest()
+        # Dedup fingerprint only (throttle bucket key) — no security property
+        # relies on collision resistance here, so MD5's speed is preferable
+        # to SHA-256's. usedforsecurity=False documents that for both bandit
+        # (B324) and anyone reading this later.
+        return hashlib.md5(sig_string.encode(), usedforsecurity=False).hexdigest()  # nosec B324
 
 
 # Singleton instance

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, HTTPException, Depends
+from fastapi import APIRouter, Query, HTTPException, Depends, Request
 from typing import List, Optional
 from app.models.rule_model import (
     RuleEntry,
@@ -103,7 +103,8 @@ async def get_custom_rules(current_user: TokenData = Depends(require_any_role)):
 
 @router.post("/rules/custom")
 async def save_custom_rules(
-    request: CustomRulesRequest,
+    request: Request,
+    payload: CustomRulesRequest,
     current_user: TokenData = Depends(require_admin)
 ):
     """
@@ -116,7 +117,7 @@ async def save_custom_rules(
         # Ensure modsec directory exists
         os.makedirs(os.path.dirname(CUSTOM_RULES_TMP), exist_ok=True)
         with open(CUSTOM_RULES_TMP, "w", encoding="utf-8") as f:
-            f.write(request.rules_content)
+            f.write(payload.rules_content)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -131,7 +132,7 @@ async def save_custom_rules(
         # Move current rules to backup
         if backup_exists:
             shutil.copy2(CUSTOM_RULES_FILE, backup_path)
-        
+
         # Deploy new temp rules
         shutil.move(CUSTOM_RULES_TMP, CUSTOM_RULES_FILE)
 
@@ -169,7 +170,8 @@ async def save_custom_rules(
             )
         log_admin_action(
             "custom_rules", "virtual_patching", "replace", current_user,
-            details={"content_length": len(request.rules_content)},
+            details={"content_length": len(payload.rules_content)},
+            request=request,
         )
         return {"message": "Custom rules saved and applied successfully."}
 

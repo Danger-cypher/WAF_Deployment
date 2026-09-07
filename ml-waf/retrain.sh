@@ -113,7 +113,7 @@ success "XGBoost training complete."
 # If validation accuracy is below MIN_ACCURACY, roll back both models.
 log "Validating new XGBoost model accuracy against threshold (>= ${MIN_ACCURACY})..."
 
-NEW_ACCURACY=$("$VENV_PYTHON" - <<'PYEOF'
+NEW_ACCURACY=$("$VENV_PYTHON" - <<PYEOF
 import json, sys, os
 meta_path = os.path.join("${MODELS_DIR}", "model_metadata.json")
 try:

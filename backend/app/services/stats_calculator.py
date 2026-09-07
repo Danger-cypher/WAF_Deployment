@@ -14,7 +14,6 @@ import time
 import json
 import logging
 from typing import Any, Dict, List, Optional
-from collections import Counter
 
 from app.services import clickhouse_service
 

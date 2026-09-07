@@ -1,0 +1,86 @@
+# keepalived.conf.example — CyberSentinel WAF active-passive failover
+# =============================================================================
+# TEMPLATE ONLY — not wired up, not active. This is Phase B of the HA plan
+# (see scripts/ha/README.md) and needs a second host to mean anything; it's
+# checked in now, in a single-host deployment, purely so the design is
+# reviewable and the actual Phase-B work is "fill in 4 placeholders and
+# install keepalived" rather than "design HA from scratch under time
+# pressure when the second box shows up."
+#
+# Runs on the HOST (via systemd's keepalived service), not in a container —
+# VRRP needs to own a real network interface to advertise the floating IP
+# from, which a container's virtual network namespace can't do cleanly.
+#
+# Copy this file to /etc/keepalived/keepalived.conf on EACH node, then edit
+# the 4 <<PLACEHOLDER>> values below — they differ per node, everything else
+# is identical on both.
+
+vrrp_script chk_waf {
+    # See scripts/ha/waf-health-check.sh — reuses the backend's real
+    # GET /health rather than a separate liveness probe, so a degraded
+    # ClickHouse/SQLite connection triggers failover the same way a fully
+    # dead node does, not just a hard crash.
+    script "/opt/ModSecurity/WAF_GUI/scripts/ha/waf-health-check.sh"
+    interval 2   # poll every 2s
+    timeout 3    # matches the script's own WAF_HEALTH_TIMEOUT default
+    fall 3       # 3 consecutive failures (6s) before declaring this node down
+    rise 2       # 2 consecutive successes before trusting it's back
+    weight -20   # a failing check drops this node's priority by 20
+}
+
+vrrp_instance VI_WAF {
+    # <<PLACEHOLDER>> MASTER on the node that should hold the VIP by
+    # default (e.g. node 1); BACKUP on the other. With preempt (default:
+    # on) the higher-priority node reclaims MASTER once it's healthy again
+    # — acceptable for a 2-node pair; document to your on-call that a
+    # recovering node will take traffic back automatically, not just
+    # rejoin as standby.
+    state <<PLACEHOLDER: MASTER on node 1, BACKUP on node 2>>
+
+    # <<PLACEHOLDER>> the real host network interface (check with `ip a`
+    # on each box — commonly eth0/ens18/enp0s3, NOT a Docker bridge
+    # interface; this must be the interface that already carries this
+    # node's real IP on your network).
+    interface <<PLACEHOLDER: e.g. eth0>>
+
+    virtual_router_id 51   # arbitrary 0-255, just must match on both nodes
+                            # and not collide with another VRRP group on the
+                            # same L2 segment
+
+    # <<PLACEHOLDER>> higher wins when both are healthy. 150 on the
+    # preferred-active node, 100 on the other — picked with headroom under
+    # chk_waf's weight (-20) so one failed health check can't accidentally
+    # flip priority ordering by itself.
+    priority <<PLACEHOLDER: 150 on node 1, 100 on node 2>>
+
+    advert_int 1   # VRRP advertisement interval, seconds
+
+    authentication {
+        auth_type PASS
+        # <<PLACEHOLDER>> generate a real secret at deploy time
+        # (e.g. `openssl rand -base64 18`) — never commit a real value
+        # here. VRRP's PASS auth is weak (cleartext on the wire, 8-char
+        # limit) but is what keepalived supports; it's a defense against
+        # accidental misconfiguration on the same L2 segment, not a real
+        # authentication boundary — don't rely on it as one.
+        auth_pass <<PLACEHOLDER: generate per deployment>>
+    }
+
+    virtual_ipaddress {
+        # <<PLACEHOLDER>> the floating VIP clients/DNS should point at —
+        # must be a free IP on the same subnet as `interface` above, not
+        # already assigned to either node individually.
+        <<PLACEHOLDER: e.g. 10.0.0.50/24>>
+    }
+
+    track_script {
+        chk_waf
+    }
+
+    # Deliberately NOT configured: notify_master/notify_backup/notify_fault
+    # scripts to trigger the actual state promotion (Redis REPLICAOF
+    # switch, litestream replica promotion, etc.) — that automation is
+    # real remaining work, not a config-template fill-in, and is scoped
+    # to Phase B alongside provisioning node 2 itself. See
+    # scripts/ha/README.md's open-items list before treating this as done.
+}

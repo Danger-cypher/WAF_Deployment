@@ -8,6 +8,7 @@ import {
   changeAdminPassword, restartWafEngine, reloadNginxProxy, purgeStatsCache, syncSignatures,
   getHardeningSettings, saveHardeningSettings, getGeoBlockSettings, saveGeoBlockSettings,
   getThreatIntelSettings, saveThreatIntelSettings, syncThreatIntelNow,
+  getGoodBotSettings, saveGoodBotSettings, syncGoodBotsNow,
   getAutoReputationSettings, saveAutoReputationSettings, syncAutoReputationNow,
   getAutoBlockedIps, releaseAutoBlockedIp,
   getAdminLoginAllowlistSettings, saveAdminLoginAllowlistSettings,
@@ -91,6 +92,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
   const [serverCloaking, setServerCloaking] = useState(true);
   const [ipBlacklist, setIpBlacklist] = useState("");
   const [ipWhitelist, setIpWhitelist] = useState("");
+  const [ja4Blacklist, setJa4Blacklist] = useState("");
 
   // Geo-Block Settings — country allow/deny list, enforced in ml_check.lua
   // via $geoip2_data_country_code (requires GeoIP2 to be enabled to have
@@ -104,8 +106,19 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
   // manually-managed IP blacklist above.
   const [threatIntelEnabled, setThreatIntelEnabled] = useState(false);
   const [threatIntelIntervalHours, setThreatIntelIntervalHours] = useState(24);
+  // Per-source opt-in — tor_exit_nodes defaults off even when the other
+  // two are on: a Tor exit IP is anonymized traffic, not inherently
+  // malicious, so blocking it is a deliberate policy choice an admin has
+  // to make explicitly (see threat_intel_service.py's module docstring).
+  const [threatIntelSources, setThreatIntelSources] = useState({ spamhaus: true, emerging_threats: true, tor_exit_nodes: false });
   const [threatIntelStatus, setThreatIntelStatus] = useState(null);
   const [threatIntelSyncing, setThreatIntelSyncing] = useState(false);
+
+  const [goodBotEnabled, setGoodBotEnabled] = useState(false);
+  const [goodBotIntervalHours, setGoodBotIntervalHours] = useState(24);
+  const [goodBotSources, setGoodBotSources] = useState({ googlebot: true, bingbot: true });
+  const [goodBotStatus, setGoodBotStatus] = useState(null);
+  const [goodBotSyncing, setGoodBotSyncing] = useState(false);
 
   // Self-Learned IP Reputation (P1-7) — auto-blocks repeat WAF-block
   // offenders from this deployment's own traffic. Separate Redis key
@@ -210,13 +223,14 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
   const fetchSettings = async () => {
     setSettingsLoadError('');
     try {
-        const [gen, logs, waf, hardening, geoBlock, threatIntel, autoRep, adminLoginAllowlist, malwareScan, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
+        const [gen, logs, waf, hardening, geoBlock, threatIntel, goodBots, autoRep, adminLoginAllowlist, malwareScan, defacement, positiveSecurity, customResponse, autoLearning] = await Promise.all([
           getGeneralSettings(),
           getLogSettings(),
           getWafSettings(),
           getHardeningSettings(),
           getGeoBlockSettings(),
           getThreatIntelSettings(),
+          getGoodBotSettings(),
           getAutoReputationSettings(),
           getAdminLoginAllowlistSettings(),
           getMalwareScanningSettings(),
@@ -249,6 +263,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
           if (hardening.server_cloaking !== undefined) setServerCloaking(hardening.server_cloaking);
           if (hardening.ip_blacklist !== undefined) setIpBlacklist(hardening.ip_blacklist.join(', '));
           if (hardening.ip_whitelist !== undefined) setIpWhitelist(hardening.ip_whitelist.join(', '));
+          if (hardening.ja4_blacklist !== undefined) setJa4Blacklist(hardening.ja4_blacklist.join(', '));
         }
         if (geoBlock) {
           if (geoBlock.enabled !== undefined) setGeoBlockEnabled(geoBlock.enabled);
@@ -258,7 +273,14 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
         if (threatIntel) {
           if (threatIntel.enabled !== undefined) setThreatIntelEnabled(threatIntel.enabled);
           if (threatIntel.sync_interval_hours !== undefined) setThreatIntelIntervalHours(threatIntel.sync_interval_hours);
+          if (threatIntel.sources !== undefined) setThreatIntelSources((prev) => ({ ...prev, ...threatIntel.sources }));
           setThreatIntelStatus(threatIntel);
+        }
+        if (goodBots) {
+          if (goodBots.enabled !== undefined) setGoodBotEnabled(goodBots.enabled);
+          if (goodBots.sync_interval_hours !== undefined) setGoodBotIntervalHours(goodBots.sync_interval_hours);
+          if (goodBots.sources !== undefined) setGoodBotSources((prev) => ({ ...prev, ...goodBots.sources }));
+          setGoodBotStatus(goodBots);
         }
         if (autoRep) {
           if (autoRep.enabled !== undefined) setAutoRepEnabled(autoRep.enabled);
@@ -351,12 +373,14 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
     try {
       const blacklist = ipBlacklist.split(',').map(ip => ip.trim()).filter(ip => ip);
       const whitelist = ipWhitelist.split(',').map(ip => ip.trim()).filter(ip => ip);
+      const ja4BlacklistArr = ja4Blacklist.split(',').map(ja4 => ja4.trim()).filter(ja4 => ja4);
       await saveHardeningSettings({
         hsts_enabled: hstsEnabled,
         hsts_max_age: parseInt(hstsMaxAge) || 31536000,
         server_cloaking: serverCloaking,
         ip_blacklist: blacklist,
-        ip_whitelist: whitelist
+        ip_whitelist: whitelist,
+        ja4_blacklist: ja4BlacklistArr
       });
       clearDirty('hardening');
       showToast("Hardening & Server Cloaking policies updated and applied to NGINX.");
@@ -393,6 +417,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
       const saved = await saveThreatIntelSettings({
         enabled: threatIntelEnabled,
         sync_interval_hours: parseInt(threatIntelIntervalHours) || 24,
+        sources: threatIntelSources,
       });
       setThreatIntelStatus(saved);
       clearDirty('threatintel');
@@ -415,6 +440,39 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
       showToast("Threat-intel sync failed: " + (err.message || "Unknown error"), "error");
     } finally {
       setThreatIntelSyncing(false);
+    }
+  };
+
+  const handleSaveGoodBots = async (e) => {
+    e.preventDefault();
+    setLoadingAction(true);
+    try {
+      const saved = await saveGoodBotSettings({
+        enabled: goodBotEnabled,
+        sync_interval_hours: parseInt(goodBotIntervalHours) || 24,
+        sources: goodBotSources,
+      });
+      setGoodBotStatus(saved);
+      clearDirty('goodbots');
+      showToast("Good-bot allowlist settings updated.");
+    } catch (err) {
+      showToast("Failed to update good-bot settings: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const handleSyncGoodBotsNow = async () => {
+    setGoodBotSyncing(true);
+    try {
+      const result = await syncGoodBotsNow();
+      showToast(`Good-bot sync complete — ${result.count} IP ranges loaded.`);
+      const refreshed = await getGoodBotSettings();
+      setGoodBotStatus(refreshed);
+    } catch (err) {
+      showToast("Good-bot sync failed: " + (err.message || "Unknown error"), "error");
+    } finally {
+      setGoodBotSyncing(false);
     }
   };
 
@@ -1424,6 +1482,20 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                     />
                   </div>
 
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-ja4-blacklist">Known-Bad JA4 TLS Fingerprints (Comma separated)</label>
+                    <textarea id="settings-ja4-blacklist"
+                      className="settings-input"
+                      style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
+                      value={ja4Blacklist}
+                      onChange={(e) => setJa4Blacklist(e.target.value)}
+                      placeholder="t13d1516h2_8daaf6152771_e5627efa2ab1"
+                    />
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      Blocks by TLS-client fingerprint regardless of source IP — catches known scanner/bot tooling even when it rotates IPs. Independent of the IP lists above.
+                    </span>
+                  </div>
+
                   <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
                     <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
                       Apply Infrastructure Changes
@@ -1489,9 +1561,10 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
 
                 <SettingsAccordionCard icon={ShieldAlert} title="External Threat-Intel Feed" status={threatIntelEnabled ? 'Active' : 'Off'} tone={threatIntelEnabled ? 'active' : 'inactive'}>
                 <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
-                  Pulls Spamhaus DROP + EDROP (free, no API key) on a schedule into a dedicated
-                  blacklist Redis key — separate from the manual IP blacklist above, so a sync
-                  can never overwrite your own entries. Your manual whitelist always overrides it.
+                  Pulls free, no-API-key IP reputation feeds (pick which sources below) on a
+                  schedule into a dedicated blacklist Redis key — separate from the manual IP
+                  blacklist above, so a sync can never overwrite your own entries. Your manual
+                  whitelist always overrides it.
                 </div>
 
                 <form onSubmit={handleSaveThreatIntel} onChange={() => markDirty('threatintel')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
@@ -1508,17 +1581,41 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                   <AnimatePresence>
                     {threatIntelEnabled && (
                       <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '10px' }}>
-                          <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-threatintel-sync-interval">Sync Interval (Hours)</label>
-                          <input id="settings-threatintel-sync-interval"
-                            type="number"
-                            min="1"
-                            className="settings-input"
-                            style={{ width: '100%', fontSize: '14px' }}
-                            value={threatIntelIntervalHours}
-                            onChange={(e) => setThreatIntelIntervalHours(e.target.value)}
-                            placeholder="24"
-                          />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '10px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-threatintel-sync-interval">Sync Interval (Hours)</label>
+                            <input id="settings-threatintel-sync-interval"
+                              type="number"
+                              min="1"
+                              className="settings-input"
+                              style={{ width: '100%', fontSize: '14px' }}
+                              value={threatIntelIntervalHours}
+                              onChange={(e) => setThreatIntelIntervalHours(e.target.value)}
+                              placeholder="24"
+                            />
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Feed Sources</span>
+                            {[
+                              { key: 'spamhaus', label: 'Spamhaus DROP / EDROP', desc: 'Hijacked/leased spam & cybercrime netblocks' },
+                              { key: 'emerging_threats', label: 'Emerging Threats Compromised IPs', desc: 'Hosts with recent brute-force, scanning, or malware C2 activity' },
+                              { key: 'tor_exit_nodes', label: 'Tor Exit Nodes', desc: 'Blocks anonymized traffic, not just malicious traffic — off by default, opt in deliberately' },
+                            ].map(({ key, label, desc }) => (
+                              <label key={key} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!threatIntelSources[key]}
+                                  onChange={(e) => setThreatIntelSources((prev) => ({ ...prev, [key]: e.target.checked }))}
+                                  style={{ marginTop: '3px' }}
+                                />
+                                <span style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{label}</span>
+                                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{desc}</span>
+                                </span>
+                              </label>
+                            ))}
+                          </div>
                         </div>
                       </motion.div>
                     )}
@@ -1531,6 +1628,11 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                         {threatIntelStatus.last_sync_status === 'success' && ` — ${threatIntelStatus.last_sync_count} CIDR ranges loaded`}
                         {threatIntelStatus.last_sync_status === 'error' && ` — failed: ${threatIntelStatus.last_sync_error || 'unknown error'}`}
                       </span>
+                      {threatIntelStatus.last_sync_status === 'success' && threatIntelStatus.last_sync_counts && Object.keys(threatIntelStatus.last_sync_counts).length > 0 && (
+                        <span>
+                          {Object.entries(threatIntelStatus.last_sync_counts).map(([src, count]) => `${src}: ${count}`).join(' · ')}
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -1545,6 +1647,99 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                       className="action-btn-inspect"
                     >
                       {threatIntelSyncing ? 'Syncing...' : 'Sync Now'}
+                    </button>
+                  </div>
+                </form>
+                </SettingsAccordionCard>
+
+                <SettingsAccordionCard icon={ShieldCheck} title="Verified Good-Bot Allowlist" status={goodBotEnabled ? 'Active' : 'Off'} tone={goodBotEnabled ? 'active' : 'inactive'}>
+                <div className="settings-section-subtitle" style={{ marginTop: 0 }}>
+                  Syncs each crawler's own officially-published IP ranges (not just its
+                  User-Agent string, which anyone can fake) and exempts verified requests from
+                  the adaptive reputation throttle — a real crawler's fast, sequential,
+                  referrer-less pattern is exactly what that throttle is designed to catch.
+                  Never exempts anything from ModSecurity/CRS's own attack-pattern rules.
+                </div>
+
+                <form onSubmit={handleSaveGoodBots} onChange={() => markDirty('goodbots')} style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '600px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-subtle)', padding: '16px', borderRadius: '12px', border: '1px solid var(--surface-hover)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>Enable Scheduled Sync</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Off by default — no crawler exemption until enabled</span>
+                    </div>
+                    <button type="button" role="switch" aria-checked={goodBotEnabled} aria-label="Enable Scheduled Sync" className={`toggle-switch ${goodBotEnabled ? 'active' : ''}`} onClick={() => setGoodBotEnabled(!goodBotEnabled)}>
+                      <div className="toggle-knob"></div>
+                    </button>
+                  </div>
+
+                  <AnimatePresence>
+                    {goodBotEnabled && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '10px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-goodbot-sync-interval">Sync Interval (Hours)</label>
+                            <input id="settings-goodbot-sync-interval"
+                              type="number"
+                              min="1"
+                              className="settings-input"
+                              style={{ width: '100%', fontSize: '14px' }}
+                              value={goodBotIntervalHours}
+                              onChange={(e) => setGoodBotIntervalHours(e.target.value)}
+                              placeholder="24"
+                            />
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Verified Crawlers</span>
+                            {[
+                              { key: 'googlebot', label: 'Googlebot', desc: "Google's official published crawler IP ranges" },
+                              { key: 'bingbot', label: 'Bingbot', desc: "Microsoft's official published crawler IP ranges" },
+                            ].map(({ key, label, desc }) => (
+                              <label key={key} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!goodBotSources[key]}
+                                  onChange={(e) => setGoodBotSources((prev) => ({ ...prev, [key]: e.target.checked }))}
+                                  style={{ marginTop: '3px' }}
+                                />
+                                <span style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{label}</span>
+                                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{desc}</span>
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {goodBotStatus && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <span>
+                        Last sync: {goodBotStatus.last_sync_at ? formatLocalTime(goodBotStatus.last_sync_at) : 'never'}
+                        {goodBotStatus.last_sync_status === 'success' && ` — ${goodBotStatus.last_sync_count} IP ranges loaded`}
+                        {goodBotStatus.last_sync_status === 'error' && ` — failed: ${goodBotStatus.last_sync_error || 'unknown error'}`}
+                      </span>
+                      {goodBotStatus.last_sync_status === 'success' && goodBotStatus.last_sync_counts && Object.keys(goodBotStatus.last_sync_counts).length > 0 && (
+                        <span>
+                          {Object.entries(goodBotStatus.last_sync_counts).map(([src, count]) => `${src}: ${count}`).join(' · ')}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '4px', paddingTop: '20px', borderTop: '1px solid var(--surface-hover)' }}>
+                    <button type="submit" className="modal-btn primary" style={{ padding: '12px 24px', fontSize: '14px' }}>
+                      Apply Good-Bot Changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSyncGoodBotsNow}
+                      disabled={goodBotSyncing}
+                      className="action-btn-inspect"
+                    >
+                      {goodBotSyncing ? 'Syncing...' : 'Sync Now'}
                     </button>
                   </div>
                 </form>

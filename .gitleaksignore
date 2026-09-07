@@ -1,0 +1,5 @@
+# Gitleaks ignore file
+# False positive mock tokens in past commits
+44508621fc385fc692e91b0f9f62a451ea4b6397:frontend/src/pages/Settings.test.jsx:stripe-access-token:132
+44508621fc385fc692e91b0f9f62a451ea4b6397:frontend/src/pages/Settings.test.jsx:stripe-access-token:140
+44508621fc385fc692e91b0f9f62a451ea4b6397:frontend/src/pages/Settings.test.jsx:stripe-access-token:142

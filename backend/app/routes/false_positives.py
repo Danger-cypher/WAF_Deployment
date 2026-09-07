@@ -1,7 +1,7 @@
 import json
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 
 from app.models.false_positive_model import (
     FalsePositiveCreateRequest,
@@ -10,7 +10,7 @@ from app.models.false_positive_model import (
     FalsePositiveResponse,
 )
 from app.services import db_service, rule_manager
-from app.services.auth import require_admin, require_any_role, TokenData
+from app.services.auth import require_any_role, TokenData
 from app.services.log_reader import get_all_logs
 from app.utils.audit import log_admin_action
 
@@ -42,12 +42,13 @@ def _find_log_by_id(log_id: str):
     status_code=status.HTTP_201_CREATED,
 )
 async def mark_log_as_false_positive(
-    request: FalsePositiveCreateRequest,
+    request: Request,
+    payload: FalsePositiveCreateRequest,
     current_user: TokenData = Depends(require_any_role),
 ):
     """Marks an existing WAF audit log as a False Positive entry."""
     # Check if duplicate exists
-    existing = db_service.get_false_positive_by_log_id(request.log_id)
+    existing = db_service.get_false_positive_by_log_id(payload.log_id)
     if existing:
         raise HTTPException(
             status_code=400,
@@ -55,7 +56,7 @@ async def mark_log_as_false_positive(
         )
 
     # Find the log entry — uses TTL-cached index for efficiency (FIX 2)
-    log_entry = _find_log_by_id(request.log_id)
+    log_entry = _find_log_by_id(payload.log_id)
     if not log_entry:
         raise HTTPException(
             status_code=404,
@@ -74,7 +75,7 @@ async def mark_log_as_false_positive(
         timestamp=log_entry.timestamp,
         severity=log_entry.severity,
         attack_type=log_entry.attack_type,
-        analyst_note=request.analyst_note or "",
+        analyst_note=payload.analyst_note or "",
         raw_log=raw_log_json,
         created_by=current_user.username,  # FIX 10: store creator
     )
@@ -92,9 +93,9 @@ async def mark_log_as_false_positive(
     _attach_suggestion(created)
 
     logger.info(
-        f"Log {request.log_id} flagged as a false positive by {current_user.username}."
+        f"Log {payload.log_id} flagged as a false positive by {current_user.username}."
     )
-    log_admin_action("false_positive", str(created["id"]), "create", current_user, details={"log_id": request.log_id, "rule_id": log_entry.rule_id})
+    log_admin_action("false_positive", str(created["id"]), "create", current_user, details={"log_id": payload.log_id, "rule_id": log_entry.rule_id}, request=request)
     return created
 
 
@@ -123,24 +124,25 @@ async def list_false_positives(
 @router.post("/false-positives/{id}/status", response_model=FalsePositiveResponse)
 async def update_status(
     id: str,
-    request: FalsePositiveStatusUpdateRequest,
+    request: Request,
+    payload: FalsePositiveStatusUpdateRequest,
     current_user: TokenData = Depends(require_any_role),
 ):
     """Updates review investigation status (Pending, Reviewed, Resolved)."""
-    if request.status not in ("Pending", "Reviewed", "Resolved"):
+    if payload.status not in ("Pending", "Reviewed", "Resolved"):
         raise HTTPException(
             status_code=400,
             detail="Invalid status. Must be 'Pending', 'Reviewed', or 'Resolved'.",
         )
 
     # FIX 4: Only admins can mark a ticket as Resolved to prevent silent dismissal of real threats
-    if request.status == "Resolved" and current_user.role != "admin":
+    if payload.status == "Resolved" and current_user.role != "admin":
         raise HTTPException(
             status_code=403,
             detail="Only administrators can mark a false positive as 'Resolved'.",
         )
 
-    updated = db_service.update_false_positive_status(id, request.status)
+    updated = db_service.update_false_positive_status(id, payload.status)
     if not updated:
         raise HTTPException(status_code=404, detail="False positive entry not found.")
 
@@ -150,20 +152,21 @@ async def update_status(
         updated["raw_log"] = {}
 
     logger.info(
-        f"False positive {id} status updated to {request.status} by {current_user.username}."
+        f"False positive {id} status updated to {payload.status} by {current_user.username}."
     )
-    log_admin_action("false_positive", id, "update_status", current_user, details={"status": request.status})
+    log_admin_action("false_positive", id, "update_status", current_user, details={"status": payload.status}, request=request)
     return updated
 
 
 @router.post("/false-positives/{id}/note", response_model=FalsePositiveResponse)
 async def update_note(
     id: str,
-    request: FalsePositiveNoteUpdateRequest,
+    request: Request,
+    payload: FalsePositiveNoteUpdateRequest,
     current_user: TokenData = Depends(require_any_role),
 ):
     """Edits or attaches new analyst review notes to a flagged event."""
-    updated = db_service.update_false_positive_note(id, request.analyst_note)
+    updated = db_service.update_false_positive_note(id, payload.analyst_note)
     if not updated:
         raise HTTPException(status_code=404, detail="False positive entry not found.")
 
@@ -175,13 +178,13 @@ async def update_note(
     logger.info(
         f"Analyst notes for false positive {id} updated by {current_user.username}."
     )
-    log_admin_action("false_positive", id, "update_note", current_user)
+    log_admin_action("false_positive", id, "update_note", current_user, request=request)
     return updated
 
 
 # FIX 3: Use proper HTTP DELETE method with standard REST URL pattern
 @router.delete("/false-positives/{id}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_false_positive(
+async def remove_false_positive(request: Request,
     id: str, current_user: TokenData = Depends(require_any_role)
 ):
     """Removes a log from the false positive registry."""
@@ -207,5 +210,5 @@ async def remove_false_positive(
         )
 
     logger.info(f"False positive {id} removed from DB by {current_user.username}.")
-    log_admin_action("false_positive", id, "delete", current_user)
+    log_admin_action("false_positive", id, "delete", current_user, request=request)
     # 204 No Content — return nothing

@@ -267,7 +267,7 @@ export default function Profile({ onClose }) {
                   border: isAdmin ? '1px solid rgba(244,63,94,0.35)' : '1px solid var(--accent-border)',
                 }}
               >
-                {initialsFor(profile.username)}
+                {initialsFor(profile.username, profile.display_name)}
               </div>
               <ShieldCheck size={14} style={{ color: isAdmin ? 'var(--danger-color)' : 'var(--accent-color)', flexShrink: 0 }} />
               <span style={{ fontSize: '13px', color: 'var(--text-primary)' }}>

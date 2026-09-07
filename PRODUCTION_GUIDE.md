@@ -14,7 +14,7 @@ The WAF is completely containerized. The target host machine only requires the f
 3. **Hardware Requirements**:
    - **Minimum**: 2 Cores CPU, 4 GB RAM, 10 GB Disk space.
    - **Recommended**: 4 Cores CPU, 8 GB RAM (to handle high concurrent throughput and active ML classification queue).
-4. **Networking**: Ensure ports `80`, `443`, and `3001` are not bound by any processes on the host.
+4. **Networking**: Ensure ports `80`, `443`, and `3020` are not bound by any processes on the host.
 
 ---
 
@@ -61,7 +61,7 @@ Once the setup finishes, the WAF exposes three primary entry points:
 
 | Port | Protocol | Intercepted? | Purpose |
 |------|----------|--------------|---------|
-| **`3001`** | HTTP | **WAF Inspected** | Administrative WAF dashboard. ModSecurity and ML checking are active, but exclusions are loaded specifically to let WAF administrators configure rules and domains without triggering false positive blocks. |
+| **`3020`** | HTTP | **WAF Inspected** | Administrative WAF dashboard. ModSecurity and ML checking are active, but exclusions are loaded specifically to let WAF administrators configure rules and domains without triggering false positive blocks. |
 | **`80`** | HTTP | No | Automatically catches plain HTTP traffic and issues a `301 Moved Permanently` redirect to HTTPS on port `443`. |
 | **`443`** | HTTPS | **WAF Gateway** | Main WAF Gateway. Inspects incoming headers, parameters, and bodies using both ModSecurity (OWASP CRS v4) and the XGBoost ML Threat Engine, proxying clean traffic to upstreams. |
 
@@ -152,7 +152,7 @@ openssl x509 -in configs/nginx/ssl/cybersentinel.crt -noout -text -dates -subjec
 curl -v https://your-domain.com:443 2>&1 | grep "SSL certificate verify"
 
 # Check from browser
-# Navigate to: https://your-domain.com:3001
+# Navigate to: https://your-domain.com
 # Click padlock icon → Certificate details
 ```
 
@@ -177,8 +177,8 @@ sudo ./scripts/configure-production.sh
 This automatically configures:
 - `https://waf.company.com`
 - `http://waf.company.com`
-- `https://waf.company.com:3001`
-- `http://waf.company.com:3001`
+- `https://waf.company.com:3020`
+- `http://waf.company.com:3020`
 
 ### Method 2: Multiple Domains
 
@@ -211,7 +211,7 @@ BACKEND_CORS_ORIGINS=https://waf.company.com,https://admin.company.com,https://s
 - Use `https://` for production (not `http://`)
 - No trailing slashes
 - Comma-separated, no spaces
-- Include port numbers if non-standard (e.g., `:3001`)
+- Include port numbers if non-standard (e.g., `:3020`)
 
 Restart backend:
 
@@ -226,7 +226,7 @@ sudo docker compose restart backend
 grep BACKEND_CORS_ORIGINS .env
 
 # Test CORS from browser console
-fetch('http://your-waf-ip:3001/api/health', {
+fetch('http://your-waf-ip:3020/api/health', {
   method: 'GET',
   credentials: 'include'
 }).then(r => r.json()).then(console.log)
@@ -240,7 +240,7 @@ sudo docker compose logs backend | grep -i cors
 ## 🖥️ Managing Protected Applications & Upstreams
 
 Protected applications are managed dynamically through the dashboard:
-1. Log in to the dashboard at `http://<host-ip>:3001/`.
+1. Log in to the dashboard at `http://<host-ip>:3020/`.
 2. Go to the **Apps Control** tab.
 3. Add a new application by specifying:
    - **Domain (Virtual Host)**: The domain name the client uses (e.g., `app.mycompany.com`). If this is the main or default gateway, use `_`.
@@ -321,7 +321,7 @@ Before deploying to production, ensure you complete these critical tasks:
 - [ ] **Configure firewall rules**
   ```bash
   # Allow WAF dashboard (restrict to admin IPs)
-  sudo ufw allow from 203.0.113.0/24 to any port 3001 proto tcp
+  sudo ufw allow from 203.0.113.0/24 to any port 3020 proto tcp
   
   # Allow HTTP/HTTPS from anywhere
   sudo ufw allow 80/tcp
@@ -434,7 +434,7 @@ curl -H "Origin: https://your-domain.com" \
      -H "Access-Control-Request-Method: GET" \
      -H "Access-Control-Request-Headers: X-Requested-With" \
      -X OPTIONS --verbose \
-     http://your-waf-ip:3001/api/health
+     http://your-waf-ip:3020/api/health
      
 # Should see: Access-Control-Allow-Origin: https://your-domain.com
 ```
@@ -443,7 +443,7 @@ curl -H "Origin: https://your-domain.com" \
 
 ```bash
 # Test basic functionality
-curl https://your-domain.com:3001/api/health
+curl http://your-domain.com:3020/api/health
 
 # Test ModSecurity blocking (should be blocked)
 curl "https://your-domain.com/?id=1' OR '1'='1"
@@ -461,7 +461,7 @@ curl -X POST https://your-domain.com/api/test \
 sudo apt-get install apache2-utils
 
 # Basic load test (100 requests, 10 concurrent)
-ab -n 100 -c 10 https://your-domain.com:3001/api/health
+ab -n 100 -c 10 http://your-domain.com:3020/api/health
 
 # Monitor during test
 watch -n 1 'docker stats --no-stream'
@@ -504,7 +504,7 @@ sudo docker compose logs backend | tail -50
 grep BACKEND_CORS_ORIGINS .env
 
 # Ensure origin includes protocol and port
-# ✅ Correct: https://waf.company.com:3001
+# ✅ Correct: http://waf.company.com:3020
 # ❌ Wrong: waf.company.com
 ```
 

@@ -5,7 +5,6 @@ Implements sliding window rate limiting with exponential backoff for brute-force
 import time
 import logging
 from typing import Optional, Tuple
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +14,7 @@ except ImportError:
     redis = None
     logger.warning("Redis not available. Rate limiting will be disabled.")
 
-from app.config.settings import settings
-from app.utils.redis_client import get_global_redis_client, _get_redis_password
+from app.utils.redis_client import get_global_redis_client
 
 
 class RateLimiter:
@@ -141,7 +139,6 @@ class RateLimiter:
         
         if block_count:
             failures = int(block_count)
-            duration = self._get_block_duration(failures)
             ttl = client.ttl(block_key)
             
             metadata["is_allowed"] = False

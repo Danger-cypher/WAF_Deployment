@@ -31,13 +31,15 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
             <span className="sidebar-brand-subtitle">WAF ENGINE · v2.0</span>
           </div>
         )}
-        <div
+        <button
+          type="button"
           onClick={() => setCollapsed(!collapsed)}
           className="sidebar-toggle"
           title={collapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+          aria-label={collapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
         >
           <ToggleIcon size={12} />
-        </div>
+        </button>
       </div>
 
       {/* Navigation Groups */}
@@ -50,11 +52,13 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
             {group.items.map((item) => {
               const Icon = item.icon;
               return (
-                <div
+                <button
+                  type="button"
                   key={item.id}
                   className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
                   onClick={() => setActiveTab(item.id)}
                   title={collapsed ? item.label : undefined}
+                  aria-current={activeTab === item.id ? 'page' : undefined}
                 >
                   <Icon size={16} />
                   <span>{item.label}</span>
@@ -72,7 +76,7 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
                       marginLeft: 'auto', flexShrink: 0
                     }}>ADM</span>
                   )}
-                </div>
+                </button>
               );
             })}
           </div>
@@ -90,10 +94,10 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
             </span>
           </div>
         )}
-        <div className="nav-item" onClick={handleLogout} title={collapsed ? 'Logout' : undefined}>
+        <button type="button" className="nav-item" onClick={handleLogout} title={collapsed ? 'Logout' : undefined} aria-label="Logout">
           <LogOut size={16} />
           <span>Logout</span>
-        </div>
+        </button>
       </div>
     </div>
   );

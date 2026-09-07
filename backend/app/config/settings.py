@@ -49,6 +49,28 @@ class Settings(BaseSettings):
     # waf-ml container hitting POST /alerts/trigger). Not a user credential.
     INTERNAL_ALERT_TRIGGER_KEY: str = ""
 
+    # Fernet key encrypting backup_service.py's archives at rest (audit
+    # finding P2-08 — those bundle users.db/api_keys.db's password/key
+    # hashes). Deliberately NOT auto-generated with an ephemeral fallback
+    # the way JWT_SECRET_KEY is below: an ephemeral JWT key only costs
+    # active sessions on restart (recoverable by re-login), but an
+    # ephemeral backup key would silently make every backup taken before
+    # THIS restart permanently undecryptable — the opposite of what a
+    # backup feature is for. setup.sh generates a real one into .env on
+    # first install; see backup_service.py's BackupEncryptionError for
+    # what happens (a clear refusal, not a silent unencrypted write) when
+    # it's genuinely unset.
+    BACKUP_ENCRYPTION_KEY: str = ""
+
+    # Fernet key encrypting alert_channels.config at rest (audit finding
+    # P2-03 — that column holds real SMTP passwords and webhook URLs in
+    # plain JSON today). Separate from BACKUP_ENCRYPTION_KEY deliberately:
+    # different threat models (backup archives leave the system when
+    # downloaded; this stays in the live DB) and independent rotation.
+    # Same no-ephemeral-fallback reasoning as that key — see
+    # alert_db_service.py for what happens when it's unset.
+    CHANNEL_ENCRYPTION_KEY: str = ""
+
     # ------------------------------------------------------------------
     # SIEM SSO (mint-and-redirect JWT exchange — see docs onboarding doc).
     # Universal/fixed side (per the doc's §10 config split): our audience

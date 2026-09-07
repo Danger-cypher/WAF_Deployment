@@ -5,10 +5,10 @@ import shutil
 import subprocess
 import asyncio
 import logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Request
 from pydantic import BaseModel, Field, field_validator
 from typing import Any, Dict, List, Optional
-from app.services import db_service, nginx_manager
+from app.services import db_service, nginx_manager, api_spec
 from app.services.auth import require_admin, require_any_role, require_app_view_access, require_app_write_access, TokenData
 from app.utils.audit import log_admin_action
 
@@ -71,6 +71,46 @@ class ProtectedAppBase(BaseModel):
     require_auth: int = Field(0, ge=0, le=1, description="1 = deny requests missing the configured auth header/cookie")
     auth_check_type: str = Field("header", description="'header' or 'cookie' — where to check for auth_header_name")
     auth_header_name: str = Field("Authorization", min_length=1, description="Header or cookie name whose mere presence is required")
+    enable_response_cache: int = Field(
+        0, ge=0, le=1,
+        description=(
+            "1 = cache this app's cacheable GET/HEAD responses at the WAF gateway "
+            "(nginx's own Set-Cookie/Cache-Control-respecting defaults still apply — "
+            "this doesn't override the origin's own caching directives, only enables "
+            "the mechanism). Off by default."
+        ),
+    )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        # `name` is interpolated straight into the generated nginx config as a
+        # comment line (nginx_manager.sync_protected_apps_to_nginx, the
+        # "# --- Upstream App {id}: {name} ({domain}) ---" lines). Every other
+        # free-text field reaching that generator is already character-
+        # restricted — `domain` and `upstream_host` above, `auth_header_name`
+        # via re.sub in nginx_manager — but this one was not, so a newline in
+        # it terminated the comment and let arbitrary nginx directives be
+        # injected into the shared gateway config, `content_by_lua_block`
+        # included. That is code execution in the OpenResty container, and
+        # since PUT /apps/{app_id} is gated by require_app_write_access (which
+        # accepts the deliberately app-scoped 'app_admin' role), it was an
+        # escalation path from one tenant's app admin to root on the gateway
+        # serving every tenant.
+        #
+        # Rejecting control characters is what actually closes the injection;
+        # '{' '}' ';' '#' are rejected too so a name can never read as nginx
+        # syntax even if it later gets interpolated somewhere less careful.
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Name cannot be empty.")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in cleaned):
+            raise ValueError("Name cannot contain control characters or line breaks.")
+        if any(ch in cleaned for ch in "{};#\\"):
+            raise ValueError("Name cannot contain any of: { } ; # \\")
+        if len(cleaned) > 64:
+            raise ValueError("Name cannot exceed 64 characters.")
+        return cleaned
 
     @field_validator("auth_check_type")
     @classmethod
@@ -156,7 +196,7 @@ async def get_app(app_id: int, current_user: TokenData = Depends(require_app_vie
 
 
 @router.post("/apps", response_model=ProtectedAppResponse, status_code=status.HTTP_201_CREATED)
-async def add_app(app_data: ProtectedAppCreate, current_user: TokenData = Depends(require_admin)):
+async def add_app(request: Request, app_data: ProtectedAppCreate, current_user: TokenData = Depends(require_admin)):
     """Add a new protected application and apply Nginx settings."""
     # Check if domain already exists
     existing_apps = db_service.get_all_protected_apps()
@@ -181,6 +221,7 @@ async def add_app(app_data: ProtectedAppCreate, current_user: TokenData = Depend
         auth_check_type=app_data.auth_check_type,
         auth_header_name=app_data.auth_header_name,
         additional_origins=_serialize_origins(app_data.additional_origins),
+        enable_response_cache=app_data.enable_response_cache,
     )
     if not app:
         raise HTTPException(
@@ -198,12 +239,12 @@ async def add_app(app_data: ProtectedAppCreate, current_user: TokenData = Depend
             detail=f"Failed to generate Nginx config or reload service. Reverting database registration. {err_msg}"
         )
 
-    log_admin_action("app", str(app["id"]), "create", current_user, details={"name": app_data.name, "domain": domain_lower})
+    log_admin_action("app", str(app["id"]), "create", current_user, details={"name": app_data.name, "domain": domain_lower}, request=request)
     return app
 
 
 @router.put("/apps/{app_id}", response_model=ProtectedAppResponse)
-async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: TokenData = Depends(require_app_write_access)):
+async def update_app(request: Request, app_id: int, app_data: ProtectedAppCreate, current_user: TokenData = Depends(require_app_write_access)):
     """Update details of an existing application and sync configuration."""
     existing_app = db_service.get_protected_app_by_id(app_id)
     if not existing_app:
@@ -236,6 +277,7 @@ async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: To
         auth_check_type=app_data.auth_check_type,
         auth_header_name=app_data.auth_header_name,
         additional_origins=_serialize_origins(app_data.additional_origins),
+        enable_response_cache=app_data.enable_response_cache,
     )
     if not app:
         raise HTTPException(
@@ -264,18 +306,19 @@ async def update_app(app_id: int, app_data: ProtectedAppCreate, current_user: To
             auth_check_type=existing_app.get("auth_check_type", "header"),
             auth_header_name=existing_app.get("auth_header_name", "Authorization"),
             additional_origins=existing_app.get("additional_origins"),
+            enable_response_cache=existing_app.get("enable_response_cache", 0),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate Nginx config or reload service. Reverting database changes. {err_msg}"
         )
 
-    log_admin_action("app", str(app_id), "update", current_user, details={"name": app_data.name, "domain": domain_lower})
+    log_admin_action("app", str(app_id), "update", current_user, details={"name": app_data.name, "domain": domain_lower}, request=request)
     return app
 
 
 @router.delete("/apps/{app_id}")
-async def remove_app(app_id: int, current_user: TokenData = Depends(require_app_write_access)):
+async def remove_app(request: Request, app_id: int, current_user: TokenData = Depends(require_app_write_access)):
     """Delete a protected application and sync configuration."""
     existing_app = db_service.get_protected_app_by_id(app_id)
     if not existing_app:
@@ -316,6 +359,7 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_app_
             auth_check_type=existing_app.get("auth_check_type", "header"),
             auth_header_name=existing_app.get("auth_header_name", "Authorization"),
             additional_origins=existing_app.get("additional_origins"),
+            enable_response_cache=existing_app.get("enable_response_cache", 0),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -354,12 +398,21 @@ async def remove_app(app_id: int, current_user: TokenData = Depends(require_app_
     except Exception as e:
         logger.warning(f"Failed to clean up API schema for deleted app {app_id}: {e}")
 
-    log_admin_action("app", str(app_id), "delete", current_user, details={"name": existing_app["name"], "domain": existing_app["domain"]})
+    # Same gap, same fix, for the per-app mTLS CA cert file — orphaned
+    # disk state once the app referencing it is gone.
+    mtls_ca_path = existing_app.get("mtls_ca_cert_path")
+    if mtls_ca_path and os.path.exists(mtls_ca_path):
+        try:
+            os.remove(mtls_ca_path)
+        except Exception as e:
+            logger.warning(f"Failed to clean up mTLS CA cert for deleted app {app_id}: {e}")
+
+    log_admin_action("app", str(app_id), "delete", current_user, details={"name": existing_app["name"], "domain": existing_app["domain"]}, request=request)
     return {"message": "Protected application deleted successfully!"}
 
 
 @router.post("/apps/{app_id}/toggle", response_model=ProtectedAppResponse)
-async def toggle_app_active(app_id: int, current_user: TokenData = Depends(require_app_write_access)):
+async def toggle_app_active(request: Request, app_id: int, current_user: TokenData = Depends(require_app_write_access)):
     """Toggle the enabled status of a protected application."""
     app = db_service.get_protected_app_by_id(app_id)
     if not app:
@@ -387,6 +440,7 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
         auth_check_type=app.get("auth_check_type", "header"),
         auth_header_name=app.get("auth_header_name", "Authorization"),
         additional_origins=app.get("additional_origins"),
+        enable_response_cache=app.get("enable_response_cache", 0),
     )
 
     # Sync configurations with Nginx
@@ -408,13 +462,14 @@ async def toggle_app_active(app_id: int, current_user: TokenData = Depends(requi
             auth_check_type=app.get("auth_check_type", "header"),
             auth_header_name=app.get("auth_header_name", "Authorization"),
             additional_origins=app.get("additional_origins"),
+            enable_response_cache=app.get("enable_response_cache", 0),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate Nginx config or reload service. Reverting status change. {err_msg}"
         )
 
-    log_admin_action("app", str(app_id), "toggle", current_user, details={"is_active": new_status})
+    log_admin_action("app", str(app_id), "toggle", current_user, details={"is_active": new_status}, request=request)
     return updated_app
 
 
@@ -442,7 +497,7 @@ def _safe_cert_dir(subdir: str, domain: str) -> str:
 
 
 @router.post("/apps/{app_id}/provision-ssl")
-async def provision_letsencrypt(
+async def provision_letsencrypt(request: Request,
     app_id: int,
     current_user: TokenData = Depends(require_app_write_access),
 ):
@@ -566,6 +621,7 @@ async def provision_letsencrypt(
             auth_check_type=app.get("auth_check_type", "header"),
             auth_header_name=app.get("auth_header_name", "Authorization"),
             additional_origins=app.get("additional_origins"),
+            enable_response_cache=app.get("enable_response_cache", 0),
         )
 
         # Regenerate Nginx config to use the real cert
@@ -573,7 +629,7 @@ async def provision_letsencrypt(
         if not nginx_synced:
             # The cert was issued and persisted, but nginx isn't serving it
             # yet — surface that clearly instead of a bare "success".
-            log_admin_action("app", str(app_id), "provision_ssl", current_user, details={"domain": domain, "status": "partial"})
+            log_admin_action("app", str(app_id), "provision_ssl", current_user, details={"domain": domain, "status": "partial"}, request=request)
             return {
                 "status": "partial",
                 "message": (
@@ -584,7 +640,7 @@ async def provision_letsencrypt(
                 "cert_path": fullchain,
             }
 
-        log_admin_action("app", str(app_id), "provision_ssl", current_user, details={"domain": domain, "status": "success"})
+        log_admin_action("app", str(app_id), "provision_ssl", current_user, details={"domain": domain, "status": "success"}, request=request)
         return {
             "status": "success",
             "message": f"Let's Encrypt certificate issued for {domain}",
@@ -598,7 +654,7 @@ async def provision_letsencrypt(
 
 
 @router.post("/apps/{app_id}/upload-cert")
-async def upload_custom_cert(
+async def upload_custom_cert(request: Request,
     app_id: int,
     cert_file: UploadFile = File(..., description="TLS certificate file (.crt / .pem)"),
     key_file: UploadFile = File(..., description="Private key file (.key / .pem)"),
@@ -701,12 +757,13 @@ async def upload_custom_cert(
         auth_check_type=app.get("auth_check_type", "header"),
         auth_header_name=app.get("auth_header_name", "Authorization"),
         additional_origins=app.get("additional_origins"),
+        enable_response_cache=app.get("enable_response_cache", 0),
     )
 
     # Regenerate Nginx config
     nginx_synced, nginx_err = nginx_manager.sync_protected_apps_to_nginx()
     if not nginx_synced:
-        log_admin_action("app", str(app_id), "upload_cert", current_user, details={"domain": domain, "status": "partial"})
+        log_admin_action("app", str(app_id), "upload_cert", current_user, details={"domain": domain, "status": "partial"}, request=request)
         return {
             "status": "partial",
             "message": (
@@ -717,7 +774,7 @@ async def upload_custom_cert(
             "cert_path": cert_path,
         }
 
-    log_admin_action("app", str(app_id), "upload_cert", current_user, details={"domain": domain, "status": "success"})
+    log_admin_action("app", str(app_id), "upload_cert", current_user, details={"domain": domain, "status": "success"}, request=request)
     return {
         "status": "success",
         "message": f"Custom certificate uploaded and applied for {domain}",
@@ -771,7 +828,7 @@ async def get_app_schema(app_id: int, current_user: TokenData = Depends(require_
 
 
 @router.put("/apps/{app_id}/schema")
-async def update_app_schema(
+async def update_app_schema(request: Request,
     app_id: int,
     payload: ApiSchemaPayload,
     current_user: TokenData = Depends(require_app_write_access),
@@ -834,5 +891,212 @@ async def update_app_schema(
     log_admin_action(
         "app", str(app_id), "update_api_schema", current_user,
         details={"mode": payload.mode, "endpoint_count": len(payload.endpoints)},
+        request=request,
     )
     return {"status": "success", "mode": payload.mode, "endpoints": [ep.dict() for ep in payload.endpoints]}
+
+
+class OpenApiSchemaImportRequest(BaseModel):
+    filename: str = ""
+    content: str = Field(..., min_length=1)
+
+
+@router.post("/apps/{app_id}/schema/import-openapi")
+async def import_app_schema_from_openapi(request: Request,
+    app_id: int,
+    payload: OpenApiSchemaImportRequest,
+    current_user: TokenData = Depends(require_app_write_access),
+):
+    """
+    Parses an uploaded OpenAPI 3.x/Swagger 2.0 document into this app's
+    Positive-Security schema format (ApiSchemaEndpoint list, same shape
+    PUT /apps/{app_id}/schema already accepts).
+
+    Returns a PREVIEW only — nothing is saved or applied here. The admin
+    reviews/edits the parsed result in the existing schema editor and
+    applies it via the existing PUT route, so this adds zero new
+    validation or Redis-write logic; it only produces input for a save
+    path that's already trusted. See api_spec.extract_positive_security_schema
+    for the parsing rules — notably, endpoints with a {templated} path
+    segment are excluded (not matchable by this WAF's exact-path schema
+    enforcement) and reported in `skipped` instead, rather than silently
+    imported as a rule that could never actually apply.
+    """
+    app = db_service.get_protected_app_by_id(app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Protected application not found")
+
+    try:
+        result = api_spec.extract_positive_security_schema(payload.content)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    log_admin_action(
+        "app", str(app_id), "import_openapi_schema", current_user,
+        details={
+            "filename": payload.filename,
+            "endpoint_count": len(result["endpoints"]),
+            "skipped_count": len(result["skipped"]),
+        },
+        request=request,
+    )
+    return result
+
+
+# ============================================================================
+# mTLS for API auth (roadmap item) — client-certificate verification,
+# scoped to each app's /api path only (see ml_check.lua's check_mtls() and
+# nginx_manager.py's per-app server-block generation for why: SSL
+# verification happens once per TLS handshake, before nginx knows the
+# request path, so nginx is only ever told to REQUEST a client cert
+# — `ssl_verify_client optional` — never to require one; the actual
+# /api-only enforcement is a Lua-side check on $ssl_client_verify).
+#
+# Settings (enabled + mode) and the CA cert file are two separate routes,
+# same separation the SSL cert upload routes already keep from the main
+# app fields — a CA cert upload doesn't fit the JSON app-form shape, and
+# keeping it as its own dedicated updater (like update_app_api_schema)
+# means the 8 existing create/update/rollback call sites elsewhere in this
+# file never needed to change at all.
+# ============================================================================
+
+class MtlsSettingsModel(BaseModel):
+    enabled: bool
+    mode: str = "log"  # "log" (request+record, never block) | "enforce" (reject with 403)
+
+
+@router.get("/apps/{app_id}/mtls")
+async def get_app_mtls(app_id: int, current_user: TokenData = Depends(require_app_view_access)):
+    app = db_service.get_protected_app_by_id(app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Protected application not found")
+    return {
+        "enabled": bool(app.get("mtls_enabled", 0)),
+        "mode": app.get("mtls_mode") or "log",
+        "ca_cert_uploaded": bool(app.get("mtls_ca_cert_path")),
+    }
+
+
+@router.put("/apps/{app_id}/mtls")
+async def update_app_mtls_settings(request: Request,
+    app_id: int,
+    payload: MtlsSettingsModel,
+    current_user: TokenData = Depends(require_app_write_access),
+):
+    app = db_service.get_protected_app_by_id(app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Protected application not found")
+
+    if payload.mode not in ("log", "enforce"):
+        raise HTTPException(status_code=400, detail="mode must be 'log' or 'enforce'.")
+
+    if payload.enabled and not app.get("mtls_ca_cert_path"):
+        raise HTTPException(
+            status_code=400,
+            detail="Upload a CA certificate for this app before enabling mTLS.",
+        )
+
+    db_service.update_app_mtls(app_id, 1 if payload.enabled else 0, payload.mode)
+
+    success, err_msg = nginx_manager.sync_protected_apps_to_nginx()
+    if not success:
+        # Roll the DB flag back too — a failed nginx sync must not leave
+        # the admin believing mTLS is active when it isn't (or vice versa).
+        db_service.update_app_mtls(app_id, app.get("mtls_enabled", 0), app.get("mtls_mode") or "log")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Saved, but failed to apply mTLS settings to NGINX. {err_msg}",
+        )
+
+    log_admin_action(
+        "app", str(app_id), "update_mtls", current_user,
+        details={"enabled": payload.enabled, "mode": payload.mode},
+        request=request,
+    )
+    return {"enabled": payload.enabled, "mode": payload.mode}
+
+
+@router.post("/apps/{app_id}/mtls/ca-cert")
+async def upload_mtls_ca_cert(request: Request,
+    app_id: int,
+    ca_file: UploadFile = File(..., description="CA certificate (PEM) trusted to verify client certificates"),
+    current_user: TokenData = Depends(require_app_write_access),
+):
+    app = db_service.get_protected_app_by_id(app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Protected application not found")
+
+    ext = os.path.splitext(ca_file.filename or "")[1].lower()
+    if ext not in {".crt", ".pem", ".cer"}:
+        raise HTTPException(status_code=400, detail=f"Invalid file type '{ext}'. Allowed: .crt, .pem, .cer")
+
+    ca_data = await ca_file.read()
+    if not ca_data.strip().startswith(b"-----BEGIN"):
+        raise HTTPException(status_code=400, detail="CA certificate does not appear to be a valid PEM file.")
+
+    # Same opt-in malware scan every other upload path in this file goes
+    # through — see upload_custom_cert's identical block for why scanning
+    # a low-value-bait PEM file is still worth the uniformity.
+    from app.services.settings_manager import settings_manager as _settings_manager
+
+    scan_settings = _settings_manager.get_malware_scanning()
+    if scan_settings.get("enabled", False):
+        from app.services.malware_scan_service import scan_bytes
+
+        allowed, detail = scan_bytes(
+            ca_data,
+            timeout_seconds=scan_settings.get("scan_timeout_seconds", 5),
+            fail_mode=scan_settings.get("fail_mode", "open"),
+        )
+        if not allowed:
+            raise HTTPException(status_code=400, detail=f"Uploaded CA certificate failed malware scan: {detail}")
+
+    ca_path = nginx_manager.app_mtls_ca_path(app_id)
+    os.makedirs(os.path.dirname(ca_path), exist_ok=True)
+    try:
+        with open(ca_path, "wb") as f:
+            f.write(ca_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save CA certificate: {e}")
+
+    db_service.set_app_mtls_ca_cert(app_id, ca_path)
+
+    # Deliberately NOT syncing nginx here — uploading a CA cert alone
+    # doesn't turn mTLS on (mtls_enabled is still whatever it was), same
+    # "upload is inert until the settings route enables it" shape as the
+    # OpenAPI import preview above. The next enable (or any other config
+    # change) picks the new file up naturally.
+
+    log_admin_action("app", str(app_id), "upload_mtls_ca_cert", current_user, details={"filename": ca_file.filename}, request=request)
+    return {"status": "success", "message": "CA certificate uploaded."}
+
+
+@router.delete("/apps/{app_id}/mtls/ca-cert")
+async def remove_mtls_ca_cert(request: Request, app_id: int, current_user: TokenData = Depends(require_app_write_access)):
+    app = db_service.get_protected_app_by_id(app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Protected application not found")
+
+    # Also disables mTLS — nginx_manager.py's mtls_active check already
+    # fails safe if the DB flag is on but the file is gone (see its
+    # comment), but there's no reason to leave the flag on pointing at
+    # nothing once the admin has explicitly removed the cert.
+    db_service.update_app_mtls(app_id, 0, app.get("mtls_mode") or "log")
+    db_service.set_app_mtls_ca_cert(app_id, None)
+
+    ca_path = app.get("mtls_ca_cert_path")
+    if ca_path and os.path.exists(ca_path):
+        try:
+            os.remove(ca_path)
+        except Exception as e:
+            logger.warning(f"Failed to remove mTLS CA cert file for app {app_id}: {e}")
+
+    success, err_msg = nginx_manager.sync_protected_apps_to_nginx()
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail=f"CA certificate removed, but failed to apply the change to NGINX. {err_msg}",
+        )
+
+    log_admin_action("app", str(app_id), "remove_mtls_ca_cert", current_user, request=request)
+    return {"status": "success", "message": "CA certificate removed; mTLS disabled."}

@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Activity, ShieldCheck, ShieldAlert, Brain, FileText,
-  Globe, BarChart2, Bell, Code, Users, Settings as SettingsIcon,
+  Globe, Radar, BarChart2, Bell, Code, Users, Settings as SettingsIcon,
 } from 'lucide-react';
 
 /**
@@ -14,8 +14,9 @@ export function getNavGroups(isAdmin) {
     {
       label: 'MONITORING',
       items: [
-        { id: 'overview',  label: 'Overview',        icon: LayoutDashboard },
-        { id: 'events',    label: 'Security Events',  icon: Activity, hasBadge: true },
+        { id: 'overview',      label: 'Overview',        icon: LayoutDashboard },
+        { id: 'events',        label: 'Security Events',  icon: Activity, hasBadge: true },
+        { id: 'threat_globe',  label: 'Threat Globe',     icon: Radar },
       ]
     },
     {

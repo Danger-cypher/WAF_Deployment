@@ -5,11 +5,32 @@ import subprocess
 import tempfile
 import ipaddress
 import logging
-import redis
 
 logger = logging.getLogger(__name__)
 
 DDOS_CONF_PATH = "/etc/nginx/conf.d/waf_ddos.conf"
+
+# The location-level half of DDoS/bot rate limiting.
+#
+# nginx does not merge limit_req across configuration levels — a location
+# containing ANY limit_req directive replaces every inherited one instead of
+# adding to it (same for limit_conn). Every proxying location in this product
+# declares its own per-app or per-API zone, so the http-level limit_req lines
+# in waf_ddos.conf were silently overridden everywhere and the DDoS & Bot
+# Shield page configured zones that never evaluated a single request
+# (audit finding P1-04).
+#
+# This file carries those same directives in a form each location can pull in
+# with `include`, so they apply ALONGSIDE the location's own zone rather than
+# being replaced by it. Deliberately NOT named *.conf: nginx.conf does
+# `include /etc/nginx/conf.d/*.conf` at http level, and these directives are
+# only valid inside a location.
+#
+# Always written, even when DDoS protection is disabled (as a comment-only
+# file), because the generated vhosts include it unconditionally and a missing
+# include file is a hard nginx startup failure.
+DDOS_LIMITS_INCLUDE_PATH = "/etc/nginx/conf.d/waf_ddos_limits.inc"
+
 HARDENING_CONF_PATH = "/etc/nginx/conf.d/waf_hardening.conf"
 # NOT Included globally from modsec/main.conf (that applies to every server
 # block, including the WAF GUI's own dashboard on port 3020 — confirmed via
@@ -47,6 +68,29 @@ APP_AUTH_CONF_DIR = "/etc/nginx/modsec/app-auth"
 # dashboard's own vhost, same per-server-block scoping as
 # POSITIVE_SECURITY_CONF_PATH/APP_AUTH_CONF_DIR above.
 CUSTOM_RESPONSE_PAGE_PATH = "/etc/nginx/custom_pages/waf_block.html"
+
+# Basic per-app response caching (roadmap item — the audit's "real first
+# step toward a CDN" call, not a CDN itself). One cache zone + disk dir per
+# app, generated the same way rate-limit zones are (see
+# APP_CACHE_ZONES_CONF_PATH below), rather than one shared zone across all
+# apps — keeps each app's cache independently sized/evictable and avoids
+# needing a cross-app cache key scheme.
+#
+# Deliberately under /etc/nginx (the same host directory both `backend` and
+# `openresty` already bind-mount — see docker-compose.yml), NOT the more
+# conventional /var/cache/nginx: that path exists only inside the openresty
+# container's own filesystem, which this code (running in the `backend`
+# container) has no way to create or write to. Putting it here means the
+# ordinary os.makedirs() below is enough — no cross-container exec needed,
+# same trick already used for SSL certs/sites-enabled/modsec confs.
+APP_CACHE_BASE_DIR = "/etc/nginx/proxy_cache"
+APP_CACHE_ZONES_CONF_PATH = "/etc/nginx/conf.d/waf_app_cache_zones.conf"
+
+# mTLS for API auth (roadmap item) — one CA cert file per app, same
+# /etc/nginx-bind-mount trick as APP_CACHE_BASE_DIR above (both backend
+# and openresty mount this same host directory, so a plain file write from
+# here is immediately visible to openresty at reload time).
+APP_MTLS_CA_DIR = "/etc/nginx/ssl/mtls"
 
 REDIS_SECRET_FILE = "/etc/cybersentinel/redis.secret"  # nosec B105
 
@@ -89,6 +133,21 @@ def _validate_ip_or_cidr(ip: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+# JA4's fixed a_b_c shape (see ml-waf/ja4_core.lua's part_a/part_b/part_c):
+# a 10-char part A (protocol+version+sni+cipher_count+ext_count+alpn),
+# then two 12-char lowercase-hex SHA-256-truncated parts. This is a shape
+# check only, not proof the fingerprint corresponds to any real client an
+# admin has actually observed — they may be pasting one in from an
+# external threat-intel source rather than one this WAF captured itself.
+_JA4_RE = re.compile(r"^[a-z0-9]{10}_[0-9a-f]{12}_[0-9a-f]{12}$")
+
+
+def _validate_ja4(fingerprint: str) -> bool:
+    """Validates that a string matches JA4's fixed format. Returns True if
+    valid, False otherwise."""
+    return bool(_JA4_RE.match(fingerprint.strip().lower()))
 
 
 def _atomic_write(path: str, content: str) -> None:
@@ -177,25 +236,64 @@ def apply_ddos_settings(settings: dict) -> tuple[bool, str]:
         bot_action = settings.get("bot_mitigation_action", "Silent Drop")
         advanced_rules = settings.get("advanced_rules", [])
 
-        # Determine HTTP status code based on bot_action
-        # Silent Drop -> 444 (NGINX special code to close connection)
-        # Block -> 429 (Too Many Requests) or 503 (Service Unavailable)
-        status_code = 444 if bot_action == "Silent Drop" else 429
+        # General rate-limit zones (waf_ddos_req/waf_ddos_conn below, and
+        # every zone that inherits limit_req_status/limit_conn_status from
+        # http level because it doesn't declare its own — login_limit,
+        # api_limit, ws_conn_limit on the console, every generated app's
+        # zone_app_<id>) ALWAYS return 429. This used to be `status_code =
+        # 444 if bot_action == "Silent Drop" else 429`, applied globally —
+        # but limit_req_status/limit_conn_status are single, shared-per-
+        # scope directives, not per-zone, so the bot-mitigation dropdown
+        # (meant only to control how confirmed-bad-bot-UA traffic gets
+        # handled) was silently overriding the status for EVERY unrelated
+        # rate limit in the product too: a legitimate client tripping the
+        # login rate limiter, or any customer app's own API rate limit,
+        # got a silently-closed connection with no Retry-After the moment
+        # an admin picked "Silent Drop" for bots (audit finding P2-07).
+        GENERAL_RATE_LIMIT_STATUS = 429
+
+        # Bad-bot-UA traffic (the map below) is no longer rate-limited via
+        # a native nginx zone at all — that's what made it share a status
+        # with the general zones above in the first place. It's now
+        # enforced in Lua instead (ml_check.lua's check_bad_bot_rate_limit,
+        # mirroring check_adaptive_throttle's Redis INCR+EXPIRE pattern),
+        # which can exit with whichever status THIS setting says without
+        # touching any other zone. 0 means "don't apply this check at
+        # all" — JS Challenge mode already has its own mechanism below.
+        if bot_action == "Silent Drop":
+            bot_mitigation_status_code = 444
+        elif bot_action == "Block":
+            bot_mitigation_status_code = 429
+        else:
+            bot_mitigation_status_code = 0
 
         # JS Challenge: instead of an outright reject, bad-UA-matching traffic
         # gets an interstitial (ml-waf/bot_challenge.lua) that a real browser's
         # JS clears itself; a scripted client never does. That flow needs at
         # least two requests from the same client in quick succession (the
-        # initial hit + the JS-triggered reload), so the existing
-        # waf_bot_req limit_req (1r/m, burst=1 — effectively "block after the
+        # initial hit + the JS-triggered reload), so
+        # check_bad_bot_rate_limit() (1r/m, effectively "block after the
         # first request") must NOT also apply, or the reload itself gets
-        # rejected before Lua ever sees it. See below where waf_bot_req is
-        # conditionally skipped for this mode.
+        # rejected before Lua's bot_challenge.check() ever sees it —
+        # bot_mitigation_status_code is 0 for this mode for exactly that
+        # reason (see where it's set above).
         bot_challenge_enabled = bot_action == "JS Challenge"
 
         config_lines = [
             "# Auto-generated by CyberSentinel WAF GUI",
             "# Do not edit manually",
+            "",
+        ]
+
+        # Mirror of every limit_req this function emits at http level, in a
+        # form each proxying location includes so the zones actually evaluate.
+        # See DDOS_LIMITS_INCLUDE_PATH for why this duplication is required.
+        location_limit_lines = [
+            "# Auto-generated by CyberSentinel WAF GUI — DDoS/bot rate limits",
+            "# Do not edit manually. Included from inside each proxying location,",
+            "# so these zones apply IN ADDITION to that location's own limit_req,",
+            "# which would otherwise replace them outright (nginx does not merge",
+            "# limit_req across levels). See nginx_manager.DDOS_LIMITS_INCLUDE_PATH.",
             "",
         ]
 
@@ -275,15 +373,13 @@ def apply_ddos_settings(settings: dict) -> tuple[bool, str]:
         config_lines.append('    "" 1;')
         config_lines.append("}")
         config_lines.append("")
-        config_lines.append("map $is_bad_bot $bot_limit_key {")
-        config_lines.append('    0 "";')
-        config_lines.append('    1 "bad_bot_key";')
-        config_lines.append("}")
-        config_lines.append("")
-        # We define a dedicated rate limiting zone for bad bots.
-        # It permits 1 request per minute globally for all bad bots (effectively blocking them completely).
-        config_lines.append("limit_req_zone $bot_limit_key zone=waf_bot_req:10m rate=1r/m;")
-        config_lines.append("")
+        # Bad-bot-UA traffic used to get its own limit_req_zone here (keyed
+        # by client IP, 1r/m) — moved to ml_check.lua's
+        # check_bad_bot_rate_limit() instead (see GENERAL_RATE_LIMIT_STATUS
+        # above for why: it shared a status code with every other rate
+        # limit in the product). $is_bad_bot above still drives it, just
+        # read directly as an nginx variable from Lua rather than through a
+        # dedicated zone.
 
         # We always define the $limit_key variable.
         # If trusted_ips exist, it is dynamic. If not, it is equivalent to $binary_remote_addr.
@@ -314,23 +410,31 @@ def apply_ddos_settings(settings: dict) -> tuple[bool, str]:
         config_lines.append(
             f"limit_req_zone {zone_key} zone=waf_ddos_req:10m rate={rate_limit_rps}r/s;"
         )
-        config_lines.append(f"limit_req_status {status_code};")
+        config_lines.append(f"limit_req_status {GENERAL_RATE_LIMIT_STATUS};")
         config_lines.append("")
-        # Apply globally to all traffic in the HTTP context
+        # These two http-level limit_req directives are a FALLBACK ONLY, for
+        # locations that declare no limit_req of their own.
+        #
+        # nginx does not merge limit_req across configuration levels: a
+        # location containing any limit_req directive REPLACES every
+        # inherited one rather than adding to it. Every proxying location in
+        # this product declares its own (zone_app_<id> in the generated app
+        # vhosts, api_limit/login_limit in the console vhost), so these
+        # http-level lines applied to essentially no real traffic at all.
+        #
+        # Confirmed live before the fix: four consecutive requests with
+        # User-Agent "Wget/1.21" — which the map above classifies as a bad
+        # bot, against a zone rated 1r/m with burst=1 — all returned 200.
+        # The entire DDoS & Bot Shield page was configuring zones that never
+        # evaluated a request while presenting as active (audit finding
+        # P1-04). The per-location half of the fix is DDOS_LIMITS_INCLUDE_PATH
+        # below, which every generated location now includes.
         config_lines.append(
             f"limit_req zone=waf_ddos_req burst={burst_tolerance} nodelay;"
         )
-        if bot_challenge_enabled:
-            config_lines.append(
-                "# JS Challenge mode: bad-bot traffic is gated by ml-waf/bot_challenge.lua"
-            )
-            config_lines.append(
-                "# instead of this rate limit — see the note where bot_challenge_enabled is set."
-            )
-        else:
-            # Apply bot mitigation rate-limiting globally
-            # burst=1 because nginx requires burst >= 1; bots hit limit=1r/m so burst of 1 is effectively immediate block
-            config_lines.append("limit_req zone=waf_bot_req burst=1 nodelay;")
+        location_limit_lines.append(
+            f"limit_req zone=waf_ddos_req burst={burst_tolerance} nodelay;"
+        )
         config_lines.append("")
 
         # Config-time boolean exposed as a runtime nginx variable so
@@ -344,10 +448,22 @@ def apply_ddos_settings(settings: dict) -> tuple[bool, str]:
         config_lines.append("}")
         config_lines.append("")
 
+        # Same trick, carrying the status ml_check.lua's
+        # check_bad_bot_rate_limit() should exit with for a rate-limited
+        # bad-bot request — 444 (Silent Drop), 429 (Block), or 0 (JS
+        # Challenge / any other mode — don't apply this check at all).
+        # This is what lets that check use a different status than every
+        # other rate limit in the product without them sharing a
+        # limit_req_status scope (see GENERAL_RATE_LIMIT_STATUS above).
+        config_lines.append(f"map $host $waf_bot_mitigation_status {{")
+        config_lines.append(f"    default {bot_mitigation_status_code};")
+        config_lines.append("}")
+        config_lines.append("")
+
         # Independent toggle for the same challenge mechanism, triggered by
         # ml_server.py's X-WAF-Risk-Challenge response header (threat_score's
         # "log" band) instead of the bad-bot UA signal above. No interaction
-        # with waf_bot_req — this path never touches that rate-limit zone.
+        # with the bad-bot rate limit above — this path never touches it.
         risk_challenge_enabled = settings.get("risk_challenge_enabled", False)
         config_lines.append(f"map $host $waf_risk_challenge_enabled {{")
         config_lines.append(f"    default {1 if risk_challenge_enabled else 0};")
@@ -366,9 +482,34 @@ def apply_ddos_settings(settings: dict) -> tuple[bool, str]:
         config_lines.append("}")
         config_lines.append("")
 
+        # API sequential-enumeration detection toggle — see enum_detect.lua.
+        # Same $host-keyed map shape as adaptive_throttle_enabled just
+        # above (it's a plain settings field on this same ddos-bot dict,
+        # unlike good_bot_enabled below which lives in its own namespace).
+        api_enum_protection_enabled = settings.get("api_enum_protection_enabled", False)
+        config_lines.append(f"map $host $waf_api_enum_enabled {{")
+        config_lines.append(f"    default {1 if api_enum_protection_enabled else 0};")
+        config_lines.append("}")
+        config_lines.append("")
+
+        # Verified-good-bot allowlist toggle (Settings > Hardening ->
+        # good_bot_service.py) — its own settings namespace, not part of
+        # the ddos-bot `settings` dict passed into this function, so it's
+        # read directly rather than threaded through as a parameter.
+        # Read here (not in ml_check.lua) so the check is a zero-cost `if`
+        # on an nginx variable when disabled, same pattern as every other
+        # toggle in this block, rather than a Redis round-trip per request
+        # to find out the feature is off.
+        from app.services.settings_manager import settings_manager as _settings_manager
+        good_bot_enabled = _settings_manager.get_good_bots().get("enabled", False)
+        config_lines.append(f"map $host $waf_good_bot_enabled {{")
+        config_lines.append(f"    default {1 if good_bot_enabled else 0};")
+        config_lines.append("}")
+        config_lines.append("")
+
         # Connection limiting
         config_lines.append(f"limit_conn_zone {zone_key} zone=waf_ddos_conn:10m;")
-        config_lines.append(f"limit_conn_status {status_code};")
+        config_lines.append(f"limit_conn_status {GENERAL_RATE_LIMIT_STATUS};")
         config_lines.append(
             "limit_conn waf_ddos_conn 100;"
         )  # Hardcoded max 100 connections per IP for now
@@ -502,14 +643,26 @@ def apply_ddos_settings(settings: dict) -> tuple[bool, str]:
                 config_lines.append(
                     f"limit_req zone=zone_{rule_id} burst={rule_burst} nodelay;"
                 )
+                # Advanced rules were overridden at http level for exactly the
+                # same reason as the two zones above — an admin's custom
+                # per-country/per-ISP/per-header rule never fired either.
+                location_limit_lines.append(
+                    f"limit_req zone=zone_{rule_id} burst={rule_burst} nodelay;"
+                )
                 config_lines.append("")
 
         config_content = "\n".join(config_lines) + "\n"
+        location_limits_content = "\n".join(location_limit_lines) + "\n"
 
         logger.info(f"Generated NGINX DDoS config for {DDOS_CONF_PATH}, validating before apply...")
 
-        # Validate + apply + reload (rolls back this file if the new config is invalid)
-        return write_and_apply_configs({DDOS_CONF_PATH: config_content})
+        # Validate + apply + reload (rolls back BOTH files if the new config
+        # is invalid — they must move together, since the .inc references
+        # zones declared in waf_ddos.conf).
+        return write_and_apply_configs({
+            DDOS_CONF_PATH: config_content,
+            DDOS_LIMITS_INCLUDE_PATH: location_limits_content,
+        })
 
     except Exception as e:
         logger.error(f"Failed to apply DDoS settings: {e}")
@@ -581,12 +734,13 @@ def apply_hardening_settings(settings: dict) -> tuple[bool, str]:
         server_cloaking = settings.get("server_cloaking", True)
         ip_blacklist = settings.get("ip_blacklist", [])
         ip_whitelist = settings.get("ip_whitelist", [])
+        ja4_blacklist = settings.get("ja4_blacklist", [])
 
         # 1. Update dynamic IP Whitelist/Blacklist in Redis
         r = get_redis_client()
-        
+
         # Flush previous keys
-        r.delete("waf:whitelist", "waf:whitelist:cidrs", "waf:blacklist", "waf:blacklist:cidrs")
+        r.delete("waf:whitelist", "waf:whitelist:cidrs", "waf:blacklist", "waf:blacklist:cidrs", "waf:blacklist:ja4")
         
         # Add whitelist
         for ip in ip_whitelist:
@@ -612,7 +766,20 @@ def apply_hardening_settings(settings: dict) -> tuple[bool, str]:
                 else:
                     r.sadd("waf:blacklist", ip)
 
-        logger.info("Successfully updated dynamic WAF IP whitelist/blacklist in Redis.")
+        # Add JA4 blacklist — exact-match only, a fingerprint has no CIDR
+        # concept. Checked by ml_check.lua against the fingerprint ja4.lua
+        # already cached per-connection during the TLS handshake; see that
+        # file for why this is a single set rather than the IP list's
+        # exact+CIDR+feed+auto tiers (no feed/auto source exists yet).
+        for ja4 in ja4_blacklist:
+            ja4 = ja4.strip().lower()
+            if ja4:
+                if not _validate_ja4(ja4):
+                    logger.warning(f"Skipping invalid JA4 fingerprint in blacklist: '{ja4}'")
+                    continue
+                r.sadd("waf:blacklist:ja4", ja4)
+
+        logger.info("Successfully updated dynamic WAF IP/JA4 whitelist/blacklist in Redis.")
 
         # 2. Write server_tokens configuration to files
         config_lines = [
@@ -838,7 +1005,10 @@ def apply_malware_scanning_settings(settings: dict) -> tuple[bool, str]:
             })
             if ok:
                 try:
-                    os.chmod(MALWARE_SCAN_SCRIPT_PATH, 0o755)
+                    # Standard rwxr-xr-x for a script ModSecurity's @inspectFile
+                    # hook must be able to execute — not world-writable, contains no
+                    # secrets.
+                    os.chmod(MALWARE_SCAN_SCRIPT_PATH, 0o755)  # nosec B103
                 except OSError as e:
                     logger.warning(f"Failed to chmod malware-scan.sh: {e}")
             return ok, err
@@ -903,7 +1073,8 @@ def apply_malware_scanning_settings(settings: dict) -> tuple[bool, str]:
         })
         if ok:
             try:
-                os.chmod(MALWARE_SCAN_SCRIPT_PATH, 0o755)
+                # See the other chmod(..., 0o755) above for why this is fine.
+                os.chmod(MALWARE_SCAN_SCRIPT_PATH, 0o755)  # nosec B103
             except OSError as e:
                 logger.warning(f"Failed to chmod malware-scan.sh: {e}")
         return ok, err
@@ -970,6 +1141,18 @@ def app_auth_conf_path(app_id) -> str:
     return f"{APP_AUTH_CONF_DIR}/app_{app_id}.conf"
 
 
+def app_cache_dir(app_id) -> str:
+    return f"{APP_CACHE_BASE_DIR}/app_{app_id}"
+
+
+def app_cache_zone_name(app_id) -> str:
+    return f"cache_app_{app_id}"
+
+
+def app_mtls_ca_path(app_id) -> str:
+    return f"{APP_MTLS_CA_DIR}/app_{app_id}_ca.pem"
+
+
 def _generate_app_auth_conf(app: dict) -> str:
     """
     Generates a ModSecurity rule denying (401) any request missing a
@@ -1003,6 +1186,24 @@ def _generate_app_auth_conf(app: dict) -> str:
         f"msg:'Request missing required authentication'\""
     )
     return "\n".join(lines) + "\n"
+
+
+def _sanitize_config_comment(value: str) -> str:
+    """Makes an arbitrary stored string safe to interpolate into a generated
+    nginx `#` comment line.
+
+    Strips every control character (newline included — that is the one that
+    matters: a newline ends the comment and everything after it is parsed as
+    real nginx configuration) plus the metacharacters that would let a value
+    read as nginx syntax if it is ever interpolated outside a comment. Falls
+    back to a placeholder rather than an empty string so the generated comment
+    never collapses into a bare "# --- Upstream App 7:  () ---".
+    """
+    cleaned = "".join(
+        ch for ch in (value or "")
+        if ord(ch) >= 0x20 and ord(ch) != 0x7F and ch not in "{};#\\"
+    ).strip()
+    return cleaned[:64] or "unnamed"
 
 
 def sync_protected_apps_to_nginx() -> tuple[bool, str]:
@@ -1084,6 +1285,16 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
         # (outside both branches) can always reference it.
         app_auth_files = {}
 
+        # proxy_cache_path lines for apps with response caching enabled —
+        # must live at the http{} context (this file is include'd from
+        # nginx.conf's http block, same as waf_app_rate_limits.conf), so
+        # they're collected here rather than emitted inline per server{}.
+        cache_zone_lines = [
+            "# Auto-generated by CyberSentinel WAF GUI",
+            "# Per-application response-cache zone definitions",
+            "",
+        ]
+
         if not active_apps:
             logger.warning("No active protected applications found in database. Generating fallback server block.")
             config_lines.extend([
@@ -1096,6 +1307,17 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                 "",
                 "    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;",
                 "    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;",
+                "",
+                # JA4 capture — see the identical line + comment on the
+                # real per-app server block below for the full story (a
+                # confirmed live outage: this used to be one global
+                # http-level directive in nginx.conf, which every server
+                # block inherits — including the plain-HTTP :3020
+                # dashboard vhost with no `listen ... ssl` at all, which
+                # made nginx refuse the whole config with "no ssl
+                # configured for the server"). Emitted only here, inside a
+                # confirmed `listen 443 ssl` block, never globally.
+                "    ssl_client_hello_by_lua_file /opt/ml-waf/ja4_entry.lua;",
                 "",
                 # Only ever emitted inside a `listen 443 ssl` block — this
                 # generator never puts it on a plain-HTTP server{}, unlike
@@ -1117,7 +1339,16 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
 
             for app in active_apps:
                 app_id = app.get("id")
-                name = app.get("name", f"App {app_id}")
+                # Defence in depth against config injection. routes/apps.py's
+                # validate_name() already rejects control characters and nginx
+                # metacharacters on the way in, but this generator is the last
+                # thing standing between a stored value and the running gateway
+                # config, and it also renders rows written before that
+                # validator existed (or by any future write path that forgets
+                # it). `name` is emitted into "# --- ..." comment lines below;
+                # a newline here would end the comment and turn the rest of the
+                # value into live nginx directives.
+                name = _sanitize_config_comment(app.get("name") or f"App {app_id}")
                 domain = app.get("domain", "_").strip().lower()
                 upstream_host = app.get("upstream_host", "host.docker.internal").strip()
                 upstream_port = app.get("upstream_port", 7000)
@@ -1183,6 +1414,45 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                 auth_conf_path = app_auth_conf_path(app_id)
                 app_auth_files[auth_conf_path] = _generate_app_auth_conf(app)
 
+                # Basic response caching (roadmap item), opt-in per app.
+                response_cache_enabled = bool(app.get("enable_response_cache", 0))
+                if response_cache_enabled:
+                    cache_dir = app_cache_dir(app_id)
+                    # Created here (backend container), not by nginx itself
+                    # at startup — the openresty container's master process
+                    # is a separate filesystem this code can't otherwise
+                    # reach. 0o777 is deliberate, not an oversight: this
+                    # directory only ever holds cached PUBLIC response
+                    # bodies (nginx's own Set-Cookie/GET-HEAD-only defaults,
+                    # left untouched below, already keep personalized
+                    # responses out of it) — not secrets, unlike e.g.
+                    # /var/modsecurity/uploads' 0o700 — so there's no
+                    # meaningful exposure from both containers' worker
+                    # processes (potentially different uids) being able to
+                    # write into it.
+                    os.makedirs(cache_dir, exist_ok=True)
+                    os.chmod(cache_dir, 0o777)  # nosec B103 — see comment above
+                    cache_zone_lines.append(
+                        f"proxy_cache_path {cache_dir} levels=1:2 "
+                        f"keys_zone={app_cache_zone_name(app_id)}:10m "
+                        f"max_size=200m inactive=60m use_temp_path=off;"
+                    )
+
+                # mTLS for API auth (roadmap item), opt-in per app, scoped
+                # to /api only — see ml_check.lua's check_mtls(). Requires
+                # BOTH the DB toggle AND an actually-uploaded CA cert file
+                # still present on disk; a toggle left on after the cert
+                # was somehow removed must never silently request a client
+                # cert against a nonexistent CA file (nginx would refuse
+                # to start entirely — exactly tonight's other outage
+                # class), so this fails closed to "mTLS not applied" if
+                # the file is missing, not just "trust the DB flag".
+                mtls_ca_cert_path = app.get("mtls_ca_cert_path")
+                mtls_active = bool(app.get("mtls_enabled", 0)) and bool(mtls_ca_cert_path) and os.path.exists(mtls_ca_cert_path)
+                mtls_mode = app.get("mtls_mode") or "log"
+                if mtls_mode not in ("log", "enforce"):
+                    mtls_mode = "log"
+
                 upstream_server_lines = [f"    server {upstream_host}:{upstream_port} max_fails=3 fail_timeout=10s;"]
                 for origin in extra_origins:
                     upstream_server_lines.append(
@@ -1205,6 +1475,44 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     f"    ssl_certificate     {active_cert};",
                     f"    ssl_certificate_key {active_key};",
                     "",
+                    # JA4 TLS-client fingerprint capture (ja4.lua via
+                    # ja4_entry.lua) — deliberately scoped HERE, per
+                    # SSL-terminating server block, NOT as a global
+                    # http-level directive in nginx.conf. It used to be
+                    # global, and that caused a real, confirmed outage:
+                    # every server block inherits an http-level directive,
+                    # including the plain-HTTP :3020 dashboard vhost (no
+                    # `listen ... ssl` at all) — nginx refused the ENTIRE
+                    # config at startup with "no ssl configured for the
+                    # server" because the SSL-handshake-phase hook got
+                    # merged onto a listen socket that never does TLS.
+                    # lua-nginx-module documents this directive as valid in
+                    # `http, server, location` context, so moving it to
+                    # just the real SSL blocks (this one, plus the two
+                    # fallback SSL blocks above/below) is fully supported —
+                    # it just needed to not be global. See ja4.lua's header
+                    # for what capture itself does.
+                    "    ssl_client_hello_by_lua_file /opt/ml-waf/ja4_entry.lua;",
+                    "",
+                    # mTLS for API auth — ssl_verify_client can only be set
+                    # at server (or http) level, never per-location, since
+                    # certificate verification happens during the TLS
+                    # handshake itself, before nginx knows which location
+                    # the request is for. `optional` REQUESTS a client cert
+                    # on every connection to this server block (not just
+                    # /api) but never rejects a connection for lacking one
+                    # at the TLS layer — the actual /api-only enforcement
+                    # happens in ml_check.lua's check_mtls(), which reads
+                    # $ssl_client_verify (always a safe built-in nginx
+                    # variable, unlike the custom $waf_mtls_mode below) and
+                    # the mode this `set` exposes to it.
+                    *([
+                        f"    ssl_client_certificate {mtls_ca_cert_path};",
+                        "    ssl_verify_client optional;",
+                        "    ssl_verify_depth 2;",
+                        f'    set $waf_mtls_mode "{mtls_mode}";',
+                        "",
+                    ] if mtls_active else []),
                     # Only ever emitted inside a `listen 443 ssl` block —
                     # see the fallback block above for why this must never
                     # appear on a plain-HTTP server{}.
@@ -1258,6 +1566,11 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     # nginx proxy behavior, unchanged.
                     "    location / {",
                     f"        limit_req zone=zone_app_{app_id} burst={burst};",
+                    # Pulls in the DDoS/bot zones. Without this they are
+                    # inert here: the limit_req directive above REPLACES
+                    # every http-level one rather than adding to it
+                    # (audit finding P1-04).
+                    f"        include {DDOS_LIMITS_INCLUDE_PATH};",
                     f"        set $waf_upstream_location \"@proxy_app_{app_id}\";",
                     "        content_by_lua_file /opt/ml-waf/ml_decide.lua;",
                     "    }",
@@ -1265,6 +1578,7 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     "    location /api {",
                     "        error_page 403 = @json_forbidden;",
                     f"        limit_req zone=zone_app_{app_id} burst={max(5, burst // 3)} nodelay;",
+                    f"        include {DDOS_LIMITS_INCLUDE_PATH};",
                     f"        set $waf_upstream_location \"@proxy_app_{app_id}\";",
                     "        content_by_lua_file /opt/ml-waf/ml_decide.lua;",
                     "    }",
@@ -1282,6 +1596,25 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     "        proxy_next_upstream_tries 3;",
                     "        proxy_next_upstream_timeout 10s;",
                     *([f"        proxy_hide_header {h};" for h in cloaking_hide_headers] if server_cloaking else []),
+                    # Basic response caching (roadmap item), opt-in per app
+                    # above. Deliberately does NOT set proxy_ignore_headers
+                    # or proxy_cache_bypass — nginx's own defaults already
+                    # refuse to cache a response carrying Set-Cookie, and
+                    # only ever cache GET/HEAD requests in the first place,
+                    # which is exactly the safety this needs (never serve
+                    # one client's personalized/authenticated response body
+                    # to another). proxy_cache_valid only supplies a
+                    # fallback duration for a response that doesn't specify
+                    # its own Cache-Control/Expires — an origin's explicit
+                    # "no-store" is still honored, this can't override it.
+                    # X-Cache-Status is diagnostic only (HIT/MISS/BYPASS/
+                    # EXPIRED), same idea as Cloudflare's own cf-cache-status.
+                    *([
+                        f"        proxy_cache {app_cache_zone_name(app_id)};",
+                        "        proxy_cache_valid 200 302 10m;",
+                        "        proxy_cache_valid 404 1m;",
+                        "        add_header X-Cache-Status $upstream_cache_status always;",
+                    ] if response_cache_enabled else []),
                     "    }",
                     "}",
                     ""
@@ -1307,6 +1640,11 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     "    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;",
                     "    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;",
                     "",
+                    # JA4 capture — see the per-app server block's comment
+                    # above for the full outage story. Emitted here too
+                    # since this fallback also terminates real SSL.
+                    "    ssl_client_hello_by_lua_file /opt/ml-waf/ja4_entry.lua;",
+                    "",
                     # Only ever emitted inside a `listen 443 ssl` block —
                     # see the no-active-apps fallback above for why.
                     "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;",
@@ -1320,6 +1658,7 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
 
         config_content = "\n".join(config_lines) + "\n"
         apps_conf_path = "/etc/nginx/sites-enabled/mssp"
+        cache_zones_content = "\n".join(cache_zone_lines) + "\n"
 
         logger.info(
             f"Generated dynamic WAF apps config for {apps_conf_path} "
@@ -1327,6 +1666,7 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
         )
         return write_and_apply_configs({
             rate_limits_conf_path: rate_limits_content,
+            APP_CACHE_ZONES_CONF_PATH: cache_zones_content,
             apps_conf_path: config_content,
             **app_auth_files,
         })

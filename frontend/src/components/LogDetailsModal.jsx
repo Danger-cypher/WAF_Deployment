@@ -195,12 +195,29 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
           </div>
         </div>
 
-        <div className="log-drawer-tabs">
-          <span className={`log-drawer-tab ${activeTab === 'details' ? 'active' : ''}`} onClick={() => setActiveTab('details')}>Event Details</span>
-          <span className={`log-drawer-tab ${activeTab === 'raw' ? 'active' : ''}`} onClick={() => setActiveTab('raw')}>Raw Audit Log</span>
+        {/* Audit finding P3-03: these were plain <span onClick> — mouse-only,
+            no way to switch tabs from the keyboard. Now a real tablist. */}
+        <div className="log-drawer-tabs" role="tablist" aria-label="Log detail sections">
+          <span
+            id="log-details-tab-details" role="tab" tabIndex={activeTab === 'details' ? 0 : -1}
+            aria-selected={activeTab === 'details'} aria-controls="log-details-panel"
+            className={`log-drawer-tab ${activeTab === 'details' ? 'active' : ''}`}
+            onClick={() => setActiveTab('details')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('details'); } }}
+          >Event Details</span>
+          <span
+            id="log-details-tab-raw" role="tab" tabIndex={activeTab === 'raw' ? 0 : -1}
+            aria-selected={activeTab === 'raw'} aria-controls="log-details-panel"
+            className={`log-drawer-tab ${activeTab === 'raw' ? 'active' : ''}`}
+            onClick={() => setActiveTab('raw')}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('raw'); } }}
+          >Raw Audit Log</span>
         </div>
 
-        <div className="log-drawer-body">
+        <div
+          className="log-drawer-body" id="log-details-panel" role="tabpanel"
+          aria-labelledby={activeTab === 'details' ? 'log-details-tab-details' : 'log-details-tab-raw'}
+        >
           {activeTab === 'details' ? (
             <>
               {/* Metadata */}

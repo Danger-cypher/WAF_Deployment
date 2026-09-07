@@ -206,6 +206,8 @@ JWT_SECRET_KEY=
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 INTERNAL_ALERT_TRIGGER_KEY=
+BACKUP_ENCRYPTION_KEY=
+CHANNEL_ENCRYPTION_KEY=
 WAF_SSO_SECRET=
 SIEM_JWKS_URL=
 BACKEND_CORS_ORIGINS=http://localhost:3020,http://127.0.0.1:3020
@@ -218,6 +220,18 @@ CLICKHOUSE_DB=cybersentinel
 EOF
     fi
 fi
+
+# .env holds JWT_SECRET_KEY, WAF_SSO_SECRET, INTERNAL_ALERT_TRIGGER_KEY and the
+# Redis/ClickHouse passwords. Both creation paths above (cp from the template,
+# and the heredoc) inherit the operator's umask, which on a default Ubuntu
+# install leaves the file world-readable — any unprivileged local account could
+# then read JWT_SECRET_KEY and mint a valid admin session, i.e. a complete
+# authentication bypass with no brute force. scripts/generate-secrets.sh already
+# chmods the file it rewrites; this covers the creation path, which did not.
+# Applied unconditionally (not only on create) so an existing deployment is
+# repaired the next time setup.sh runs.
+chmod 600 "$ENV_FILE"
+log "  Secured $ENV_FILE (mode 600)"
 
 # ── Dynamic Resource Scaling Detection ───────────────────────────────────────
 log "Auto-detecting server resources to optimize WAF resource limits..."
@@ -358,6 +372,8 @@ REDIS_PW=$(grep -E "^REDIS_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 JWT_KEY=$(grep -E "^JWT_SECRET_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 CH_PW=$(grep -E "^CLICKHOUSE_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 INTERNAL_KEY=$(grep -E "^INTERNAL_ALERT_TRIGGER_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
+BACKUP_KEY=$(grep -E "^BACKUP_ENCRYPTION_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
+CHANNEL_KEY=$(grep -E "^CHANNEL_ENCRYPTION_KEY=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 SSO_SECRET=$(grep -E "^WAF_SSO_SECRET=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 JWKS_URL=$(grep -E "^SIEM_JWKS_URL=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
 CORS_ORIGINS=$(grep -E "^BACKEND_CORS_ORIGINS=" "$ENV_FILE" | cut -d'=' -f2- || echo "")
@@ -393,6 +409,36 @@ if is_unset_or_placeholder "$INTERNAL_KEY"; then
         sed -i "s|^INTERNAL_ALERT_TRIGGER_KEY=.*|INTERNAL_ALERT_TRIGGER_KEY=${INTERNAL_KEY}|" "$ENV_FILE"
     else
         echo "INTERNAL_ALERT_TRIGGER_KEY=${INTERNAL_KEY}" >> "$ENV_FILE"
+    fi
+fi
+
+if is_unset_or_placeholder "$BACKUP_KEY"; then
+    log "Generating backup archive encryption key..."
+    # Fernet key: 32 random bytes, url-safe base64 — must persist across
+    # restarts (unlike the ephemeral-fallback keys above), since losing it
+    # permanently locks every backup taken under it. Once generated here,
+    # it's written to .env and never silently regenerated on a later run
+    # (the is_unset_or_placeholder guard only fires while it's still blank
+    # or CHANGE_ME).
+    BACKUP_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
+    if grep -q "^BACKUP_ENCRYPTION_KEY=" "$ENV_FILE"; then
+        sed -i "s|^BACKUP_ENCRYPTION_KEY=.*|BACKUP_ENCRYPTION_KEY=${BACKUP_KEY}|" "$ENV_FILE"
+    else
+        echo "BACKUP_ENCRYPTION_KEY=${BACKUP_KEY}" >> "$ENV_FILE"
+    fi
+fi
+
+if is_unset_or_placeholder "$CHANNEL_KEY"; then
+    log "Generating alert channel config encryption key..."
+    # Same shape and same must-persist reasoning as BACKUP_ENCRYPTION_KEY
+    # above — losing this key permanently locks every alert channel's
+    # stored SMTP/webhook credentials (audit finding P2-03), separate from
+    # that key so the two can be rotated independently.
+    CHANNEL_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
+    if grep -q "^CHANNEL_ENCRYPTION_KEY=" "$ENV_FILE"; then
+        sed -i "s|^CHANNEL_ENCRYPTION_KEY=.*|CHANNEL_ENCRYPTION_KEY=${CHANNEL_KEY}|" "$ENV_FILE"
+    else
+        echo "CHANNEL_ENCRYPTION_KEY=${CHANNEL_KEY}" >> "$ENV_FILE"
     fi
 fi
 
@@ -651,6 +697,34 @@ else
     success "GeoIP ASN database already present: $ASN_FILE"
 fi
 
+# ── City Database (adds lat/lon — powers the Threat Globe view) ──────────────
+CITY_FILE="${GEOIP_DIR}/GeoLite2-City.mmdb"
+if [ ! -f "$CITY_FILE" ]; then
+    log "Downloading GeoLite2-City database (enables lat/lon geolocation)..."
+    if [ -n "${LICENSE_KEY:-}" ]; then
+        TEMP_TAR_CITY="/tmp/geoip_city.tar.gz"
+        if wget -qO "$TEMP_TAR_CITY" "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${LICENSE_KEY}&suffix=tar.gz" 2>/dev/null; then
+            tar -xzf "$TEMP_TAR_CITY" -C /tmp
+            mv /tmp/GeoLite2-City_*/GeoLite2-City.mmdb "$CITY_FILE" 2>/dev/null || true
+            rm -f "$TEMP_TAR_CITY"
+            success "MaxMind GeoIP City Database downloaded successfully."
+        else
+            warn "MaxMind City download failed. Attempting public mirror fallback..."
+        fi
+    fi
+    # Fallback to public mirror if MaxMind key was not used or download failed
+    if [ ! -f "$CITY_FILE" ]; then
+        if wget -qO "$CITY_FILE" "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb" 2>/dev/null; then
+            success "Fallback GeoIP City Database downloaded successfully."
+        else
+            warn "Failed to download GeoIP City database. Lat/lon geolocation (Threat Globe) will be disabled."
+            touch "$CITY_FILE" || true
+        fi
+    fi
+else
+    success "GeoIP City database already present: $CITY_FILE"
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 5: User Credential Setup
 # ─────────────────────────────────────────────────────────────────────────────
@@ -792,9 +866,21 @@ fi
 # Step 7: Docker Compose Build & Deploy
 # ─────────────────────────────────────────────────────────────────────────────
 log "Building and starting containerized WAF services..."
-# Clean up log ownership so containers can write immediately
+# Clean up log ownership so containers can write immediately.
+#
+# This was `chmod -R 777 logs configs`, which is what left the TLS private key
+# (configs/nginx/ssl/*.key), modsecurity.conf and every generated vhost
+# world-writable on a real deployment — any local account could read the
+# private key or silently disable the WAF engine by editing its config.
+#
+# 777 bought nothing: every container in this stack runs as root (no USER
+# directive in any Dockerfile, no userns-remap in docker-compose.yml), so
+# container root is host root and can write these paths at 755/644 just the
+# same. Directories get 755, files 644, and the TLS private key 600.
 sudo mkdir -p logs/nginx logs/modsecurity/audit configs/nginx/conf.d configs/nginx/sites-enabled
-sudo chmod -R 777 logs configs
+sudo find logs configs -type d -exec chmod 755 {} +
+sudo find logs configs -type f -exec chmod 644 {} +
+sudo find configs/nginx/ssl -type f -name '*.key' -exec chmod 600 {} + 2>/dev/null || true
 
 # Pre-create empty Nginx config files to prevent parser errors on first reload
 cat > configs/nginx/conf.d/waf_ddos.conf <<EOF
@@ -807,7 +893,9 @@ cat > configs/nginx/conf.d/waf_hardening.conf <<EOF
 # This file is overwritten at runtime — do not edit manually
 EOF
 
-sudo chmod 666 configs/nginx/conf.d/waf_ddos.conf configs/nginx/conf.d/waf_hardening.conf
+# 644, not 666: these are rewritten at runtime by the backend container, which
+# runs as root and does not need them world-writable to do so.
+sudo chmod 644 configs/nginx/conf.d/waf_ddos.conf configs/nginx/conf.d/waf_hardening.conf
 
 # Run compose build and up
 sudo $COMPOSE_CMD build || error "Docker Compose build failed. Check the output above for details."

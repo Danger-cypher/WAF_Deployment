@@ -22,6 +22,11 @@ configs/certbot/config/
 configs/certbot/work/
 configs/certbot/logs/
 
+# Per-app response cache (Settings > Protected App > response caching) —
+# raw cached HTTP response bodies from customer backends, not config.
+# Never belongs in git regardless of what it contains.
+configs/nginx/proxy_cache/
+
 # ──────────────────────────────────────────────────────────────────────────
 # Python
 # ──────────────────────────────────────────────────────────────────────────

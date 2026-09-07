@@ -1,13 +1,14 @@
 import asyncio
 import ipaddress
 import logging
+import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 from pydantic import BaseModel, field_validator
 from typing import Dict, Any, Optional, List
 
 from app.services.settings_manager import settings_manager
-from app.services.auth import verify_password, require_admin, TokenData
+from app.services.auth import verify_password, require_admin, require_any_role, TokenData
 from app.utils.audit import log_admin_action
 from app.utils.security import get_client_ip, is_ip_in_networks
 
@@ -30,6 +31,22 @@ def _validate_ip_or_cidr(ip_str: str) -> bool:
             return True
         except ValueError:
             return False
+
+
+# JA4's fixed a_b_c shape — see nginx_manager.py's _JA4_RE for the field
+# breakdown. Duplicated rather than imported: routes/settings.py already
+# keeps its own copy of _validate_ip_or_cidr independent of
+# nginx_manager.py's, same reasoning (this module validates the API
+# request; nginx_manager.py validates again right before writing to Redis,
+# defense in depth against any other future caller of that function).
+_JA4_RE = re.compile(r"^[a-z0-9]{10}_[0-9a-f]{12}_[0-9a-f]{12}$")
+
+
+def _validate_ja4(fingerprint: str) -> bool:
+    s = fingerprint.strip().lower()
+    if not s:
+        return False
+    return bool(_JA4_RE.match(s))
 
 
 class GeneralSettingsModel(BaseModel):
@@ -65,9 +82,6 @@ class AutoLearningModel(BaseModel):
 class CustomResponseModel(BaseModel):
 
     html_content: str
-
-
-from typing import List
 
 
 class PositiveSecurityModel(BaseModel):
@@ -110,6 +124,13 @@ class DdosBotMitigationModel(BaseModel):
     # on top of (never replacing) the native limit_req zones. Off by
     # default, same reasoning as risk_challenge_enabled.
     adaptive_throttle_enabled: bool = False
+    # Independent of every toggle above — detects sequential numeric-ID
+    # enumeration against the same API endpoint template from the same IP
+    # (e.g. /api/users/1, /api/users/2, ...), a classic OWASP API1 (Broken
+    # Object Level Authorization) scanning pattern nothing else here
+    # catches. See enum_detect.lua. Off by default, same reasoning as the
+    # other two.
+    api_enum_protection_enabled: bool = False
 
 
 class HardeningModel(BaseModel):
@@ -118,6 +139,9 @@ class HardeningModel(BaseModel):
     server_cloaking: bool
     ip_blacklist: List[str]
     ip_whitelist: List[str]
+    # Known-bad JA4 TLS-client fingerprints. Defaults to [] so existing
+    # saved settings (predating this field) still validate.
+    ja4_blacklist: List[str] = []
 
 
 class AdminLoginAllowlistModel(BaseModel):
@@ -131,9 +155,33 @@ class GeoBlockModel(BaseModel):
     countries: List[str]  # ISO 3166-1 alpha-2 codes, e.g. "RU", "CN"
 
 
+class ThreatIntelSourcesModel(BaseModel):
+    spamhaus: bool = True
+    emerging_threats: bool = True
+    # Off by default even when the model default is applied fresh — see
+    # threat_intel_service.py's module docstring: unlike the other two
+    # sources, blocking Tor exit traffic is a policy choice (anonymized
+    # clients, not inherently malicious ones), not a pure threat-intel
+    # signal, so it should never silently turn on for an admin who didn't
+    # explicitly ask for it.
+    tor_exit_nodes: bool = False
+
+
 class ThreatIntelModel(BaseModel):
     enabled: bool
     sync_interval_hours: int
+    sources: ThreatIntelSourcesModel = ThreatIntelSourcesModel()
+
+
+class GoodBotSourcesModel(BaseModel):
+    googlebot: bool = True
+    bingbot: bool = True
+
+
+class GoodBotModel(BaseModel):
+    enabled: bool
+    sync_interval_hours: int
+    sources: GoodBotSourcesModel = GoodBotSourcesModel()
 
 
 class AutoReputationModel(BaseModel):
@@ -148,6 +196,37 @@ class AntiDefacementModel(BaseModel):
     enabled: bool
     monitored_files: List[str]
     check_interval_seconds: int
+
+
+class ThreatGlobeModel(BaseModel):
+    # server_lat/lon/label/auto_detected are read-only outputs of the
+    # startup auto-detection (threat_globe_location.py) — accepted here
+    # too (rather than split into a separate response-only model) so a
+    # round-trip GET-then-POST from the settings form doesn't have to
+    # strip fields; update_threat_globe_settings below re-derives them
+    # from the previous value regardless of what's submitted.
+    server_lat: Optional[float] = None
+    server_lon: Optional[float] = None
+    server_label: str = ""
+    auto_detected: bool = False
+    override_enabled: bool
+    override_lat: Optional[float] = None
+    override_lon: Optional[float] = None
+    override_label: str = ""
+
+    @field_validator("override_lat")
+    @classmethod
+    def validate_override_lat(cls, v):
+        if v is not None and not (-90 <= v <= 90):
+            raise ValueError("override_lat must be between -90 and 90.")
+        return v
+
+    @field_validator("override_lon")
+    @classmethod
+    def validate_override_lon(cls, v):
+        if v is not None and not (-180 <= v <= 180):
+            raise ValueError("override_lon must be between -180 and 180.")
+        return v
 
 
 class MalwareScanningModel(BaseModel):
@@ -171,11 +250,11 @@ async def get_general_settings(current_user: TokenData = Depends(require_admin))
 
 
 @router.post("/settings/general", response_model=Dict[str, Any])
-async def update_general_settings(
+async def update_general_settings(request: Request,
     settings: GeneralSettingsModel, current_user: TokenData = Depends(require_admin)
 ):
     result = settings_manager.update_general_settings(settings.dict())
-    log_admin_action("settings", "general", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "general", "update", current_user, details=settings.dict(), request=request)
     return result
 
 
@@ -186,7 +265,7 @@ async def get_waf_settings(current_user: TokenData = Depends(require_admin)):
 
 
 @router.post("/settings/waf", response_model=Dict[str, Any])
-async def update_waf_settings(
+async def update_waf_settings(request: Request,
     settings: WAFSettingsModel, current_user: TokenData = Depends(require_admin)
 ):
     if settings.paranoiaLevel < 1 or settings.paranoiaLevel > 4:
@@ -194,7 +273,7 @@ async def update_waf_settings(
             status_code=400, detail="Paranoia level must be between 1 and 4"
         )
     result = settings_manager.update_waf_settings(settings.dict())
-    log_admin_action("settings", "waf", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "waf", "update", current_user, details=settings.dict(), request=request)
     return result
 
 
@@ -205,11 +284,11 @@ async def get_log_settings(current_user: TokenData = Depends(require_admin)):
 
 
 @router.post("/settings/logs", response_model=Dict[str, Any])
-async def update_log_settings(
+async def update_log_settings(request: Request,
     settings: LogSettingsModel, current_user: TokenData = Depends(require_admin)
 ):
     result = settings_manager.update_log_settings(settings.dict())
-    log_admin_action("settings", "logs", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "logs", "update", current_user, details=settings.dict(), request=request)
     return result
 
 
@@ -223,7 +302,7 @@ import base64
 
 
 @router.post("/settings/response", response_model=Dict[str, Any])
-async def update_custom_response(
+async def update_custom_response(request: Request,
     settings: CustomResponseModel, current_user: TokenData = Depends(require_admin)
 ):
     logger.info("Updating Custom Response block page.")
@@ -244,6 +323,7 @@ async def update_custom_response(
     log_admin_action(
         "settings", "response", "update", current_user,
         details={"html_length": len(settings.html_content)},
+        request=request,
     )
     return saved_settings
 
@@ -262,7 +342,7 @@ import json
 
 
 @router.post("/settings/positive-security", response_model=Dict[str, Any])
-async def update_positive_security(
+async def update_positive_security(request: Request,
     settings_payload: EncodedPayloadModel,
     current_user: TokenData = Depends(require_admin),
 ):
@@ -295,7 +375,7 @@ async def update_positive_security(
             detail=f"Failed to apply and reload Positive Security policy in NGINX. {err_msg}",
         )
 
-    log_admin_action("settings", "positive-security", "update", current_user, details=settings_dict)
+    log_admin_action("settings", "positive-security", "update", current_user, details=settings_dict, request=request)
     return saved_settings
 
 
@@ -306,11 +386,11 @@ async def get_auto_learning(current_user: TokenData = Depends(require_admin)):
 
 
 @router.post("/settings/auto-learning", response_model=Dict[str, Any])
-async def update_auto_learning(
+async def update_auto_learning(request: Request,
     settings: AutoLearningModel, current_user: TokenData = Depends(require_admin)
 ):
     result = settings_manager.update_auto_learning(settings.dict())
-    log_admin_action("settings", "auto-learning", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "auto-learning", "update", current_user, details=settings.dict(), request=request)
     return result
 
 
@@ -322,7 +402,7 @@ async def get_ddos_bot_mitigation(current_user: TokenData = Depends(require_admi
 
 
 @router.post("/settings/ddos-bot", response_model=Dict[str, Any])
-async def update_ddos_bot_mitigation(
+async def update_ddos_bot_mitigation(request: Request,
     settings: DdosBotMitigationModel, current_user: TokenData = Depends(require_admin)
 ):
     import ipaddress
@@ -365,7 +445,7 @@ async def update_ddos_bot_mitigation(
             detail=f"Failed to apply and reload DDoS settings in NGINX. {err_msg}",
         )
 
-    log_admin_action("settings", "ddos-bot", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "ddos-bot", "update", current_user, details=settings.dict(), request=request)
     return saved_settings
 
 
@@ -376,7 +456,7 @@ async def get_hardening_settings(current_user: TokenData = Depends(require_admin
 
 
 @router.post("/settings/hardening", response_model=Dict[str, Any])
-async def update_hardening_settings(
+async def update_hardening_settings(request: Request,
     settings: HardeningModel, current_user: TokenData = Depends(require_admin)
 ):
     logger.info("Updating Infrastructure Hardening & Cloaking settings.")
@@ -395,6 +475,13 @@ async def update_hardening_settings(
                 detail=f"Invalid IP address or CIDR network in Whitelist: {ip}",
             )
 
+    for ja4 in settings.ja4_blacklist:
+        if ja4.strip() and not _validate_ja4(ja4):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid JA4 fingerprint in Blacklist: {ja4}",
+            )
+
     saved_settings = settings_manager.update_hardening(settings.dict())
 
     # Apply to NGINX
@@ -408,7 +495,7 @@ async def update_hardening_settings(
             detail=f"Failed to apply and reload settings in NGINX. {err_msg}",
         )
 
-    log_admin_action("settings", "hardening", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "hardening", "update", current_user, details=settings.dict(), request=request)
     return saved_settings
 
 
@@ -451,7 +538,8 @@ async def update_admin_login_allowlist_settings(
     saved_settings = settings_manager.update_admin_login_allowlist(settings.dict())
 
     log_admin_action(
-        "settings", "admin_login_allowlist", "update", current_user, details=settings.dict()
+        "settings", "admin_login_allowlist", "update", current_user, details=settings.dict(),
+        request=request,
     )
     return saved_settings
 
@@ -463,7 +551,7 @@ async def get_geo_block_settings(current_user: TokenData = Depends(require_admin
 
 
 @router.post("/settings/geo-block", response_model=Dict[str, Any])
-async def update_geo_block_settings(
+async def update_geo_block_settings(request: Request,
     settings: GeoBlockModel, current_user: TokenData = Depends(require_admin)
 ):
     import re as _re
@@ -494,7 +582,7 @@ async def update_geo_block_settings(
             detail=f"Saved, but failed to apply the geo-block list. {err_msg}",
         )
 
-    log_admin_action("settings", "geo_block", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "geo_block", "update", current_user, details=settings.dict(), request=request)
     return saved_settings
 
 
@@ -505,7 +593,7 @@ async def get_threat_intel_settings(current_user: TokenData = Depends(require_ad
 
 
 @router.post("/settings/threat-intel", response_model=Dict[str, Any])
-async def update_threat_intel_settings(
+async def update_threat_intel_settings(request: Request,
     settings: ThreatIntelModel, current_user: TokenData = Depends(require_admin)
 ):
     if settings.sync_interval_hours < 1:
@@ -518,15 +606,20 @@ async def update_threat_intel_settings(
     # background service owns, not part of this admin-editable form; a full
     # replace here would silently wipe them on every settings save.
     current = settings_manager.get_threat_intel()
-    merged = {**current, "enabled": settings.enabled, "sync_interval_hours": settings.sync_interval_hours}
+    merged = {
+        **current,
+        "enabled": settings.enabled,
+        "sync_interval_hours": settings.sync_interval_hours,
+        "sources": settings.sources.dict(),
+    }
     saved_settings = settings_manager.update_threat_intel(merged)
 
-    log_admin_action("settings", "threat_intel", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "threat_intel", "update", current_user, details=settings.dict(), request=request)
     return saved_settings
 
 
 @router.post("/settings/threat-intel/sync-now", response_model=Dict[str, Any])
-async def trigger_threat_intel_sync(current_user: TokenData = Depends(require_admin)):
+async def trigger_threat_intel_sync(request: Request, current_user: TokenData = Depends(require_admin)):
     """Runs a sync cycle immediately, bypassing the enabled check — lets an
     admin verify the feed works, or refresh, without waiting for the
     scheduled interval or leaving auto-sync permanently on."""
@@ -534,12 +627,80 @@ async def trigger_threat_intel_sync(current_user: TokenData = Depends(require_ad
 
     result = await asyncio.to_thread(run_threat_intel_sync, force=True)
 
-    log_admin_action("settings", "threat_intel", "sync_now", current_user, details=result)
+    log_admin_action("settings", "threat_intel", "sync_now", current_user, details=result, request=request)
 
     if result.get("status") == "error":
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Threat-intel sync failed: {result.get('error', 'unknown error')}",
+        )
+    return result
+
+
+# Verified-Good-Bot Allowlist Settings Routes — see good_bot_service.py
+@router.get("/settings/good-bots", response_model=Dict[str, Any])
+async def get_good_bots_settings(current_user: TokenData = Depends(require_admin)):
+    return settings_manager.get_good_bots()
+
+
+@router.post("/settings/good-bots", response_model=Dict[str, Any])
+async def update_good_bots_settings(request: Request,
+    settings: GoodBotModel, current_user: TokenData = Depends(require_admin)
+):
+    if settings.sync_interval_hours < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="sync_interval_hours must be at least 1.",
+        )
+
+    # Merge rather than replace — last_sync_* are status fields the
+    # background service owns, same reasoning as update_threat_intel_settings.
+    current = settings_manager.get_good_bots()
+    merged = {
+        **current,
+        "enabled": settings.enabled,
+        "sync_interval_hours": settings.sync_interval_hours,
+        "sources": settings.sources.dict(),
+    }
+    saved_settings = settings_manager.update_good_bots(merged)
+
+    # The check itself is gated by $waf_good_bot_enabled, a `map $host {}`
+    # written into waf_ddos.conf by apply_ddos_settings() (same file/
+    # function as $waf_adaptive_throttle_enabled, since good_bots has no
+    # settings namespace of its own at the nginx-generation layer) — that
+    # map only reflects the flag as of the last time THAT function ran, so
+    # toggling `enabled` here has to re-trigger it, or the map value stays
+    # stale until an unrelated DDoS-settings save happens to also fire it.
+    from app.services import nginx_manager
+
+    ddos_settings = settings_manager.get_ddos_bot_mitigation()
+    success, err_msg = nginx_manager.apply_ddos_settings(ddos_settings)
+    if not success:
+        logger.error(f"Failed to apply good-bot allowlist toggle to NGINX: {err_msg}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Saved, but failed to apply the change in NGINX. {err_msg}",
+        )
+
+    log_admin_action("settings", "good_bots", "update", current_user, details=settings.dict(), request=request)
+    return saved_settings
+
+
+@router.post("/settings/good-bots/sync-now", response_model=Dict[str, Any])
+async def trigger_good_bots_sync(request: Request, current_user: TokenData = Depends(require_admin)):
+    """Runs a sync cycle immediately, bypassing the enabled check — lets an
+    admin verify the feed works, or refresh, without waiting for the
+    scheduled interval or leaving auto-sync permanently on."""
+    from app.services.good_bot_service import run_good_bot_sync
+
+    result = await asyncio.to_thread(run_good_bot_sync, force=True)
+
+    log_admin_action("settings", "good_bots", "sync_now", current_user, details=result, request=request)
+
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Good-bot sync failed: {result.get('error', 'unknown error')}",
         )
     return result
 
@@ -551,7 +712,7 @@ async def get_auto_reputation_settings(current_user: TokenData = Depends(require
 
 
 @router.post("/settings/auto-reputation", response_model=Dict[str, Any])
-async def update_auto_reputation_settings(
+async def update_auto_reputation_settings(request: Request,
     settings: AutoReputationModel, current_user: TokenData = Depends(require_admin)
 ):
     if settings.block_threshold < 1:
@@ -577,12 +738,12 @@ async def update_auto_reputation_settings(
     }
     saved_settings = settings_manager.update_auto_reputation(merged)
 
-    log_admin_action("settings", "auto_reputation", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "auto_reputation", "update", current_user, details=settings.dict(), request=request)
     return saved_settings
 
 
 @router.post("/settings/auto-reputation/sync-now", response_model=Dict[str, Any])
-async def trigger_auto_reputation_sync(current_user: TokenData = Depends(require_admin)):
+async def trigger_auto_reputation_sync(request: Request, current_user: TokenData = Depends(require_admin)):
     """Runs a sync cycle immediately, bypassing the enabled check — lets an
     admin verify the threshold/window before waiting for the scheduled
     interval or leaving auto-sync permanently on."""
@@ -590,7 +751,7 @@ async def trigger_auto_reputation_sync(current_user: TokenData = Depends(require
 
     result = await asyncio.to_thread(run_auto_reputation_sync, force=True)
 
-    log_admin_action("settings", "auto_reputation", "sync_now", current_user, details=result)
+    log_admin_action("settings", "auto_reputation", "sync_now", current_user, details=result, request=request)
 
     if result.get("status") == "error":
         raise HTTPException(
@@ -608,14 +769,14 @@ async def list_auto_blocked_ips(current_user: TokenData = Depends(require_admin)
 
 
 @router.post("/settings/auto-reputation/release/{ip}")
-async def release_auto_blocked_ip_route(ip: str, current_user: TokenData = Depends(require_admin)):
+async def release_auto_blocked_ip_route(request: Request, ip: str, current_user: TokenData = Depends(require_admin)):
     from app.services.auto_reputation_service import release_auto_blocked_ip
 
     released = await asyncio.to_thread(release_auto_blocked_ip, ip)
     if not released:
         raise HTTPException(status_code=404, detail=f"{ip} is not currently auto-blocked.")
 
-    log_admin_action("settings", "auto_reputation", "release_ip", current_user, details={"ip": ip})
+    log_admin_action("settings", "auto_reputation", "release_ip", current_user, details={"ip": ip}, request=request)
     return {"message": f"{ip} released from auto-block."}
 
 
@@ -628,7 +789,7 @@ async def get_anti_defacement_settings(
 
 
 @router.post("/settings/anti-defacement", response_model=Dict[str, Any])
-async def update_anti_defacement_settings(
+async def update_anti_defacement_settings(request: Request,
     settings: AntiDefacementModel, current_user: TokenData = Depends(require_admin)
 ):
     logger.info("Updating Web Anti-Defacement settings.")
@@ -637,7 +798,40 @@ async def update_anti_defacement_settings(
             status_code=400, detail="Check interval must be between 1 and 3600 seconds."
         )
     result = settings_manager.update_anti_defacement(settings.dict())
-    log_admin_action("settings", "anti-defacement", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "anti-defacement", "update", current_user, details=settings.dict(), request=request)
+    return result
+
+
+# 3.10b Threat Globe destination — read is any authenticated role (the
+# globe view itself is a dashboard page an Analyst can see), the override
+# is admin-only like every other write in this file.
+@router.get("/settings/threat-globe", response_model=Dict[str, Any])
+async def get_threat_globe_settings(current_user: TokenData = Depends(require_any_role)):
+    return settings_manager.get_threat_globe()
+
+
+@router.post("/settings/threat-globe", response_model=Dict[str, Any])
+async def update_threat_globe_settings(request: Request,
+    settings: ThreatGlobeModel, current_user: TokenData = Depends(require_admin)
+):
+    if settings.override_enabled and (settings.override_lat is None or settings.override_lon is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="override_lat and override_lon are required when override_enabled is true.",
+        )
+    # server_lat/lon/label/auto_detected are the auto-detection's own
+    # output — preserved from the current stored value rather than taken
+    # from the submitted body, so a settings-form round-trip can never
+    # accidentally overwrite what threat_globe_location.py detected.
+    current = settings_manager.get_threat_globe()
+    payload = settings.dict()
+    payload["server_lat"] = current.get("server_lat")
+    payload["server_lon"] = current.get("server_lon")
+    payload["server_label"] = current.get("server_label", "")
+    payload["auto_detected"] = current.get("auto_detected", False)
+
+    result = settings_manager.update_threat_globe(payload)
+    log_admin_action("settings", "threat-globe", "update", current_user, details=payload, request=request)
     return result
 
 
@@ -648,7 +842,7 @@ async def get_malware_scanning_settings(current_user: TokenData = Depends(requir
 
 
 @router.post("/settings/malware-scanning", response_model=Dict[str, Any])
-async def update_malware_scanning_settings(
+async def update_malware_scanning_settings(request: Request,
     settings: MalwareScanningModel, current_user: TokenData = Depends(require_admin)
 ):
     if settings.scan_timeout_seconds < 1 or settings.scan_timeout_seconds > 60:
@@ -678,12 +872,12 @@ async def update_malware_scanning_settings(
             detail=f"Failed to apply and reload settings in NGINX. {err_msg}",
         )
 
-    log_admin_action("settings", "malware_scanning", "update", current_user, details=settings.dict())
+    log_admin_action("settings", "malware_scanning", "update", current_user, details=settings.dict(), request=request)
     return saved_settings
 
 
 @router.post("/settings/malware-scanning/check-now", response_model=Dict[str, Any])
-async def check_malware_scanning_now(current_user: TokenData = Depends(require_admin)):
+async def check_malware_scanning_now(request: Request, current_user: TokenData = Depends(require_admin)):
     """Pings ClamAV immediately, bypassing the 60s monitor cycle — lets an
     admin verify connectivity right after enabling the feature instead of
     waiting for the next scheduled check."""
@@ -700,7 +894,7 @@ async def check_malware_scanning_now(current_user: TokenData = Depends(require_a
         "last_check_error": None if reachable else "ClamAV unreachable or ping timed out",
     })
 
-    log_admin_action("settings", "malware_scanning", "check_now", current_user, details={"reachable": reachable})
+    log_admin_action("settings", "malware_scanning", "check_now", current_user, details={"reachable": reachable}, request=request)
     return saved_settings
 
 
@@ -711,7 +905,7 @@ async def check_malware_scanning_now(current_user: TokenData = Depends(require_a
 # ever touched the hardcoded "admin" record). Admin-issued resets for OTHER
 # accounts live in /users/{id}/reset-password (app/routes/users.py).
 @router.post("/settings/password")
-async def change_password(
+async def change_password(request: Request,
     payload: PasswordChangeModel, current_user: TokenData = Depends(require_admin)
 ):
     from app.services.user_service import user_service
@@ -728,7 +922,7 @@ async def change_password(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     user_service.set_password(user["id"], payload.newPassword)
-    log_admin_action("settings", "password", "change_own_password", current_user)
+    log_admin_action("settings", "password", "change_own_password", current_user, request=request)
     return {"message": "Password updated successfully!"}
 
 

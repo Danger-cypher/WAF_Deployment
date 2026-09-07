@@ -147,6 +147,11 @@ function _M.check(red)
     if schema.mode == "enforce" then
         ngx.log(ngx.WARN, "API schema violation (enforced) for ", host, " ", method, " ", uri,
             ": ", table.concat(violations, "; "))
+        -- WAF-LUA-BLOCK: same consistent tag ml_check.lua's blocking
+        -- checks log (see its mTLS check's comment for the full
+        -- explanation) — feeds this decision into waf_events alongside
+        -- ModSecurity's own, same as every other Lua-layer block.
+        ngx.log(ngx.WARN, "WAF-LUA-BLOCK reason=api_schema code=400 client=", ngx.var.remote_addr or "", " uri=", uri)
         -- Same convention as bot_challenge.check(): release the shared
         -- connection back to the keepalive pool ourselves before an exit
         -- the caller's own set_keepalive() further down will never reach.

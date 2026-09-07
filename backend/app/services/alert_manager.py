@@ -6,11 +6,45 @@ import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
+from app.parsers.nginx_errorlog_parser import extract_crs_score
 from app.services.alert_db_service import AlertDatabaseService
 from app.services.alert_dispatcher import notification_dispatcher
 from app.websocket.connection_manager import manager as ws_manager
 
 logger = logging.getLogger(__name__)
+
+# Default ceiling on how many notifications ONE alert rule may dispatch per
+# hour, across every event signature. See the "5b" block in trigger_event()
+# for why a per-signature throttle alone is not a bound. Overridable per rule
+# via its max_alerts_per_hour column; 0 disables the ceiling for that rule.
+MAX_ALERTS_PER_RULE_PER_HOUR = 60
+
+
+def _to_event_scale(threshold: Any) -> float:
+    """Maps an alert-rule threshold onto the 0.0-1.0 scale the ML engine
+    actually emits, accepting the 0-100 percentage scale the UI presents.
+
+    The product is inconsistent about this scale and always has been: the
+    engine stores threat_score/xgb_prob as 0.0-1.0, while MLEngine.jsx
+    renders `value * 100` with a "%", the README says "Threat Score (0 to
+    100%)", and the alert-rule builder's placeholder is
+    {"threat_score_gt": 80}. An admin following the product's own examples
+    wrote thresholds that could never be met.
+
+    The conversion is unambiguous rather than a guess: on a 0.0-1.0 scale a
+    threshold above 1.0 is unsatisfiable by definition, so a value >1 can
+    only ever have been meant as a percentage. Reinterpreting it strictly
+    turns dead rules into working ones and changes the meaning of no rule
+    that was already capable of firing. Values <= 1.0 pass through
+    untouched, so an operator who wrote 0.85 still gets 0.85.
+
+    See audit finding P1-02.
+    """
+    try:
+        value = float(threshold)
+    except (TypeError, ValueError):
+        return float("inf")  # Unparseable threshold never matches.
+    return value / 100.0 if value > 1.0 else value
 
 
 class AlertManager:
@@ -27,27 +61,86 @@ class AlertManager:
         """
         try:
             # 1. Threat Score
+            #
+            # Scale reconciliation (audit finding P1-02). The ML engine emits
+            # threat_score on a 0.0-1.0 scale, but the whole product presents
+            # it as a percentage: MLEngine.jsx renders `threat_score * 100`
+            # with a "%" suffix, the README documents "Threat Score (0 to
+            # 100%)", the alert-rule builder's own placeholder text is
+            # {"threat_score_gt": 80}, and the seeded default rule "Critical
+            # ML Threat" ships with threat_score_gt: 80 and the description
+            # "Triggers when combined ML threat score exceeds 80".
+            #
+            # This comparison used the raw value, so every rule written the
+            # way the product itself teaches was unsatisfiable — 0.30 <= 80
+            # is always true, so it always returned no-match. Measured on the
+            # running deployment: 108,014 scored requests, highest
+            # threat_score ever recorded 0.30, zero alerts.
+            #
+            # _to_event_scale() resolves this without breaking anyone: a
+            # threshold above 1.0 cannot be satisfied on a 0-1 scale under
+            # any circumstances, so reinterpreting it as a percentage only
+            # ever turns a dead rule into a working one. A threshold of 0.85
+            # keeps meaning 0.85.
             threat_score_gt = conditions.get("threat_score_gt")
             if threat_score_gt is not None:
                 event_score = event_data.get("threat_score")
-                if event_score is None or float(event_score) <= float(threat_score_gt):
+                if event_score is None or float(event_score) <= _to_event_scale(threat_score_gt):
                     return False
 
             threat_score_lt = conditions.get("threat_score_lt")
             if threat_score_lt is not None:
                 event_score = event_data.get("threat_score")
-                if event_score is None or float(event_score) >= float(threat_score_lt):
+                if event_score is None or float(event_score) >= _to_event_scale(threat_score_lt):
                     return False
 
             # 2. CRS Score
             crs_score_gt = conditions.get("crs_score_gt")
             if crs_score_gt is not None:
-                # ModSecurity scores can be in crs_score or violations[0].rule_id, or just raw crs_score in ml events
+                # Primary source: LogEntry.crs_score, parsed from the 949110
+                # "Total Score: N" message at ingestion. That field did not
+                # exist until audit finding P1-02 — the default-enabled
+                # "High WAF Attack Rule" (crs_score_gt: 4) read it, always
+                # got None, and so returned no-match on every one of the
+                # 227,317 events ingested over 51 days. Zero alerts were
+                # delivered in that window.
                 event_crs = event_data.get("crs_score")
-                # Sometimes it might be raw score from ModSecurity parsed log
+
+                # Fallback for ml_events-shaped payloads and for events
+                # ingested before crs_score existed. The previous version of
+                # this fallback was itself broken two ways: raw_log arrives
+                # as a JSON *string* (it is a String column in ClickHouse),
+                # so .get() on it raised AttributeError straight into the
+                # broad except below; and even once decoded there is no
+                # "score" key under extracted_fields — the anomaly total is
+                # only ever present inside the message text.
                 if event_crs is None:
-                    # Look inside raw log or extracted fields if available
-                    event_crs = event_data.get("raw_log", {}).get("extracted_fields", {}).get("score")
+                    raw = event_data.get("raw_log")
+                    if isinstance(raw, str):
+                        try:
+                            raw = json.loads(raw)
+                        except (ValueError, TypeError):
+                            raw = None
+                    if isinstance(raw, dict):
+                        fields = raw.get("extracted_fields")
+                        if isinstance(fields, dict):
+                            event_crs = fields.get("score")
+                        if event_crs is None:
+                            event_crs = extract_crs_score(raw.get("message") or "")
+
+                # Last resort: the message on the event itself, or on any of
+                # its violations. In the JSON audit format the anomaly total
+                # sits on the 949110 violation rather than the top-level
+                # message.
+                if event_crs is None:
+                    event_crs = extract_crs_score(event_data.get("message") or "")
+                if event_crs is None:
+                    for v in event_data.get("violations") or []:
+                        msg = v.get("message") if isinstance(v, dict) else getattr(v, "message", None)
+                        event_crs = extract_crs_score(msg or "")
+                        if event_crs is not None:
+                            break
+
                 if event_crs is None:
                     return False
                 try:
@@ -64,17 +157,47 @@ class AlertManager:
                     return False
 
             # 4. ML Novelty/Isolation Forest score
+            #
+            # Sign reconciliation (audit finding P1-02). scikit-learn's
+            # IsolationForest.score_samples() is inverted relative to
+            # intuition: MORE NEGATIVE means more anomalous, and a normal
+            # request scores near zero or above. ml_server.py's own anomaly
+            # trigger reflects that — it fires on `iso_score < -0.35`.
+            #
+            # The seeded rule "ML Novelty Anomaly" ships with
+            # isolation_score_gt: 0.5, i.e. it demanded a POSITIVE score,
+            # which on this scale means "unusually normal". It could never
+            # match an anomaly. Measured live: 106,646 of 108,014 events had
+            # iso_score < -0.35 (so the engine raised ml_anomaly for them),
+            # and not one of them satisfied the rule that exists to catch them.
+            #
+            # Compared here against normalized anomaly STRENGTH on a 0-1
+            # scale, using the exact same formula threat_score.py already
+            # uses to fold this into the combined score (-iso/0.5, clamped).
+            # A negative threshold is taken as the raw score, so anyone who
+            # understood the sklearn convention and wrote isolation_score_gt:
+            # -0.35 keeps the behaviour they intended.
             isolation_score_gt = conditions.get("isolation_score_gt")
             if isolation_score_gt is not None:
                 event_iso = event_data.get("iso_score")
-                if event_iso is None or float(event_iso) <= float(isolation_score_gt):
+                if event_iso is None:
                     return False
+                threshold = float(isolation_score_gt)
+                if threshold < 0:
+                    # Raw sklearn scale: more negative = more anomalous.
+                    if float(event_iso) >= threshold:
+                        return False
+                else:
+                    anomaly_strength = min(max(-float(event_iso) / 0.5, 0.0), 1.0)
+                    if anomaly_strength <= _to_event_scale(threshold):
+                        return False
 
-            # 5. XGBoost Probability
+            # 5. XGBoost Probability — a 0.0-1.0 probability the UI also
+            # presents as a percentage, so same reconciliation as above.
             xgb_prob_gt = conditions.get("xgb_prob_gt")
             if xgb_prob_gt is not None:
                 event_xgb = event_data.get("xgb_prob")
-                if event_xgb is None or float(event_xgb) <= float(xgb_prob_gt):
+                if event_xgb is None or float(event_xgb) <= _to_event_scale(xgb_prob_gt):
                     return False
 
             # 6. Geolocation filters
@@ -165,6 +288,43 @@ class AlertManager:
 
             # 5. Check throttling
             is_throttled = self.db.should_throttle_alert(rule_id, event_signature, throttle_minutes)
+
+            # 5b. Per-rule notification ceiling (audit finding P1-02).
+            #
+            # The signature throttle above dedupes per (rule_id, client_ip,
+            # uri). That stops the same alert repeating, but puts no bound on
+            # a rule that matches broadly — every new IP/URI pair opens its
+            # own bucket, so on a busy site a mis-thresholded rule dispatches
+            # essentially without limit.
+            #
+            # Concrete risk in this deployment: the seeded "ML Novelty
+            # Anomaly" rule matches on Isolation Forest anomaly strength, and
+            # the deployed model scores 100% of real traffic above that bar
+            # (108,018 events; the highest iso_score ever recorded is
+            # -0.3456, so nothing has ever been classified normal). Fixing
+            # the evaluator without this ceiling would have converted a
+            # product that delivered zero alerts into one that delivers an
+            # alert per request — a worse failure, and one that would bury
+            # the genuine attack alerts this work exists to restore.
+            #
+            # Per-rule and configurable, defaulting to MAX_ALERTS_PER_RULE_PER_HOUR.
+            # Set max_alerts_per_hour to 0 on a rule to opt out (e.g. a
+            # SIEM-only rule that must forward everything).
+            ceiling = rule.get("max_alerts_per_hour")
+            ceiling = MAX_ALERTS_PER_RULE_PER_HOUR if ceiling is None else int(ceiling)
+            over_ceiling = False
+            if ceiling > 0 and not is_throttled:
+                recent = self.db.count_recent_notifications(rule_id, minutes=60)
+                if recent >= ceiling:
+                    over_ceiling = True
+                    logger.warning(
+                        f"Alert rule '{rule_name}' (ID: {rule_id}) hit its notification "
+                        f"ceiling of {ceiling}/hour ({recent} already sent). Further "
+                        f"matches this hour are aggregated, not dispatched. This usually "
+                        f"means the rule's condition matches far more traffic than "
+                        f"intended — review its threshold."
+                    )
+            is_throttled = is_throttled or over_ceiling
 
             # Retrieve rule channels
             channels_str = rule.get("channels", "[]")

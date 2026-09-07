@@ -9,6 +9,23 @@ Design notes:
 - All inserts are batched — never row-by-row
 - Reads use parameterized queries to prevent injection
 - Client is created once per process (module-level singleton with reconnect on failure)
+
+CI's bandit job (audit finding P2-10) skips B608 (hardcoded_sql_expressions)
+for this file specifically, not project-wide. Every f-string query here that
+trips that rule was manually re-verified (2026-09-05) against the invariant
+_build_waf_events_where_clause's own docstring documents: user-controlled
+values always go through clickhouse-connect's %(name)s parameter binding,
+never raw string interpolation; the only things ever interpolated directly
+are int()-cast numeric params, strftime()-formatted datetimes, or fixed
+module-level constants (_PUBLIC_COLUMNS-style column lists, internal dict
+keys like SEVERITY_ORDER's). Line-level `# nosec` comments don't work here because bandit anchors each
+finding on the opening triple-quote of a multi-line f-string, which can't
+carry a trailing comment without corrupting the query text itself —
+confirmed the hard way once already; see git history before redoing any of
+this per-line. A genuinely new SQL-injection-shaped issue
+introduced later in this file will NOT be caught by CI as a result: read
+new f-string queries here against the invariant above by hand, the same
+way this pass did, rather than trusting the scanner for this one file.
 """
 
 import json
@@ -211,6 +228,42 @@ def reset_fabricated_api_discovery_fields() -> None:
         logger.error(f"ClickHouse api_discovery fabricated-field reset failed: {e}")
 
 
+def _to_utc_datetime(ts: Any) -> datetime:
+    """Coerce a timestamp (a "%Y-%m-%d %H:%M:%S" UTC wall-clock string, a
+    datetime, or anything else/missing) into a tz-aware UTC datetime.
+
+    clickhouse_connect serializes a Python datetime for a `DateTime` column
+    via `int(x.timestamp())` (see clickhouse_connect/datatypes/temporal.py).
+    `datetime.timestamp()` on a *naive* datetime assumes the *process's*
+    local system timezone — and this container's system timezone is IST
+    (Asia/Kolkata, from the bind-mounted /etc/localtime), not UTC. Every
+    caller here parses an already-UTC string (upstream parsers, e.g.
+    modsec_parser.py, already convert from the log's local timestamp to a
+    UTC string) into a *naive* datetime and handed that straight to
+    `client.insert()` — so clickhouse_connect re-interpreted that
+    already-UTC wall clock as IST and shifted it another 5:30 into the
+    past. A `DateTime('Asia/Kolkata')` column type made this look like a
+    schema bug (see configs/clickhouse/init.sql's history), but retyping
+    the column to plain `DateTime` didn't fix it: this native-protocol
+    insert path never consults the column's declared timezone at all, only
+    the Python object's own tzinfo. Tagging the datetime as UTC-aware here
+    makes `.timestamp()` correct regardless of the process's system tz.
+    """
+    if isinstance(ts, datetime):
+        return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+    if isinstance(ts, str):
+        try:
+            return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+        try:
+            parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
+
 # ---------------------------------------------------------------------------
 # waf_events — Write
 # ---------------------------------------------------------------------------
@@ -228,18 +281,8 @@ def insert_waf_events(entries: List[Dict[str, Any]]) -> int:
 
     rows = []
     for e in entries:
-        # Normalise timestamp to datetime object
-        ts = e.get("timestamp", "")
-        if isinstance(ts, str):
-            try:
-                ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                try:
-                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
-                except Exception:
-                    ts = datetime.utcnow()
-        elif not isinstance(ts, datetime):
-            ts = datetime.utcnow()
+        # Normalise timestamp to a tz-aware UTC datetime — see _to_utc_datetime()
+        ts = _to_utc_datetime(e.get("timestamp", ""))
 
         rows.append([
             str(e.get("id", "")),
@@ -535,7 +578,7 @@ def query_waf_events(
 
     try:
         count_result = client.query(
-            f"SELECT count() FROM waf_events WHERE {where_clause}",
+            f"SELECT count() FROM waf_events WHERE {where_clause}",  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
             parameters=where_params,
         )
         total = count_result.result_rows[0][0] if count_result.result_rows else 0
@@ -695,7 +738,7 @@ def get_waf_event_by_id(log_id: str) -> Optional[Dict]:
         return None
     try:
         result = client.query(
-            f"""
+            """
             SELECT id, timestamp, client_ip, country, source_asn_org,
                    method, uri, hostname, http_code,
                    rule_id, message, severity, attack_type,
@@ -815,7 +858,6 @@ def get_stats(hours: Optional[int] = None, offset_hours: int = 0) -> Dict[str, A
         raise ValueError("offset_hours requires a bounded `hours` window")
 
     time_filter = _offset_time_filter_clause(hours, offset_hours) if hours is not None else ""
-    recent_filter = "AND timestamp >= now() - INTERVAL 1 MINUTE"
 
     try:
         result = client.query(f"""
@@ -1147,7 +1189,7 @@ def get_total_blocked_count(hours: Optional[int] = None) -> int:
         return 0
     time_filter = _time_filter_clause(hours)
     try:
-        result = client.query(f"SELECT count() FROM waf_events WHERE 1=1 {time_filter}")
+        result = client.query(f"SELECT count() FROM waf_events WHERE 1=1 {time_filter}")  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
         return int(result.result_rows[0][0]) if result.result_rows else 0
     except Exception as e:
         logger.error(f"get_total_blocked_count failed: {e}")
@@ -1163,14 +1205,7 @@ def insert_ml_event(event: Dict[str, Any]) -> bool:
     if client is None:
         return False
 
-    ts = event.get("timestamp")
-    if isinstance(ts, str):
-        try:
-            ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            ts = datetime.utcnow()
-    elif not isinstance(ts, datetime):
-        ts = datetime.utcnow()
+    ts = _to_utc_datetime(event.get("timestamp"))
 
     row = [[
         str(event.get("unique_id", "")),
@@ -1254,7 +1289,6 @@ def get_ml_events(
     client = _get_client()
     if client is None:
         return [], 0
-    time_filter = _time_filter_clause(hours)
     where = ["1=1"] + ([f"timestamp >= now() - INTERVAL {int(hours)} HOUR"] if hours else [])
     params: Dict[str, Any] = {}
     if decision:
@@ -1265,7 +1299,7 @@ def get_ml_events(
 
     try:
         count_result = client.query(
-            f"SELECT count() FROM ml_events WHERE {where_clause}",
+            f"SELECT count() FROM ml_events WHERE {where_clause}",  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
             parameters=params,
         )
         total = count_result.result_rows[0][0] if count_result.result_rows else 0
@@ -1306,14 +1340,7 @@ def insert_analyst_feedback(record: Dict[str, Any]) -> bool:
     if client is None:
         return False
 
-    ts = record.get("event_timestamp") or record.get("timestamp", "")
-    if isinstance(ts, str):
-        try:
-            ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            ts = datetime.utcnow()
-    elif not isinstance(ts, datetime):
-        ts = datetime.utcnow()
+    ts = _to_utc_datetime(record.get("event_timestamp") or record.get("timestamp", ""))
 
     entry_id = str(record.get("id", ""))
     if not entry_id:
@@ -1354,7 +1381,7 @@ def get_false_positive_by_log_id(log_id: str) -> Optional[Dict]:
         return None
     try:
         result = client.query(
-            f"""
+            """
             SELECT log_id, rule_id, client_ip, uri, event_timestamp,
                    severity, attack_type, status, analyst_note, created_by, raw_log, id
             FROM analyst_feedback FINAL
@@ -1385,7 +1412,7 @@ def get_false_positive_by_id(entry_id: str) -> Optional[Dict]:
         return None
     try:
         result = client.query(
-            f"""
+            """
             SELECT log_id, rule_id, client_ip, uri, event_timestamp,
                    severity, attack_type, status, analyst_note, created_by, raw_log, id
             FROM analyst_feedback FINAL
@@ -1476,12 +1503,7 @@ def update_false_positive_status(entry_id: str, new_status: str) -> Optional[Dic
         return None
 
     try:
-        ts = existing.get("timestamp", "")
-        if isinstance(ts, str):
-            try:
-                ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                ts = datetime.utcnow()
+        ts = _to_utc_datetime(existing.get("timestamp", ""))
 
         row = [[
             existing["id"],
@@ -1521,12 +1543,7 @@ def update_false_positive_note(entry_id: str, note: str) -> Optional[Dict]:
         return None
 
     try:
-        ts = existing.get("timestamp", "")
-        if isinstance(ts, str):
-            try:
-                ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                ts = datetime.utcnow()
+        ts = _to_utc_datetime(existing.get("timestamp", ""))
 
         row = [[
             existing["id"],
@@ -1566,12 +1583,7 @@ def delete_false_positive(entry_id: str) -> bool:
         return False
 
     try:
-        ts = existing.get("timestamp", "")
-        if isinstance(ts, str):
-            try:
-                ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                ts = datetime.utcnow()
+        ts = _to_utc_datetime(existing.get("timestamp", ""))
 
         row = [[
             existing["id"],
@@ -1613,14 +1625,7 @@ def insert_api_discovery(records: List[Dict[str, Any]]) -> int:
 
     rows = []
     for r in records:
-        ts = r.get("timestamp", "")
-        if isinstance(ts, str):
-            try:
-                ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                ts = datetime.utcnow()
-        elif not isinstance(ts, datetime):
-            ts = datetime.utcnow()
+        ts = _to_utc_datetime(r.get("timestamp", ""))
 
         rows.append([
             str(r.get("uri", "")),
@@ -1861,18 +1866,10 @@ def backfill_api_discovery_rows(rows: List[Dict[str, Any]]) -> int:
     if client is None:
         return 0
 
-    def _parse_ts(v):
-        if isinstance(v, datetime):
-            return v
-        try:
-            return datetime.strptime(v, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return datetime.utcnow()
-
     ch_rows = []
     for r in rows:
-        first_seen = _parse_ts(r.get("first_seen"))
-        last_seen = _parse_ts(r.get("last_seen"))
+        first_seen = _to_utc_datetime(r.get("first_seen"))
+        last_seen = _to_utc_datetime(r.get("last_seen"))
         ch_rows.append([
             str(r.get("uri", "")),
             str(r.get("method", "")),
@@ -1917,7 +1914,7 @@ def insert_alert_history(record: Dict[str, Any]) -> bool:
         ack_at = record.get("acknowledged_at")
         if isinstance(ack_at, str) and ack_at:
             try:
-                ack_at = datetime.strptime(ack_at[:19], "%Y-%m-%d %H:%M:%S")
+                ack_at = datetime.strptime(ack_at[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             except Exception:
                 ack_at = None
         client.insert("alert_history", [[
@@ -2054,7 +2051,7 @@ def get_alert_stats(days: int = 30) -> Dict[str, Any]:
         cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
 
         # Total count
-        total_res = client.query(f"SELECT count() FROM alert_history WHERE created_at >= '{cutoff_str}'")
+        total_res = client.query(f"SELECT count() FROM alert_history WHERE created_at >= '{cutoff_str}'")  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
         total_alerts = total_res.result_rows[0][0] if total_res.result_rows else 0
 
         # By severity
@@ -2130,12 +2127,12 @@ def get_alert_stats(days: int = 30) -> Dict[str, Any]:
         mid_str = mid_cutoff.strftime("%Y-%m-%d %H:%M:%S")
 
         fh_res = client.query(
-            f"SELECT count() FROM alert_history WHERE created_at >= '{cutoff_str}' AND created_at < '{mid_str}'"
+            f"SELECT count() FROM alert_history WHERE created_at >= '{cutoff_str}' AND created_at < '{mid_str}'"  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
         )
         first_half = fh_res.result_rows[0][0] if fh_res.result_rows else 0
 
         sh_res = client.query(
-            f"SELECT count() FROM alert_history WHERE created_at >= '{mid_str}'"
+            f"SELECT count() FROM alert_history WHERE created_at >= '{mid_str}'"  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
         )
         second_half = sh_res.result_rows[0][0] if sh_res.result_rows else 0
 
@@ -2231,7 +2228,7 @@ def get_audit_log(
 
     try:
         count_result = client.query(
-            f"SELECT count() FROM audit_log WHERE {where_clause}",
+            f"SELECT count() FROM audit_log WHERE {where_clause}",  # nosec B608 — value(s) always passed via clickhouse-connect %(name)s params or int()/strftime(), never raw-interpolated; see module docstring
             parameters=params,
         )
         total = count_result.result_rows[0][0] if count_result.result_rows else 0
@@ -2259,3 +2256,95 @@ def get_audit_log(
     except Exception as e:
         logger.error(f"get_audit_log failed: {e}")
         return [], 0
+
+
+# ============================================================================
+# SIEM bulk export (roadmap item) — cursor-based, not offset-paginated.
+# Offset pagination (query_waf_events above) is wrong for a continuously
+# polled export: new rows shift every later page's offset between polls,
+# causing a poller to see duplicates or silently skip rows. Ordering by
+# ingested_at ASC with a `> since` cursor is the standard "tail a log"
+# pattern instead — a poller just remembers the max ingested_at it last
+# received and asks for anything after it next time. ingested_at (not
+# timestamp) is the cursor field specifically because it's assigned at
+# INSERT time and is therefore monotonically increasing with real ingestion
+# order, unlike `timestamp` which comes from parsed log lines that can
+# arrive out of order (e.g. a backfill, or two parsers racing).
+# ============================================================================
+
+def query_waf_events_since(since: datetime, limit: int = 500) -> List[Dict]:
+    """Rows ingested strictly after `since`, oldest first, capped at
+    `limit`. Returns [] if ClickHouse is unreachable — the caller (the
+    export route) treats that as "nothing new" rather than an error, same
+    fail-open shape as every other read path in this service."""
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        # `since` is the only value substituted via clickhouse-connect's
+        # %(name)s parameter binding (a datetime object it serializes
+        # safely) — see _build_waf_events_where_clause's header comment
+        # for why this specific style is the one proven safe in this
+        # codebase (a real SQLi bug previously came from two call sites
+        # skipping it). `limit` is a plain int() cast inlined directly,
+        # matching query_waf_events()'s own identical LIMIT convention
+        # just above — never raw/unvalidated user text either way.
+        result = client.query(
+            f"""
+            SELECT id, timestamp, client_ip, country, source_asn_org,
+                   method, uri, hostname, http_code,
+                   rule_id, message, severity, attack_type, ingested_at
+            FROM waf_events
+            WHERE ingested_at > %(since)s
+            ORDER BY ingested_at ASC
+            LIMIT {int(limit)}
+            """,
+            parameters={"since": since},
+        )
+        columns = [
+            "id", "timestamp", "client_ip", "country", "source_asn_org",
+            "method", "uri", "hostname", "http_code",
+            "rule_id", "message", "severity", "attack_type", "ingested_at",
+        ]
+        rows = []
+        for row in result.result_rows:
+            d = dict(zip(columns, row))
+            rows.append(d)
+        return rows
+    except Exception as e:
+        logger.error(f"query_waf_events_since failed: {e}")
+        return []
+
+
+def query_ml_events_since(since: datetime, limit: int = 500) -> List[Dict]:
+    """ML-scoring counterpart to query_waf_events_since() above — same
+    cursor semantics."""
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        result = client.query(
+            f"""
+            SELECT unique_id, timestamp, remote_addr, method, uri, ua,
+                   crs_score, xgb_prob, iso_score, threat_score, decision,
+                   ingested_at
+            FROM ml_events
+            WHERE ingested_at > %(since)s
+            ORDER BY ingested_at ASC
+            LIMIT {int(limit)}
+            """,
+            parameters={"since": since},
+        )
+        columns = [
+            "unique_id", "timestamp", "remote_addr", "method", "uri", "ua",
+            "crs_score", "xgb_prob", "iso_score", "threat_score", "decision",
+            "ingested_at",
+        ]
+        rows = []
+        for row in result.result_rows:
+            d = dict(zip(columns, row))
+            rows.append(d)
+        return rows
+    except Exception as e:
+        logger.error(f"query_ml_events_since failed: {e}")
+        return []

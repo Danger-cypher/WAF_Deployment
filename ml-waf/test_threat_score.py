@@ -82,3 +82,33 @@ def test_get_routing_outcome_unaffected_still_takes_bare_float():
         crs_score=25.0, xgb_prob=0.0, iso_score=0.0, redis_rep=0.0, abuse_score=0.0
     )
     assert threat_score.get_routing_outcome(result["total"], crs_score=25.0) == "block"
+
+
+# ---------------------------------------------------------------------------
+# P2-01 — the CRS high-certainty override must actually be reachable.
+#
+# ModSecurity's own access-phase blocking rule (949110) denies anything
+# scoring >= tx.inbound_anomaly_score_threshold (5, per rules-override.conf)
+# before ml_decide.lua's content-phase code — this function's real caller —
+# ever runs. A crs_score of 20 could therefore never reach get_routing_
+# outcome() in production: dead code presenting as a working safety net.
+# ---------------------------------------------------------------------------
+
+def test_high_crs_score_within_reachable_range_forces_block():
+    # 4.0 is the highest score realistically reachable here (one point
+    # under ModSecurity's own block line) — must force "block" even when
+    # every other signal says otherwise.
+    assert threat_score.get_routing_outcome(0.0, crs_score=4.0) == "block"
+
+
+def test_below_the_reachable_threshold_defers_to_the_blended_score():
+    # 3.9 must NOT trigger the override — falls through to the normal
+    # score-band routing below.
+    assert threat_score.get_routing_outcome(0.0, crs_score=3.9) == "allow"
+    assert threat_score.get_routing_outcome(0.90, crs_score=3.9) == "block"  # via score band, not the override
+
+
+def test_old_unreachable_threshold_no_longer_gates_anything():
+    # The literal bug: a crs_score that used to fall through silently
+    # (anything in [4, 20)) must now correctly force a block.
+    assert threat_score.get_routing_outcome(0.0, crs_score=10.0) == "block"

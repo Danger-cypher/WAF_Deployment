@@ -25,6 +25,19 @@ import app.routes.auth as auth_route
 import app.routes.users as users_route
 import app.routes.sso as sso_route
 from app.main import app as fastapi_app
+from app.config.settings import settings
+from cryptography.fernet import Fernet
+
+
+@pytest.fixture(autouse=True)
+def _channel_encryption_key(monkeypatch):
+    """alert_db_service.py refuses to create/read an alert channel's config
+    without CHANNEL_ENCRYPTION_KEY set (audit finding P2-03) — give every
+    test a real one so channel-creating tests written before that fix keep
+    testing what they were written to test. The key-*missing* behavior
+    gets its own tests in test_channel_encryption.py, which override this
+    back to "" explicitly."""
+    monkeypatch.setattr(settings, "CHANNEL_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 
 @pytest.fixture(autouse=True)

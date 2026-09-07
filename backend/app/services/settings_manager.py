@@ -55,6 +55,10 @@ DEFAULT_SETTINGS = {
         "server_cloaking": True,
         "ip_blacklist": [],
         "ip_whitelist": [],
+        # Known-bad TLS-client (JA4) fingerprints — see ml-waf/ja4.lua.
+        # Exact-match only; admin-curated (own observations or pasted from
+        # external threat intel), not auto-learned yet.
+        "ja4_blacklist": [],
     },
     # Distinct from hardening.ip_whitelist/ip_blacklist above, which gates
     # ALL site traffic through nginx/ml_check.lua. This one gates only the
@@ -76,8 +80,43 @@ DEFAULT_SETTINGS = {
     "threat_intel": {
         "enabled": False,
         "sync_interval_hours": 24,
+        # Per-source opt-in — see threat_intel_service.py's DEFAULT_SOURCES
+        # for why tor_exit_nodes defaults off while the other two don't.
+        "sources": {
+            "spamhaus": True,
+            "emerging_threats": True,
+            "tor_exit_nodes": False,
+        },
         "last_sync_at": None,
         "last_sync_count": 0,
+        "last_sync_counts": {},
+        "last_sync_status": "never_run",
+        "last_sync_error": None,
+    },
+    # Verified-good-crawler allowlist — see good_bot_service.py. Distinct
+    # from nginx_manager.py's static $is_bad_bot UA map (which only ever
+    # lists known-BAD tool signatures, never Google/Bing — it doesn't
+    # block legitimate crawlers today). This exists because nothing else
+    # in the stack recognizes Googlebot/Bingbot as special: a real
+    # crawler's fast, sequential, referrer-less request pattern is exactly
+    # the shape the ML engine's adaptive reputation throttle is designed
+    # to flag as suspicious. UA string alone is trivially spoofable, so
+    # this only trusts a request when its source IP matches that crawler's
+    # own officially-published IP ranges (Google's/Bing's own JSON feeds)
+    # AND the UA claims that crawler — verified IP is what actually
+    # matters; the UA check just scopes which crawler's range to check
+    # against. Disabled by default, same convention as threat_intel/
+    # malware_scanning/Positive Security.
+    "good_bots": {
+        "enabled": False,
+        "sync_interval_hours": 24,
+        "sources": {
+            "googlebot": True,
+            "bingbot": True,
+        },
+        "last_sync_at": None,
+        "last_sync_count": 0,
+        "last_sync_counts": {},
         "last_sync_status": "never_run",
         "last_sync_error": None,
     },
@@ -118,6 +157,22 @@ DEFAULT_SETTINGS = {
         # take precedence over this default via _deep_merge on load.
         "monitored_files": [],
         "check_interval_seconds": 5,
+    },
+    # Where the Threat Globe view draws attack arcs landing — auto-detected
+    # once at startup from this server's own public IP (see
+    # threat_globe_location.py) and cached here so it survives without a
+    # GeoIP lookup on every page load. An admin behind a CDN/reverse-proxy
+    # (where the detected IP isn't the real deployment location) can
+    # override it from Settings.
+    "threat_globe": {
+        "server_lat": None,
+        "server_lon": None,
+        "server_label": "",
+        "auto_detected": False,
+        "override_enabled": False,
+        "override_lat": None,
+        "override_lon": None,
+        "override_label": "",
     },
 }
 
@@ -363,6 +418,14 @@ class SettingsManager:
         self.save_settings(self.settings)
         return self.settings["threat_intel"]
 
+    def get_good_bots(self) -> Dict[str, Any]:
+        return self.settings.get("good_bots", DEFAULT_SETTINGS["good_bots"])
+
+    def update_good_bots(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["good_bots"] = data
+        self.save_settings(self.settings)
+        return self.settings["good_bots"]
+
     def get_auto_reputation(self) -> Dict[str, Any]:
         return self.settings.get("auto_reputation", DEFAULT_SETTINGS["auto_reputation"])
 
@@ -378,6 +441,26 @@ class SettingsManager:
         self.settings["malware_scanning"] = data
         self.save_settings(self.settings)
         return self.settings["malware_scanning"]
+
+    def get_threat_globe(self) -> Dict[str, Any]:
+        return self.settings.get("threat_globe", DEFAULT_SETTINGS["threat_globe"])
+
+    def update_threat_globe(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["threat_globe"] = data
+        self.save_settings(self.settings)
+        return self.settings["threat_globe"]
+
+    def set_threat_globe_auto_location(self, lat: float, lon: float, label: str) -> None:
+        """Called once at startup by threat_globe_location.py's self-lookup
+        — separate from update_threat_globe so it never clobbers an
+        admin's manual override with a fresh auto-detection result."""
+        current = dict(self.settings.get("threat_globe", DEFAULT_SETTINGS["threat_globe"]))
+        current["server_lat"] = lat
+        current["server_lon"] = lon
+        current["server_label"] = label
+        current["auto_detected"] = True
+        self.settings["threat_globe"] = current
+        self.save_settings(self.settings)
 
     def get_anti_defacement(self) -> Dict[str, Any]:
         return self.settings.get("anti_defacement", DEFAULT_SETTINGS["anti_defacement"])

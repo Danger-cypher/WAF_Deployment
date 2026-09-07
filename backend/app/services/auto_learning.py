@@ -2,7 +2,7 @@ import json
 import logging
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from app.services import db_service, rule_manager
 from app.services.settings_manager import settings_manager
