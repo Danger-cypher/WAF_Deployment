@@ -67,6 +67,7 @@ server {
 
     location / {
         limit_req zone=zone_app_7 burst=100;
+        include /etc/nginx/conf.d/waf_ddos_limits.inc;
         set $waf_upstream_location "@proxy_app_7";
         content_by_lua_file /opt/ml-waf/ml_decide.lua;
     }
@@ -74,6 +75,7 @@ server {
     location /api {
         error_page 403 = @json_forbidden;
         limit_req zone=zone_app_7 burst=33 nodelay;
+        include /etc/nginx/conf.d/waf_ddos_limits.inc;
         set $waf_upstream_location "@proxy_app_7";
         content_by_lua_file /opt/ml-waf/ml_decide.lua;
     }

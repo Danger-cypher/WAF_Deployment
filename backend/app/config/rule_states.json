@@ -3,6 +3,14 @@
   "paranoia_level": 1,
   "audit_history": [
     {
+      "timestamp": "2026-09-07 13:04:54",
+      "username": "admin",
+      "action": "reset",
+      "rule_id": null,
+      "rule_name": null,
+      "details": "Restored all OWASP CRS rules to system default enabled state and reset paranoia level to PL1."
+    },
+    {
       "timestamp": "2026-09-04 15:32:22",
       "username": "admin",
       "action": "reset",
