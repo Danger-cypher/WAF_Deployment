@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "xgboost": {
-    "version": 49,
+    "version": 51,
     "type": "production",
-    "training_date": "2026-09-08T00:02:54.466473Z",
+    "training_date": "2026-09-19T20:30:12.305508Z",
     "sample_count": 5177,
     "accuracy": 1.0,
     "balanced_accuracy": 1.0,
     "notes": "2902 benign + 2275 attack samples used for training."
   },
   "isolation_forest": {
-    "version": 48,
+    "version": 50,
     "type": "production",
-    "training_date": "2026-09-08T00:02:50.051286Z",
+    "training_date": "2026-09-19T20:30:07.580066Z",
     "sample_count": 3628,
     "accuracy": null,
     "notes": "Trained on 3628 benign baseline samples."
