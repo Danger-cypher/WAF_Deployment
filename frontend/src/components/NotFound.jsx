@@ -1,4 +1,3 @@
-import React from 'react';
 import { AlertCircle, ArrowLeft } from 'lucide-react';
 
 const NotFound = ({ onReturnDashboard }) => {

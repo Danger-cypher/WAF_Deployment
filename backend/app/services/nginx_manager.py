@@ -1694,8 +1694,7 @@ def sync_protected_apps_to_nginx() -> tuple[bool, str]:
                     "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;",
                     "",
                     "    location / {",
-                    "        default_type text/html;",
-                    "        return 404 \"<html><head><title>404 Not Found</title><style>body{font-family:sans-serif;text-align:center;padding:50px;background:#0b0f19;color:#f3f4f6;}h2{color:#ef4444;}.card{max-width:520px;margin:0 auto;background:#131b2e;padding:30px;border-radius:8px;border:1px solid #1e293b;}</style></head><body><div class='card'><h2>Application Not Routed</h2><p style='color:#9ca3af;'>The requested host is not configured on this gateway.</p><p style='font-size:12px;color:#64748b;'>CyberSentinel WAF</p></div></body></html>\";",
+                    "        return 444;",
                     "    }",
                     "}",
                     ""
