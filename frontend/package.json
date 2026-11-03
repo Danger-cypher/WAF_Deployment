@@ -40,6 +40,7 @@
     "vitest": "^3.2.7"
   },
   "overrides": {
-    "d3-color": "^3.1.0"
+    "d3-color": "^3.1.0",
+    "tinypool": "^2.2.0"
   }
 }
