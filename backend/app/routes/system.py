@@ -12,6 +12,7 @@ import logging
 from app.services.auth import require_admin, require_any_role, TokenData
 from app.services import backup_service
 from app.utils.audit import log_admin_action
+from app.utils.safe_error import safe_http_error
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -78,7 +79,7 @@ async def verify_dns_configuration(
     except socket.gaierror:
         raise HTTPException(status_code=400, detail=f"Could not resolve domain: {data.domain}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DNS verification failed: {str(e)}")
+        raise safe_http_error(500, "DNS verification failed", e)
 
 
 @router.post("/nginx-reload")
@@ -142,7 +143,7 @@ def _restart_waf_engine_blocking() -> dict:
                 logger.error(f"Restart waf-openresty container failed: {result.stderr}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to restart waf-openresty container: {result.stderr.strip()}"
+                    detail="Failed to restart waf-openresty container. Check system logs."
                 )
 
             # Restart ml container (best-effort — warn but don't fail)
@@ -164,7 +165,7 @@ def _restart_waf_engine_blocking() -> dict:
             logger.error(f"Restart openresty failed: {result.stderr}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to restart OpenResty WAF Engine: {result.stderr.strip()}"
+                detail="Failed to restart OpenResty WAF Engine. Check system logs."
             )
 
         # Also restart ml-waf service (best-effort)
@@ -180,8 +181,7 @@ def _restart_waf_engine_blocking() -> dict:
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="docker/systemctl command not available in this environment")
     except Exception as e:
-        logger.error(f"Error during WAF restart: {e}")
-        raise HTTPException(status_code=500, detail=f"System error during restart: {str(e)}")
+        raise safe_http_error(500, "System error during restart", e)
 
 
 @router.post("/restart")
@@ -225,7 +225,7 @@ async def purge_stats_cache(current_user: TokenData = Depends(require_admin)):
         logger.info("Cache purged via admin action")
         return {"status": "success", "message": "Dashboard analytics cache purged and rebuilt successfully."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cache purge failed: {str(e)}")
+        raise safe_http_error(500, "Cache purge failed", e)
 
 
 @router.post("/sync-signatures")
@@ -297,8 +297,7 @@ async def create_backup_endpoint(request: Request, current_user: TokenData = Dep
             backup_service.create_backup, triggered_by=current_user.username, trigger_type="manual"
         )
     except Exception as e:
-        logger.error(f"Backup failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Backup failed: {str(e)}")
+        raise safe_http_error(500, "Backup failed", e)
 
     log_admin_action(
         "system", "backup", "create", current_user,
@@ -345,8 +344,7 @@ async def restore_backup_endpoint(request: Request,
             backup_service.restore_backup, backup_id, current_user.username
         )
     except Exception as e:
-        logger.error(f"Restore failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Restore failed: {str(e)}")
+        raise safe_http_error(500, "Restore failed", e)
 
     log_admin_action(
         "system", "backup", "restore", current_user,

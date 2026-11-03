@@ -7,6 +7,11 @@ import json
 import socket
 import ipaddress
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.exceptions import NewConnectionError
+from urllib3.util import connection as urllib3_connection
 from urllib.parse import urlparse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -18,6 +23,17 @@ import datetime as dt_module
 logger = logging.getLogger(__name__)
 
 
+def _is_public_ip(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    )
+
+
 def _validate_outbound_url(url: str) -> Optional[str]:
     """
     Blocks SSRF via admin-configured Slack/generic-webhook URLs: an admin
@@ -26,6 +42,10 @@ def _validate_outbound_url(url: str) -> Optional[str]:
     (169.254.169.254) and have the backend fetch it on every alert. Returns
     an error string if the URL should be rejected, or None if it's fine to
     dispatch to.
+
+    This is a fail-fast pre-check for a readable error. It is NOT the actual
+    protection against DNS rebinding — that is enforced at connect time by
+    _SafeHTTPAdapter, which re-validates the IP it really connects to.
     """
     try:
         parsed = urlparse(url)
@@ -42,19 +62,88 @@ def _validate_outbound_url(url: str) -> Optional[str]:
     except socket.gaierror as e:
         return f"Could not resolve webhook host: {e}"
 
-    for family, _, _, _, sockaddr in addrs:
+    for _family, _, _, _, sockaddr in addrs:
         ip_str = sockaddr[0]
         try:
-            ip = ipaddress.ip_address(ip_str)
+            ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if (
-            ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_multicast or ip.is_reserved or ip.is_unspecified
-        ):
+        if not _is_public_ip(ip_str):
             return f"Webhook host resolves to a non-public address ({ip_str}) — not allowed."
 
     return None
+
+
+def _connect_public_only(conn):
+    """
+    Resolve conn's host once, reject any non-public address, and connect to
+    the validated IP itself — so the address checked is the address used
+    (closes the DNS-rebinding TOCTOU between check and connect). The
+    connection object keeps the original hostname for SNI/cert verification
+    and the Host header; only the TCP dial uses the pinned IP.
+    """
+    host = conn._dns_host
+    try:
+        infos = socket.getaddrinfo(host, conn.port, 0, socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise NewConnectionError(conn, f"Could not resolve {host}: {e}")
+
+    last_err: Optional[Exception] = None
+    for _family, _, _, _, sockaddr in infos:
+        ip_str = sockaddr[0]
+        if not _is_public_ip(ip_str):
+            raise NewConnectionError(
+                conn, f"Blocked connection to non-public address {ip_str} for {host}"
+            )
+        extra_kw = {}
+        if conn.source_address:
+            extra_kw["source_address"] = conn.source_address
+        if conn.socket_options:
+            extra_kw["socket_options"] = conn.socket_options
+        try:
+            return urllib3_connection.create_connection((ip_str, conn.port), conn.timeout, **extra_kw)
+        except OSError as e:
+            last_err = e
+    raise NewConnectionError(conn, f"Failed to connect to {host}: {last_err}")
+
+
+class _SafeHTTPConnection(HTTPConnection):
+    def _new_conn(self):
+        return _connect_public_only(self)
+
+
+class _SafeHTTPSConnection(HTTPSConnection):
+    def _new_conn(self):
+        return _connect_public_only(self)
+
+
+class _SafeHTTPConnectionPool(HTTPConnectionPool):
+    ConnectionCls = _SafeHTTPConnection
+
+
+class _SafeHTTPSConnectionPool(HTTPSConnectionPool):
+    ConnectionCls = _SafeHTTPSConnection
+
+
+class _SafeHTTPAdapter(HTTPAdapter):
+    """requests adapter whose sockets can only reach public IPs."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {
+            "http": _SafeHTTPConnectionPool,
+            "https": _SafeHTTPSConnectionPool,
+        }
+
+
+def _safe_session() -> requests.Session:
+    """Session for admin-supplied webhook URLs: DNS-rebinding-safe, no proxies, no redirects."""
+    session = requests.Session()
+    session.trust_env = False  # ignore HTTP(S)_PROXY — a proxy would do its own (unchecked) resolution
+    adapter = _SafeHTTPAdapter()
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 class BaseNotificationChannel(ABC):
@@ -218,7 +307,9 @@ class SlackNotificationChannel(BaseNotificationChannel):
             if channel:
                 payload["channel"] = channel
 
-            res = requests.post(webhook_url, json=payload, timeout=10)
+            # allow_redirects=False: the SSRF check above only vets the original
+            # URL; a redirect could otherwise bounce to an internal address.
+            res = _safe_session().post(webhook_url, json=payload, timeout=10, allow_redirects=False)
             if res.status_code == 200:
                 return True, None
             else:
@@ -270,9 +361,10 @@ class WebhookNotificationChannel(BaseNotificationChannel):
             body = json.dumps(payload, default=str)
 
             if method == "PUT":
-                res = requests.put(url, data=body, headers=headers, timeout=timeout, verify=verify_ssl)
+                # allow_redirects=False: see Slack channel — redirects would bypass the SSRF check.
+                res = _safe_session().put(url, data=body, headers=headers, timeout=timeout, verify=verify_ssl, allow_redirects=False)
             else:
-                res = requests.post(url, data=body, headers=headers, timeout=timeout, verify=verify_ssl)
+                res = _safe_session().post(url, data=body, headers=headers, timeout=timeout, verify=verify_ssl, allow_redirects=False)
 
             if 200 <= res.status_code < 300:
                 return True, None

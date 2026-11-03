@@ -5,3 +5,4 @@
 # limit_req across levels). See nginx_manager.DDOS_LIMITS_INCLUDE_PATH.
 
 limit_req zone=waf_ddos_req burst=100 nodelay;
+limit_req zone=zone_login_protect_app_13 burst=3 nodelay;

@@ -24,17 +24,17 @@ server {
     }
 }
 
-# --- Upstream App 7: MSSP (_) ---
-upstream upstream_app_7 {
-    server 192.168.2.70:7000 max_fails=3 fail_timeout=10s;
+# --- Upstream App 13: itsm (itsm.vgipl.com) ---
+upstream upstream_app_13 {
+    server 192.168.2.82:3010 max_fails=3 fail_timeout=10s;
 }
 
-# --- App 7: MSSP (_) [self-signed] ---
+# --- App 13: itsm (itsm.vgipl.com) [self-signed] ---
 server {
-    listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
+    listen 443 ssl;
+    listen [::]:443 ssl;
     http2 on;
-    server_name _;
+    server_name itsm.vgipl.com;
 
     ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;
     ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;
@@ -47,7 +47,7 @@ server {
 
     modsecurity_rules_file /etc/nginx/modsec/positive-security.conf;
     modsecurity_rules_file /etc/nginx/modsec/malware-scan.conf;
-    modsecurity_rules_file /etc/nginx/modsec/app-auth/app_7.conf;
+    modsecurity_rules_file /etc/nginx/modsec/app-auth/app_13.conf;
 
     error_page 403 /__waf_block_page__.html;
     location = /__waf_block_page__.html {
@@ -66,22 +66,22 @@ server {
     }
 
     location / {
-        limit_req zone=zone_app_7 burst=100;
+        limit_req zone=zone_app_13 burst=100;
         include /etc/nginx/conf.d/waf_ddos_limits.inc;
-        set $waf_upstream_location "@proxy_app_7";
+        set $waf_upstream_location "@proxy_app_13";
         content_by_lua_file /opt/ml-waf/ml_decide.lua;
     }
 
     location /api {
         error_page 403 = @json_forbidden;
-        limit_req zone=zone_app_7 burst=33 nodelay;
+        limit_req zone=zone_app_13 burst=33 nodelay;
         include /etc/nginx/conf.d/waf_ddos_limits.inc;
-        set $waf_upstream_location "@proxy_app_7";
+        set $waf_upstream_location "@proxy_app_13";
         content_by_lua_file /opt/ml-waf/ml_decide.lua;
     }
 
-    location @proxy_app_7 {
-        proxy_pass http://upstream_app_7;
+    location @proxy_app_13 {
+        proxy_pass http://upstream_app_13;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -97,6 +97,32 @@ server {
         proxy_hide_header X-AspNetMvc-Version;
         proxy_hide_header X-Runtime;
         proxy_hide_header X-Generator;
+        proxy_cache cache_app_13;
+        proxy_cache_valid 200 302 10m;
+        proxy_cache_valid 404 1m;
+        add_header X-Cache-Status $upstream_cache_status always;
+    }
+}
+
+# Fallback catch-all: no app is configured as the explicit wildcard ('_')
+# default, so unrecognized Host headers get a generic reject instead of
+# reaching a real customer's backend.
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    http2 on;
+    server_name _;
+
+    ssl_certificate     /etc/nginx/ssl/cybersentinel.crt;
+    ssl_certificate_key /etc/nginx/ssl/cybersentinel.key;
+
+    ssl_client_hello_by_lua_file /opt/ml-waf/ja4_entry.lua;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    location / {
+        default_type text/html;
+        return 404 "<html><head><title>404 Not Found</title><style>body{font-family:sans-serif;text-align:center;padding:50px;background:#0b0f19;color:#f3f4f6;}h2{color:#ef4444;}.card{max-width:520px;margin:0 auto;background:#131b2e;padding:30px;border-radius:8px;border:1px solid #1e293b;}</style></head><body><div class='card'><h2>Application Not Routed</h2><p style='color:#9ca3af;'>The requested host is not configured on this gateway.</p><p style='font-size:12px;color:#64748b;'>CyberSentinel WAF</p></div></body></html>";
     }
 }
 

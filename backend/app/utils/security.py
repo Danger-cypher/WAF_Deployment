@@ -15,6 +15,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def safe_log_str(value: str, max_len: int = 80) -> str:
+    """
+    Sanitise a user-controlled value before it is interpolated into a log
+    message (MEDIUM-3 / CWE-117 — log injection).
+
+    An attacker can submit a username like:
+        admin\\n[WARNING] Successful login for 'root'
+    which, without stripping, would write a forged log line to the security
+    audit file and potentially confuse SIEM alerting.
+
+    Replaces all ASCII control characters (\\r \\n \\t NUL and any \\x00-\\x1f,
+    \\x7f) with '_' and truncates to `max_len` characters so log lines stay
+    single-line and bounded.
+    """
+    return re.sub(r"[\r\n\t\x00-\x1f\x7f]", "_", str(value))[:max_len]
+
+
 # SQL Injection patterns (simplified - production should use parameterized queries)
 SQL_INJECTION_PATTERNS = [
     r"(?i)(\b(select|union|insert|update|delete|drop|alter|create|truncate)\b.*\b(from|into|table|database)\b)",

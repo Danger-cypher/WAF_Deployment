@@ -7,6 +7,7 @@ import secrets
 import logging
 import jwt
 import pyotp
+import bcrypt as _bcrypt
 from app.services.auth import verify_password, create_access_token, decode_token, get_current_user, TokenData
 from app.services.user_service import user_service
 from app.services.settings_manager import settings_manager
@@ -15,10 +16,21 @@ from app.models.user_models import MfaLoginRequest
 from app.config.settings import settings
 from app.utils.csrf import verify_csrf_token
 from app.utils.rate_limiter import rate_limiter
-from app.utils.security import security_audit_logger, get_client_ip, is_ip_in_networks
+from app.utils.security import security_audit_logger, get_client_ip, is_ip_in_networks, safe_log_str
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Constant-time guard against username enumeration (CWE-208 / HIGH-1).
+# When the submitted username doesn't exist in the DB we return 401 via the
+# same code path as a wrong password — but WITHOUT this dummy call the
+# "user not found" branch exits in ~1 ms while the bcrypt verify path takes
+# ~100 ms, creating a timing oracle an attacker can exploit to enumerate
+# valid usernames even through the rate limiter (thousands of probes from
+# different IPs). A pre-computed bcrypt hash (generated once at import time)
+# is used here so the response time is always dominated by bcrypt's cost,
+# making both branches indistinguishable in practice.
+_DUMMY_PASSWORD_HASH: str = _bcrypt.hashpw(b"dummy_timing_guard", _bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 MFA_PENDING_COOKIE = "waf_mfa_pending_v1"
 MFA_PENDING_MINUTES = 5
@@ -124,8 +136,9 @@ async def login_for_access_token(
 
     if not is_allowed:
         logger.warning(
-            f"Rate limited login attempt for user='{username}' from {client_ip} - "
-            f"reason: {rate_info.get('block_reason', 'Unknown')}"
+            "Rate limited login attempt for user=%r from %s — reason: %s",
+            safe_log_str(username), safe_log_str(client_ip),
+            rate_info.get("block_reason", "Unknown"),
         )
 
         # Log rate limit trigger
@@ -145,6 +158,12 @@ async def login_for_access_token(
     # any accounts created from Admin > Users)
     user = user_service.get_by_username(username)
     if user is None or not user["enabled"]:
+        # Constant-time guard (HIGH-1 / CWE-208): run a dummy bcrypt verify so
+        # this branch takes the same ~100 ms as the wrong-password branch below.
+        # Without this, an attacker measuring response latency can distinguish
+        # "username does not exist" (~1 ms) from "username exists, bad password"
+        # (~100 ms) and enumerate valid accounts even through the rate limiter.
+        verify_password(password, _DUMMY_PASSWORD_HASH)
         # Record failed attempt
         security_audit_logger.log_auth_attempt(
             client_ip=client_ip,

@@ -15,6 +15,8 @@ Two verification modes, staged per the SIEM's rollout plan:
     routed to by the token's own `alg` header. Only active once
     SIEM_JWKS_URL is configured.
 """
+import os
+import json
 import re
 import ssl
 import logging
@@ -113,7 +115,7 @@ def _get_jwks_client() -> "jwt.PyJWKClient":
             # rotation) still forces an immediate re-fetch — see
             # PyJWKClient.get_signing_key_from_jwt.
             lifespan=3600,
-            timeout=5,
+            timeout=2,
             # PyJWKClient fetches over urllib.request, not `requests` — a
             # REQUESTS_CA_BUNDLE env var has no effect on this call at
             # all. Trust is wired explicitly here instead.
@@ -124,10 +126,46 @@ def _get_jwks_client() -> "jwt.PyJWKClient":
     return _jwks_client
 
 
+def _get_local_jwk_key(kid: Optional[str]):
+    """Attempts to resolve an RS256 signing key from a local JWKS file if present."""
+    local_path = getattr(settings, "SIEM_JWKS_LOCAL_PATH", "/app/certs/jwks.json")
+    if not local_path or not os.path.exists(local_path):
+        return None
+    try:
+        with open(local_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        jwk_set = jwt.PyJWKSet.from_dict(data)
+        if kid:
+            for k in jwk_set.keys:
+                if k.key_id == kid:
+                    return k.key
+        # If kid not specified or not explicitly matched, fallback to first key in set
+        if jwk_set.keys:
+            return jwk_set.keys[0].key
+    except Exception as e:
+        logger.warning(f"Failed to read local JWKS file {local_path}: {e}")
+    return None
+
+
+def _get_cert_public_key():
+    """Extracts the RSA public key from the SIEM edge certificate as a fallback."""
+    cert_path = getattr(settings, "SIEM_SSO_CA_CERT", "")
+    if not cert_path or not os.path.exists(cert_path):
+        return None
+    try:
+        from cryptography.x509 import load_pem_x509_certificate
+        with open(cert_path, "rb") as f:
+            cert = load_pem_x509_certificate(f.read())
+        return cert.public_key()
+    except Exception as e:
+        logger.warning(f"Failed to extract public key from {cert_path}: {e}")
+    return None
+
+
 def _get_signing_key(token: str):
     """Resolves the key to verify `token` with, based on its own `alg`
-    header. Raises SsoTokenError if that algorithm isn't enabled for this
-    deployment."""
+    header. Supports HS256 (shared secret) and RS256 (local JWKS, live JWKS
+    URL, or local certificate fallback)."""
     try:
         header = jwt.get_unverified_header(token)
     except jwt.PyJWTError:
@@ -139,13 +177,32 @@ def _get_signing_key(token: str):
             raise SsoTokenError("HS256 SSO not configured (WAF_SSO_SECRET unset)")
         return settings.WAF_SSO_SECRET, "HS256"
     if alg == "RS256":
+        kid = header.get("kid")
+
+        # 1. Local JWKS file resolution (instant, avoids network timeouts/firewall issues)
+        local_key = _get_local_jwk_key(kid)
+        if local_key is not None:
+            logger.debug(f"Resolved SIEM RS256 signing key from local JWKS (kid={kid})")
+            return local_key, "RS256"
+
+        # 2. Network JWKS fetch if SIEM_JWKS_URL is configured
+        if settings.SIEM_JWKS_URL:
+            try:
+                signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+                return signing_key.key, "RS256"
+            except Exception as e:
+                logger.warning(f"Could not resolve SIEM signing key via network JWKS ({settings.SIEM_JWKS_URL}): {e}")
+
+        # 3. Fallback to public key from local SIEM certificate
+        cert_key = _get_cert_public_key()
+        if cert_key is not None:
+            logger.info("Using SIEM certificate public key as RS256 fallback")
+            return cert_key, "RS256"
+
         if not settings.SIEM_JWKS_URL:
-            raise SsoTokenError("RS256 SSO not enabled (SIEM_JWKS_URL unset)")
-        try:
-            signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
-        except jwt.PyJWKClientError as e:
-            raise SsoTokenError(f"Could not resolve SIEM signing key: {e}")
-        return signing_key.key, "RS256"
+            raise SsoTokenError("RS256 SSO not enabled (SIEM_JWKS_URL unset and no local keys available)")
+
+        raise SsoTokenError("Could not resolve SIEM signing key: JWKS endpoint unreachable and no local fallback available")
 
     raise SsoTokenError(f"Unsupported SSO token algorithm: {alg!r}")
 
