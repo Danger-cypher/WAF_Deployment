@@ -143,7 +143,7 @@ WAF_DASHBOARD_HTTPS_PORT=3443
 WAF_DASHBOARD_HTTP_PORT=3020
 
 # JWT & Authentication Security
-JWT_SECRET_KEY=9a4f2c8e1b3d5e7a9c0b2d4f6a8e1c3b5d7e9f0a2c4e6a8b0d2f4a6c8e0b2d4f
+JWT_SECRET_KEY=<generate_with_openssl_rand_hex_32>
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=480
 
@@ -152,8 +152,8 @@ BACKUP_ENCRYPTION_KEY=gAAAAABlZ3...== # Fernet 32-byte Base64 key
 CHANNEL_ENCRYPTION_KEY=gAAAAABlZ3...== # Alert notification credential key
 
 # Internal Microservice Shared Secrets
-INTERNAL_ALERT_TRIGGER_KEY=c4b8e2a1d0f987654321fedcba0987654321
-ML_INTERNAL_API_KEY=c4b8e2a1d0f987654321fedcba0987654321
+INTERNAL_ALERT_TRIGGER_KEY=<generate_with_openssl_rand_hex_32>
+ML_INTERNAL_API_KEY=<generate_with_openssl_rand_hex_32>
 
 # ClickHouse Analytic Engine
 CLICKHOUSE_HOST=waf-clickhouse

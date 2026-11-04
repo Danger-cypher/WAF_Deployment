@@ -151,7 +151,7 @@ Exchanges an external SIEM/IdP signed JWT for an authenticated CyberSentinel ses
 - **Request Body:**
   ```json
   {
-    "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+    "token": "<valid_jwt_idp_sso_token>"
   }
   ```
 - **Responses:**
@@ -353,10 +353,10 @@ Mints a new high-entropy API key. **The raw secret is displayed once only.**
     {
       "id": 2,
       "name": "Automated Backup Daemon",
-      "key_prefix": "waf_live_c3d4",
+      "key_prefix": "waf_live_xxxx",
       "role": "admin",
       "enabled": true,
-      "api_key": "waf_live_c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0"
+      "api_key": "waf_live_sample_dummy_api_key_for_testing_1234567890"
     }
     ```
 
