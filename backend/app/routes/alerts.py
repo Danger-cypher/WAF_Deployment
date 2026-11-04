@@ -16,6 +16,7 @@ from app.services.alert_db_service import AlertDatabaseService
 from app.services.alert_manager import alert_manager
 from app.services.auth import require_admin, require_any_role, TokenData
 from app.config.settings import settings
+from app.utils.safe_error import safe_api_error
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,7 +65,7 @@ async def create_channel(channel: AlertChannelCreate, current_user: TokenData = 
         logger.error(f"Error creating notification channel: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create channel: {str(e)}"
+            detail=safe_api_error("Failed to create channel", e)
         )
 
 
@@ -254,7 +255,7 @@ async def create_rule(rule: AlertRuleCreate, current_user: TokenData = Depends(r
         logger.error(f"Error creating alert rule: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create alert rule: {str(e)}"
+            detail=safe_api_error("Failed to create alert rule", e)
         )
 
 
@@ -414,7 +415,7 @@ async def get_stats(days: int = Query(30, ge=1, le=365), current_user: TokenData
         logger.error(f"Error fetching alert stats: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch alert stats: {str(e)}"
+            detail=safe_api_error("Failed to fetch alert stats", e)
         )
 
 

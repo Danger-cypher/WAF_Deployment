@@ -28,7 +28,6 @@ const Profile = lazy(() => import('./components/Profile'));
 const ThreatAnalytics = lazy(() => import('./pages/Overview'));
 const ProtectionSection = lazy(() => import('./pages/ProtectionSection'));
 const LiveLogs = lazy(() => import('./pages/Events'));
-const ThreatGlobe = lazy(() => import('./pages/ThreatGlobe'));
 const MLAnalytics = lazy(() => import('./pages/MLEngine'));
 // False Positives and Exceptions used to be two top-level tabs; they're now
 // sub-tabs of one page (FalsePositivesExceptions) — see that file. Their
@@ -43,6 +42,7 @@ const ApiProtection = lazy(() => import('./pages/ApiProtection'));
 const AlertsIntegrations = lazy(() => import('./pages/AlertsIntegrations'));
 const CustomRulesEditor = lazy(() => import('./pages/VirtualPatching'));
 const Settings = lazy(() => import('./pages/Settings'));
+const NotFound = lazy(() => import('./components/NotFound'));
 
 function TabLoadingFallback() {
   return (
@@ -57,7 +57,6 @@ const TAB_ROUTES = {
   overview:         '/dashboard',
   protection:       '/protection',
   events:           '/events',
-  threat_globe:     '/threat-globe',
   ml_engine:        '/ml-engine',
   // Former Advanced sub-tabs — now direct routes
   false_positives:  '/false-positives',
@@ -79,7 +78,9 @@ const ROUTE_TABS = {
 };
 function getTabFromPath() {
   const path = window.location.pathname;
-  return ROUTE_TABS[path] || 'overview';
+  if (path === '/' || path === '') return 'overview';
+  if (path === '/auth/sso') return 'overview';
+  return ROUTE_TABS[path] || 'not_found';
 }
 
 function App() {
@@ -150,7 +151,7 @@ function App() {
     // silently broken for the rest of an SSO-originated session (this
     // effect has an empty deps array, so it never runs again to fix that
     // once the app has genuinely navigated to /dashboard).
-    if (window.location.pathname !== '/auth/sso') {
+    if (window.location.pathname !== '/auth/sso' && activeTab !== 'not_found') {
       // Replace the current history entry with proper state so back works from page 1
       window.history.replaceState(
         { tab: activeTab },
@@ -360,7 +361,6 @@ function App() {
               {activeTab === 'overview' && 'Security Overview'}
               {activeTab === 'protection' && 'Apps & DDoS Shield'}
               {activeTab === 'events' && 'Security Events'}
-              {activeTab === 'threat_globe' && 'Threat Globe'}
               {activeTab === 'ml_engine' && 'AI / ML Engine'}
               {activeTab === 'false_positives' && 'False Positives & Exceptions'}
               {activeTab === 'rules' && 'WAF Rules & CRS'}
@@ -370,6 +370,7 @@ function App() {
               {activeTab === 'virtual_patching' && 'Virtual Patching'}
               {activeTab === 'users' && 'User Management'}
               {activeTab === 'settings' && 'System Settings'}
+              {activeTab === 'not_found' && 'Page Not Found'}
             </span>
           </div>
           <div className="siem-topbar-right">
@@ -429,10 +430,6 @@ function App() {
             />
           )}
 
-          {/* Threat Globe Tab — live 3D attack-origin visualization */}
-          {activeTab === 'threat_globe' && (
-            <ThreatGlobe key="threat_globe" userRole={userRole} />
-          )}
 
           {/* AI/ML Engine Tab */}
           {activeTab === 'ml_engine' && <MLAnalytics key="ml_engine" />}
@@ -483,6 +480,14 @@ function App() {
               onLogout={handleLogout}
               initialSettingsTab={pendingSettingsTab}
               onConsumeInitialSettingsTab={() => setPendingSettingsTab(null)}
+            />
+          )}
+
+          {/* 404 Not Found Page */}
+          {activeTab === 'not_found' && (
+            <NotFound
+              key="not_found"
+              onReturnDashboard={() => setActiveTab('overview')}
             />
           )}
         </Suspense>

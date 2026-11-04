@@ -15,6 +15,7 @@ from app.models.rule_model import (
 from app.services import rule_manager, clickhouse_service
 from app.services.auth import require_admin, require_any_role, TokenData
 from app.utils.audit import log_admin_action
+from app.utils.safe_error import safe_http_error
 
 router = APIRouter()
 
@@ -43,7 +44,7 @@ async def get_rules(
         )
         return {"data": rules, "total": total, "page": page, "size": size}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch rules: {str(e)}")
+        raise safe_http_error(500, "Failed to fetch rules", e)
 
 
 @router.get("/rules/stats", response_model=RuleStatsResponse)
@@ -54,9 +55,7 @@ async def get_rules_stats(current_user: TokenData = Depends(require_any_role)):
     try:
         return rule_manager.get_rules_stats()
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to calculate stats: {str(e)}"
-        )
+        raise safe_http_error(500, "Failed to calculate rule stats", e)
 
 
 @router.get("/rules/history", response_model=List[AuditLogEntry])
@@ -67,9 +66,7 @@ async def get_rules_history(current_user: TokenData = Depends(require_any_role))
     try:
         return rule_manager.get_audit_history()
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to load audit history: {str(e)}"
-        )
+        raise safe_http_error(500, "Failed to load audit history", e)
 
 
 import os
@@ -96,10 +93,7 @@ async def get_custom_rules(current_user: TokenData = Depends(require_any_role)):
             content = f.read()
         return {"rules_content": content}
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to read custom rules file: {str(e)}"
-        )
+        raise safe_http_error(500, "Failed to read custom rules file", e)
 
 @router.post("/rules/custom")
 async def save_custom_rules(
@@ -119,10 +113,7 @@ async def save_custom_rules(
         with open(CUSTOM_RULES_TMP, "w", encoding="utf-8") as f:
             f.write(payload.rules_content)
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to write temporary rules file: {str(e)}"
-        )
+        raise safe_http_error(500, "Failed to write temporary rules file", e)
 
     # 2. Swap custom-rules.conf to temp for syntax validation
     backup_exists = os.path.exists(CUSTOM_RULES_FILE)
@@ -181,10 +172,7 @@ async def save_custom_rules(
         # Restore backup in case of generic failure
         if backup_exists and os.path.exists(backup_path):
             shutil.move(backup_path, CUSTOM_RULES_FILE)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to apply custom rules: {str(e)}"
-        )
+        raise safe_http_error(500, "Failed to apply custom rules", e)
 
 
 @router.get("/rules/canary-settings", response_model=CanaryRolloutSettings)

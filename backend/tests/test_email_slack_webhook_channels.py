@@ -143,6 +143,22 @@ class _FakeResponse:
         self.text = text
 
 
+class _FakeSession:
+    """Stand-in for alert_dispatcher._safe_session() — the Slack/Webhook
+    channels send through that DNS-rebinding-safe session, not requests.post."""
+    def __init__(self, post=None, put=None):
+        self.post, self.put = post, put
+
+
+def _patch_session(monkeypatch, post=None, put=None):
+    def _unexpected(*a, **k):
+        pytest.fail("unexpected HTTP method used")
+    monkeypatch.setattr(
+        alert_dispatcher, "_safe_session",
+        lambda: _FakeSession(post=post or _unexpected, put=put or _unexpected),
+    )
+
+
 def test_slack_success(monkeypatch):
     captured = {}
 
@@ -150,7 +166,7 @@ def test_slack_success(monkeypatch):
         captured["url"], captured["json"] = url, json
         return _FakeResponse(200)
 
-    monkeypatch.setattr(alert_dispatcher.requests, "post", fake_post)
+    _patch_session(monkeypatch, post=fake_post)
     channel = SlackNotificationChannel()
 
     ok, err = channel.send(
@@ -172,7 +188,7 @@ def test_slack_missing_webhook_url():
 
 def test_slack_ssrf_blocked_url_never_calls_requests(monkeypatch):
     called = []
-    monkeypatch.setattr(alert_dispatcher.requests, "post", lambda *a, **k: called.append(1))
+    _patch_session(monkeypatch, post=lambda *a, **k: called.append(1))
     channel = SlackNotificationChannel()
 
     ok, err = channel.send({"webhook_url": "http://169.254.169.254/latest/meta-data/"}, "high", "attack_detected", "msg", {})
@@ -183,7 +199,7 @@ def test_slack_ssrf_blocked_url_never_calls_requests(monkeypatch):
 
 
 def test_slack_non_200_response_reports_status_and_body(monkeypatch):
-    monkeypatch.setattr(alert_dispatcher.requests, "post", lambda *a, **k: _FakeResponse(403, "invalid_token"))
+    _patch_session(monkeypatch, post=lambda *a, **k: _FakeResponse(403, "invalid_token"))
     channel = SlackNotificationChannel()
 
     ok, err = channel.send({"webhook_url": "https://hooks.slack.com/services/x"}, "high", "attack_detected", "msg", {})
@@ -193,7 +209,7 @@ def test_slack_non_200_response_reports_status_and_body(monkeypatch):
 
 
 def test_slack_non_json_native_event_data_does_not_fail_the_whole_send(monkeypatch):
-    monkeypatch.setattr(alert_dispatcher.requests, "post", lambda *a, **k: _FakeResponse(200))
+    _patch_session(monkeypatch, post=lambda *a, **k: _FakeResponse(200))
     channel = SlackNotificationChannel()
 
     ok, err = channel.send(
@@ -216,7 +232,7 @@ def test_webhook_success_posts_valid_json_body(monkeypatch):
         captured.update(url=url, data=data, headers=headers, verify=verify)
         return _FakeResponse(200)
 
-    monkeypatch.setattr(alert_dispatcher.requests, "post", fake_post)
+    _patch_session(monkeypatch, post=fake_post)
     channel = WebhookNotificationChannel()
 
     ok, err = channel.send({"url": "https://example.com/hook"}, "critical", "attack_detected", "SQLi blocked", {"client_ip": "1.2.3.4"})
@@ -236,8 +252,7 @@ def test_webhook_put_method_dispatches_to_requests_put(monkeypatch):
         called["hit"] = True
         return _FakeResponse(200)
 
-    monkeypatch.setattr(alert_dispatcher.requests, "put", fake_put)
-    monkeypatch.setattr(alert_dispatcher.requests, "post", lambda *a, **k: pytest.fail("should have used PUT"))
+    _patch_session(monkeypatch, put=fake_put)
     channel = WebhookNotificationChannel()
 
     ok, _ = channel.send({"url": "https://example.com/hook", "method": "PUT"}, "low", "ddos_detected", "msg", {})
@@ -255,7 +270,7 @@ def test_webhook_missing_url():
 
 def test_webhook_ssrf_blocked_url_never_calls_requests(monkeypatch):
     called = []
-    monkeypatch.setattr(alert_dispatcher.requests, "post", lambda *a, **k: called.append(1))
+    _patch_session(monkeypatch, post=lambda *a, **k: called.append(1))
     channel = WebhookNotificationChannel()
 
     ok, err = channel.send({"url": "http://127.0.0.1:8000/internal"}, "high", "attack_detected", "msg", {})
@@ -266,7 +281,7 @@ def test_webhook_ssrf_blocked_url_never_calls_requests(monkeypatch):
 
 
 def test_webhook_non_2xx_response_reports_status_and_body(monkeypatch):
-    monkeypatch.setattr(alert_dispatcher.requests, "post", lambda *a, **k: _FakeResponse(500, "internal error"))
+    _patch_session(monkeypatch, post=lambda *a, **k: _FakeResponse(500, "internal error"))
     channel = WebhookNotificationChannel()
 
     ok, err = channel.send({"url": "https://example.com/hook"}, "high", "attack_detected", "msg", {})
@@ -276,7 +291,7 @@ def test_webhook_non_2xx_response_reports_status_and_body(monkeypatch):
 
 
 def test_webhook_non_json_native_event_data_does_not_fail_the_whole_send(monkeypatch):
-    monkeypatch.setattr(alert_dispatcher.requests, "post", lambda *a, **k: _FakeResponse(200))
+    _patch_session(monkeypatch, post=lambda *a, **k: _FakeResponse(200))
     channel = WebhookNotificationChannel()
 
     ok, err = channel.send(
@@ -285,3 +300,46 @@ def test_webhook_non_json_native_event_data_does_not_fail_the_whole_send(monkeyp
     )
 
     assert ok is True, err
+
+
+# ---------------------------------------------------------------------------
+# SSRF hardening: connect-time IP pinning (DNS rebinding) + no redirects
+# ---------------------------------------------------------------------------
+
+def test_safe_session_blocks_loopback_at_connect_time():
+    """Bypasses the pre-check entirely: the socket layer must refuse on its own."""
+    import requests
+    with pytest.raises(requests.exceptions.ConnectionError):
+        alert_dispatcher._safe_session().post("http://127.0.0.1:9/", timeout=2)
+
+
+def test_safe_session_blocks_dns_rebinding(monkeypatch):
+    """Host resolves public for the pre-check, then private for the real connect."""
+    import socket, requests
+    real = socket.getaddrinfo
+    calls = {"n": 0}
+
+    def fake_getaddrinfo(host, *a, **k):
+        if host == "rebind.test":
+            calls["n"] += 1
+            ip = "93.184.216.34" if calls["n"] == 1 else "169.254.169.254"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 80))]
+        return real(host, *a, **k)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    assert alert_dispatcher._validate_outbound_url("http://rebind.test/") is None  # pre-check fooled
+    with pytest.raises(requests.exceptions.ConnectionError):
+        alert_dispatcher._safe_session().post("http://rebind.test/", timeout=2)
+
+
+def test_channels_send_with_redirects_disabled(monkeypatch):
+    seen = []
+
+    def fake_post(*a, **k):
+        seen.append(k.get("allow_redirects"))
+        return _FakeResponse(200)
+
+    _patch_session(monkeypatch, post=fake_post)
+    SlackNotificationChannel().send({"webhook_url": "https://hooks.slack.com/services/x"}, "low", "e", "m", {})
+    WebhookNotificationChannel().send({"url": "https://example.com/hook"}, "low", "e", "m", {})
+    assert seen == [False, False]

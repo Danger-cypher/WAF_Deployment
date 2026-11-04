@@ -177,7 +177,11 @@ log "Triggering model reload in running FastAPI instances..."
 
 RELOAD_OK=false
 for PORT in 9000 8003; do
-    HTTP_STATUS=$(curl -s -o /tmp/reload_response.json -X POST "http://localhost:${PORT}/reload" -w "%{http_code}" --max-time 5 2>/dev/null || echo "000")
+    HEADER_FLAG=""
+    if [ -n "$INTERNAL_ALERT_TRIGGER_KEY" ]; then
+        HEADER_FLAG="-H X-Internal-Key:$INTERNAL_ALERT_TRIGGER_KEY"
+    fi
+    HTTP_STATUS=$(curl -s -o /tmp/reload_response.json $HEADER_FLAG -X POST "http://localhost:${PORT}/reload" -w "%{http_code}" --max-time 5 2>/dev/null || echo "000")
     if [ "$HTTP_STATUS" = "200" ]; then
         success "  Successfully triggered dynamic model reload on port ${PORT}."
         RELOAD_OK=true

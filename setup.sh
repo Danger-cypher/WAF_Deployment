@@ -309,17 +309,20 @@ log "  Configured Mem Limit: Backend=$BACKEND_MEM_LIMIT, ML=$ML_MEM_LIMIT, OpenR
 
 # Load existing ports or default them
 DASHBOARD_PORT=$(grep -E "^DASHBOARD_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
+DASHBOARD_TLS_PORT=$(grep -E "^DASHBOARD_TLS_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
 HTTP_PORT=$(grep -E "^HTTP_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
 HTTPS_PORT=$(grep -E "^HTTPS_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
 CLICKHOUSE_HOST_PORT=$(grep -E "^CLICKHOUSE_HOST_PORT=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || echo "")
 
 [ -z "$DASHBOARD_PORT" ] && DASHBOARD_PORT=3020
+[ -z "$DASHBOARD_TLS_PORT" ] && DASHBOARD_TLS_PORT=3443
 [ -z "$HTTP_PORT" ] && HTTP_PORT=80
 [ -z "$HTTPS_PORT" ] && HTTPS_PORT=443
 [ -z "$CLICKHOUSE_HOST_PORT" ] && CLICKHOUSE_HOST_PORT=8123
 
 log "Checking WAF port availability on the host..."
 DASHBOARD_PORT=$(get_free_port "$DASHBOARD_PORT" "WAF Dashboard")
+DASHBOARD_TLS_PORT=$(get_free_port "$DASHBOARD_TLS_PORT" "WAF Dashboard (HTTPS)")
 HTTP_PORT=$(get_free_port "$HTTP_PORT" "HTTP gateway")
 HTTPS_PORT=$(get_free_port "$HTTPS_PORT" "HTTPS WAF gateway")
 CLICKHOUSE_HOST_PORT=$(get_free_port "$CLICKHOUSE_HOST_PORT" "ClickHouse HTTP API")
@@ -330,7 +333,7 @@ for key in BACKEND_CPU_LIMIT BACKEND_CPU_RESERVE BACKEND_MEM_LIMIT BACKEND_MEM_R
            REDIS_CPU_LIMIT REDIS_CPU_RESERVE REDIS_MEM_LIMIT REDIS_MEM_RESERVE \
            OPENRESTY_CPU_LIMIT OPENRESTY_CPU_RESERVE OPENRESTY_MEM_LIMIT OPENRESTY_MEM_RESERVE \
            FRONTEND_CPU_LIMIT FRONTEND_CPU_RESERVE FRONTEND_MEM_LIMIT FRONTEND_MEM_RESERVE \
-           DASHBOARD_PORT HTTP_PORT HTTPS_PORT CLICKHOUSE_HOST_PORT; do
+           DASHBOARD_PORT DASHBOARD_TLS_PORT HTTP_PORT HTTPS_PORT CLICKHOUSE_HOST_PORT; do
     sed -i "/^$key=/d" "$ENV_FILE" 2>/dev/null || true
 done
 
@@ -361,6 +364,7 @@ FRONTEND_MEM_RESERVE=$FRONTEND_MEM_RESERVE
 
 # Confirmed Free Ports Configuration
 DASHBOARD_PORT=$DASHBOARD_PORT
+DASHBOARD_TLS_PORT=$DASHBOARD_TLS_PORT
 HTTP_PORT=$HTTP_PORT
 HTTPS_PORT=$HTTPS_PORT
 CLICKHOUSE_HOST_PORT=$CLICKHOUSE_HOST_PORT
@@ -846,20 +850,22 @@ if command -v ufw &>/dev/null; then
         log "  UFW firewall is active. Opening required ports..."
         sudo ufw allow ${HTTP_PORT}/tcp   &>/dev/null && success "  Port ${HTTP_PORT}  (HTTP)       — opened" || warn "  Failed to open port ${HTTP_PORT}"
         sudo ufw allow ${HTTPS_PORT}/tcp  &>/dev/null && success "  Port ${HTTPS_PORT} (HTTPS)      — opened" || warn "  Failed to open port ${HTTPS_PORT}"
-        sudo ufw allow ${DASHBOARD_PORT}/tcp &>/dev/null && success "  Port ${DASHBOARD_PORT} (Dashboard) — opened" || warn "  Failed to open port ${DASHBOARD_PORT}"
+        sudo ufw allow ${DASHBOARD_TLS_PORT}/tcp &>/dev/null && success "  Port ${DASHBOARD_TLS_PORT} (Dashboard, HTTPS) — opened" || warn "  Failed to open port ${DASHBOARD_TLS_PORT}"
+        sudo ufw allow ${DASHBOARD_PORT}/tcp &>/dev/null && success "  Port ${DASHBOARD_PORT} (Dashboard, legacy HTTP) — opened" || warn "  Failed to open port ${DASHBOARD_PORT}"
         sudo ufw reload &>/dev/null || true
     else
         warn "  UFW is installed but inactive. No firewall rules changed."
-        warn "  If you enable UFW later, manually run: sudo ufw allow ${HTTP_PORT},${HTTPS_PORT},${DASHBOARD_PORT}/tcp"
+        warn "  If you enable UFW later, manually run: sudo ufw allow ${HTTP_PORT},${HTTPS_PORT},${DASHBOARD_TLS_PORT},${DASHBOARD_PORT}/tcp"
     fi
 elif command -v firewall-cmd &>/dev/null; then
     log "  firewalld detected. Opening required ports..."
     sudo firewall-cmd --permanent --add-port=${HTTP_PORT}/tcp   &>/dev/null && success "  Port ${HTTP_PORT} opened" || warn "  Failed to open port ${HTTP_PORT}"
     sudo firewall-cmd --permanent --add-port=${HTTPS_PORT}/tcp  &>/dev/null && success "  Port ${HTTPS_PORT} opened" || warn "  Failed to open port ${HTTPS_PORT}"
+    sudo firewall-cmd --permanent --add-port=${DASHBOARD_TLS_PORT}/tcp &>/dev/null && success "  Port ${DASHBOARD_TLS_PORT} opened" || warn "  Failed to open port ${DASHBOARD_TLS_PORT}"
     sudo firewall-cmd --permanent --add-port=${DASHBOARD_PORT}/tcp &>/dev/null && success "  Port ${DASHBOARD_PORT} opened" || warn "  Failed to open port ${DASHBOARD_PORT}"
     sudo firewall-cmd --reload &>/dev/null || true
 else
-    warn "  No known firewall manager (ufw/firewalld) found. Ensure ports ${HTTP_PORT}, ${HTTPS_PORT}, ${DASHBOARD_PORT} are open manually."
+    warn "  No known firewall manager (ufw/firewalld) found. Ensure ports ${HTTP_PORT}, ${HTTPS_PORT}, ${DASHBOARD_TLS_PORT}, ${DASHBOARD_PORT} are open manually."
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1069,7 +1075,9 @@ echo -e "${GREEN}===============================================================
 echo -e "${GREEN}             CYBERSENTINEL WAF DEPLOYMENT COMPLETE!                     ${NC}"
 echo -e "${GREEN}=======================================================================${NC}"
 echo ""
-echo -e "  🚀 ${BLUE}WAF Dashboard URL:${NC} http://${SERVER_IP}:${DASHBOARD_PORT}/"
+echo -e "  🚀 ${BLUE}WAF Dashboard URL (use this one):${NC} https://${SERVER_IP}:${DASHBOARD_TLS_PORT}/"
+echo -e "     - ${YELLOW}Self-signed certificate${NC} — your browser will warn on first visit; that's expected."
+echo -e "     - ${BLUE}Legacy plaintext URL:${NC} http://${SERVER_IP}:${DASHBOARD_PORT}/  (kept for compatibility — avoid beyond localhost)"
 echo -e "  📊 ${BLUE}ClickHouse Play Console:${NC} http://localhost:${CLICKHOUSE_HOST_PORT}/play"
 echo -e "     - ${YELLOW}Note:${NC} To connect, open an SSH Tunnel from your local terminal:"
 echo -e "       ${CYAN}ssh -L ${CLICKHOUSE_HOST_PORT}:127.0.0.1:${CLICKHOUSE_HOST_PORT} soc@${SERVER_IP}${NC}"
@@ -1093,7 +1101,8 @@ echo -e "     ${YELLOW}⚠  The shared secret above is a credential — send it 
 echo -e "     ${YELLOW}   over a secure channel, not plaintext email/chat, and never commit it.${NC}"
 echo ""
 echo -e "  🌐 ${BLUE}Port Mapping Structure:${NC}"
-echo -e "     - ${CYAN}Port ${DASHBOARD_PORT}${NC} : Direct Administrative Dashboard Access (WAF-Inspected)"
+echo -e "     - ${CYAN}Port ${DASHBOARD_TLS_PORT}${NC} : Administrative Dashboard Access over HTTPS (WAF-Inspected) — use this one"
+echo -e "     - ${CYAN}Port ${DASHBOARD_PORT}${NC} : Administrative Dashboard Access over plain HTTP (legacy, unencrypted)"
 echo -e "     - ${CYAN}Port ${HTTP_PORT}  ${NC} : HTTP Redirector (Redirects traffic to HTTPS ${HTTPS_PORT})"
 echo -e "     - ${CYAN}Port ${HTTPS_PORT} ${NC} : HTTPS WAF Interception Gateway proxying to your apps"
 echo -e "     - ${CYAN}Port ${CLICKHOUSE_HOST_PORT}${NC} : ClickHouse HTTP Interface (Bound to 127.0.0.1 for security)"

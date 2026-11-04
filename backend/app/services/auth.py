@@ -8,6 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
 from app.config.settings import settings
+from app.utils.security import safe_log_str
 
 logger = logging.getLogger(__name__)
 
@@ -102,14 +103,14 @@ def decode_token(token: Optional[str]) -> Optional[TokenData]:
 
     user = user_service.get_by_username(token_data.username)
     if user is None:
-        logger.warning(f"[Auth] Token rejected: user '{token_data.username}' no longer exists")
+        logger.warning(f"[Auth] Token rejected: user '{safe_log_str(token_data.username)}' no longer exists")
         return None
     if not user["enabled"]:
-        logger.warning(f"[Auth] Token rejected: user '{token_data.username}' is disabled")
+        logger.warning(f"[Auth] Token rejected: user '{safe_log_str(token_data.username)}' is disabled")
         return None
     if user["session_version"] != token_version:
         logger.warning(
-            f"[Auth] Token rejected: session_version mismatch for '{token_data.username}' "
+            f"[Auth] Token rejected: session_version mismatch for '{safe_log_str(token_data.username)}' "
             f"(token has {token_version}, DB has {user['session_version']})"
         )
         return None

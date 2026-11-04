@@ -279,6 +279,7 @@ class SettingsManager:
         return self.settings.get("waf", DEFAULT_SETTINGS["waf"])
 
     def update_waf_settings(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        old_sec_rule_engine = self.settings.get("waf", {}).get("secRuleEngine")
         self.settings["waf"] = data
         # Sync paranoia level with rule_manager if modified
         level = data.get("paranoiaLevel")
@@ -289,6 +290,41 @@ class SettingsManager:
                 set_paranoia_level(level)
             except Exception as e:
                 logger.error(f"Error syncing paranoia level to rule_manager: {e}")
+
+        # Readiness-review finding: this was the dead half of the
+        # "SecRuleEngine Posture" toggle — saved here, never applied to the
+        # real ModSecurity directive. _update_modsecurity_override_file()
+        # now reads secRuleEngine itself, so any regen+reload picks it up —
+        # but set_paranoia_level() above only regenerates when the paranoia
+        # level itself actually changed (it silently no-ops otherwise, and
+        # its return value can't tell the two cases apart without parsing
+        # its message string). Explicitly regenerate here whenever
+        # secRuleEngine changed, unconditionally — a harmless extra reload
+        # on the rare save that changes both fields at once, but correct
+        # every time, rather than trying to dedupe and getting it wrong.
+        new_sec_rule_engine = data.get("secRuleEngine")
+        if new_sec_rule_engine != old_sec_rule_engine:
+            try:
+                from app.services.rule_manager import sync_rules_and_exclusions
+
+                sync_rules_and_exclusions()
+            except Exception as e:
+                logger.error(f"Error applying secRuleEngine change: {e}")
+
+            # ModSecurity's own SecRuleEngine directive (above) doesn't reach
+            # this stack's actual enforcement path — see
+            # nginx_manager.apply_waf_engine_posture()'s docstring. Expose
+            # the posture to Lua too, so DetectionOnly/Off genuinely stop
+            # ml_decide.lua's own block decisions, not just ModSecurity's.
+            try:
+                from app.services.nginx_manager import apply_waf_engine_posture
+
+                ok, msg = apply_waf_engine_posture(new_sec_rule_engine)
+                if not ok:
+                    logger.error(f"Failed to apply SecRuleEngine posture to Lua layer: {msg}")
+            except Exception as e:
+                logger.error(f"Error exposing secRuleEngine posture to Lua: {e}")
+
         self.save_settings(self.settings)
         return self.settings["waf"]
 

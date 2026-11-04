@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     # all). Left unset, the JWKS fetch falls back to the system trust
     # store, which correctly fails closed against a self-signed cert.
     SIEM_SSO_CA_CERT: str = ""
+    # Path (inside the container) to a local static JWKS JSON file, allowing
+    # RS256 token verification without an outbound network call.
+    SIEM_JWKS_LOCAL_PATH: str = "/app/certs/jwks.json"
     # Replay window for the token's single-use `nonce` claim. Comfortably
     # longer than the SIEM's ~120s token TTL + ~60s nbf back-date skew.
     SSO_NONCE_TTL_SECONDS: int = 300

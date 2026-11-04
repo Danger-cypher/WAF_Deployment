@@ -120,6 +120,32 @@ local headers = ngx.req.get_headers()
 local crs_score = tonumber(ngx.var.modsecurity_anomaly_score) or 0.0
 local matched_vars = ngx.var.modsec_matched_var_names or ""
 
+-- Readiness-review finding: Settings -> WAF Engine Policies' "SecRuleEngine
+-- Posture" (On/DetectionOnly/Off) used to only ever reach ModSecurity's own
+-- SecRuleEngine directive — which doesn't matter here, since this script
+-- (not ModSecurity's native disruptive actions, disabled via
+-- SecRuleRemoveById 949110) makes the actual block/allow decision below.
+-- ModSecurity still computes and logs crs_score above regardless of its own
+-- SecRuleEngine mode (scoring isn't itself a disruptive action), so without
+-- this check DetectionOnly/Off changed nothing about real enforcement.
+-- Exposed via nginx_manager.apply_waf_engine_posture() as a `map` constant
+-- (see that function's docstring); pcall-guarded like every other
+-- maybe-unset variable in this file, defaulting to "On" — fail toward
+-- blocking, never toward silently permissive, if the variable is ever
+-- missing (e.g. a fresh install before any WAF settings save has run).
+local function sec_rule_engine_posture()
+    local ok, v = pcall(function() return ngx.var.waf_sec_rule_engine_posture end)
+    if ok and (v == "DetectionOnly" or v == "Off") then
+        return v
+    end
+    return "On"
+end
+
+if sec_rule_engine_posture() ~= "On" then
+    ngx.log(ngx.INFO, "ML-WAF: SecRuleEngine posture is not On — allowing without ML/CRS-fallback blocking (crs_score=", crs_score, ")")
+    return ngx.exec(upstream_location)
+end
+
 -- JA4 fingerprint, cached by ja4.lua during the TLS handshake — a short,
 -- independent Redis round trip (own connect/keepalive, same shape as
 -- bot_challenge.check_risk_triggered()'s own connection further down in

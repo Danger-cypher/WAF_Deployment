@@ -2,6 +2,7 @@ import re
 import os
 import json
 import shutil
+import socket
 import subprocess
 import asyncio
 import logging
@@ -11,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from app.services import db_service, nginx_manager, api_spec
 from app.services.auth import require_admin, require_any_role, require_app_view_access, require_app_write_access, TokenData
 from app.utils.audit import log_admin_action
+from app.utils.safe_error import safe_api_error
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +172,43 @@ def _serialize_origins(origins: List[OriginModel]) -> Optional[str]:
     if not origins:
         return None
     return json.dumps([o.model_dump() for o in origins])
+
+
+class TestUpstreamRequest(BaseModel):
+    host: str = Field(..., min_length=1)
+    port: int = Field(..., ge=1, le=65535)
+
+
+@router.post("/apps/test-upstream")
+async def test_upstream_connection(
+    payload: TestUpstreamRequest,
+    current_user: TokenData = Depends(require_admin),
+):
+    """Verifies that an upstream backend is reachable over TCP before saving."""
+    host = payload.host.strip()
+    port = payload.port
+
+    def _check() -> tuple[bool, str]:
+        try:
+            with socket.create_connection((host, port), timeout=3.0):
+                return True, "Upstream backend is reachable."
+        except socket.timeout:
+            return False, f"Connection to {host}:{port} timed out after 3.0 seconds."
+        except ConnectionRefusedError:
+            return False, f"Connection to {host}:{port} was refused. Ensure the backend application is listening on port {port}."
+        except socket.gaierror as e:
+            return False, f"DNS resolution failed for '{host}': {e}"
+        except Exception as e:
+            return False, f"Failed to connect to {host}:{port}: {e}"
+
+    reachable, msg = await asyncio.to_thread(_check)
+    return {
+        "status": "success" if reachable else "error",
+        "reachable": reachable,
+        "message": msg,
+        "host": host,
+        "port": port,
+    }
 
 
 @router.get("/apps", response_model=List[ProtectedAppResponse])
@@ -650,7 +689,7 @@ async def provision_letsencrypt(request: Request,
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"SSL provisioning error: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_api_error("SSL provisioning error", e))
 
 
 @router.post("/apps/{app_id}/upload-cert")
@@ -735,7 +774,7 @@ async def upload_custom_cert(request: Request,
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save certificate files: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_api_error("Failed to save certificate files", e))
 
     # Persist paths to DB
     db_service.update_protected_app(

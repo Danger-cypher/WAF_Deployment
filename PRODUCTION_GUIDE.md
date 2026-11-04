@@ -14,7 +14,7 @@ The WAF is completely containerized. The target host machine only requires the f
 3. **Hardware Requirements**:
    - **Minimum**: 2 Cores CPU, 4 GB RAM, 10 GB Disk space.
    - **Recommended**: 4 Cores CPU, 8 GB RAM (to handle high concurrent throughput and active ML classification queue).
-4. **Networking**: Ensure ports `80`, `443`, and `3020` are not bound by any processes on the host.
+4. **Networking**: Ensure ports `80`, `443`, `3020`, and `3443` are not bound by any processes on the host.
 
 ---
 
@@ -57,11 +57,12 @@ This interactive script allows you to:
 
 ## 🌐 Network Architecture & Port Mapping
 
-Once the setup finishes, the WAF exposes three primary entry points:
+Once the setup finishes, the WAF exposes four primary entry points:
 
 | Port | Protocol | Intercepted? | Purpose |
 |------|----------|--------------|---------|
-| **`3020`** | HTTP | **WAF Inspected** | Administrative WAF dashboard. ModSecurity and ML checking are active, but exclusions are loaded specifically to let WAF administrators configure rules and domains without triggering false positive blocks. |
+| **`3443`** | HTTPS | **WAF Inspected** | **Primary administrative WAF dashboard access.** Same console as `3020` below, over TLS — use this one. ModSecurity and ML checking are active, but exclusions are loaded specifically to let WAF administrators configure rules and domains without triggering false-positive blocks. |
+| **`3020`** | HTTP | **WAF Inspected** | Legacy plaintext dashboard access, kept for backward compatibility with existing bookmarks/integrations. Credentials and session tokens sent here are **not encrypted in transit** — prefer `3443` for anything beyond local/loopback access. |
 | **`80`** | HTTP | No | Automatically catches plain HTTP traffic and issues a `301 Moved Permanently` redirect to HTTPS on port `443`. |
 | **`443`** | HTTPS | **WAF Gateway** | Main WAF Gateway. Inspects incoming headers, parameters, and bodies using both ModSecurity (OWASP CRS v4) and the XGBoost ML Threat Engine, proxying clean traffic to upstreams. |
 
@@ -320,7 +321,13 @@ Before deploying to production, ensure you complete these critical tasks:
 
 - [ ] **Configure firewall rules**
   ```bash
-  # Allow WAF dashboard (restrict to admin IPs)
+  # Allow WAF dashboard over TLS (restrict to admin IPs) — this is the one
+  # to expose beyond localhost; see the port table above for why.
+  sudo ufw allow from 203.0.113.0/24 to any port 3443 proto tcp
+
+  # Legacy plaintext dashboard (3020): restrict to admin IPs at most, same
+  # as 3443 — credentials sent here are unencrypted in transit. Consider
+  # not opening this beyond localhost at all on a fresh deployment.
   sudo ufw allow from 203.0.113.0/24 to any port 3020 proto tcp
   
   # Allow HTTP/HTTPS from anywhere
@@ -350,35 +357,21 @@ Before deploying to production, ensure you complete these critical tasks:
   EOF
   ```
 
-- [ ] **Configure automated backups**
+- [ ] **Configure backups**
+
+  **Do not hand-roll a backup script that copies the SQLite databases or `.env` directly** — those files (and every file under `configs/nginx/`, including TLS private keys) contain live secrets and credential hashes. A plain `tar.gz` of them, unencrypted, undoes the point of the WAF's own backup encryption below.
+
+  Use the built-in backup feature instead: **Dashboard → Settings → Backups → Create Backup Now.** It archives nginx/ModSecurity config (including CRS, custom rules, and certs), the backend's app config, and its SQLite data — and it's encrypted at rest with `BACKUP_ENCRYPTION_KEY` from `.env` (generated automatically by `setup.sh`; back that key up somewhere separate from the archives themselves — losing it permanently locks every backup taken under it).
+
+  This is currently a manual, dashboard-triggered action — there is no built-in scheduler yet. To automate it, call the same endpoint the dashboard button uses, authenticated as an admin session or API key (Settings → Security & Danger Zone → API Keys):
   ```bash
-  # Create backup script
-  sudo tee /root/backup-waf.sh <<'EOF'
-  #!/bin/bash
-  BACKUP_DIR="/backup/waf/$(date +%Y%m%d)"
-  mkdir -p "$BACKUP_DIR"
-  
-  # Backup databases
-  cp /opt/ModSecurity/WAF_GUI/backend/app/config/*.db "$BACKUP_DIR/"
-  cp /opt/ModSecurity/WAF_GUI/backend/app/config/*.json "$BACKUP_DIR/"
-  cp /opt/ModSecurity/WAF_GUI/.env "$BACKUP_DIR/"
-  
-  # Backup ML models
-  cp -r /opt/ModSecurity/WAF_GUI/ml-waf/models "$BACKUP_DIR/"
-  
-  # Compress
-  tar -czf "$BACKUP_DIR.tar.gz" "$BACKUP_DIR"
-  rm -rf "$BACKUP_DIR"
-  
-  # Keep only last 30 days
-  find /backup/waf/ -name "*.tar.gz" -mtime +30 -delete
-  EOF
-  
-  sudo chmod +x /root/backup-waf.sh
-  
-  # Add to crontab (daily at 2 AM)
-  (crontab -l 2>/dev/null; echo "0 2 * * * /root/backup-waf.sh") | crontab -
+  # One-time: create an API key from the dashboard, then:
+  curl -s -X POST https://<host>:3443/api/system/backups \
+       -H "X-API-Key: <your-api-key>"
   ```
+  Add that to cron. The archive itself still needs to be copied off-host for real disaster recovery (a server-loss scenario doesn't survive a backup that only ever lived on that same server) — `scp`/`rsync` the resulting `.tar.gz.enc` file, which is safe to move around unencrypted-in-transit-sense since its *contents* are already encrypted.
+
+  Also worth backing up separately, since the in-app feature deliberately excludes them: `.env` itself (store it somewhere with equivalent or better access control than the server — it's the one thing that can decrypt everything else) and ClickHouse's own data directory, if retaining historical attack-event history across a full server loss matters to you.
 
 - [ ] **Set up monitoring**
   ```bash
@@ -584,18 +577,30 @@ docker exec -it waf-ml /app/retrain.sh
 
 **If WAF is blocking legitimate traffic:**
 
+The dashboard's own toggle is the supported way to do this: **Settings → WAF Engine Policies → SecRuleEngine Posture → DetectionOnly → Save.** It regenerates the live ModSecurity config and reloads OpenResty automatically — no container exec needed.
+
+If the dashboard itself is unreachable, the equivalent from the command line:
+
 ```bash
-# Temporary: Switch to detection-only mode
+# Temporary: switch to detection-only mode (logs matches, blocks nothing)
 sudo docker exec waf-backend python3 -c "
 import json
 with open('/app/app/config/settings.json', 'r+') as f:
     data = json.load(f)
-    data['waf']['mode'] = 'DetectionOnly'
+    data['waf']['secRuleEngine'] = 'DetectionOnly'
     f.seek(0)
     json.dump(data, f, indent=2)
+    f.truncate()
 "
-sudo docker exec waf-openresty openresty -s reload
+# The dashboard save path also regenerates rules-override.conf — do the
+# same here, or this edit alone won't reach ModSecurity's real directive:
+sudo docker exec waf-backend python3 -c "
+from app.services.rule_manager import sync_rules_and_exclusions
+print(sync_rules_and_exclusions())
+"
 ```
+
+**Note:** the key is `secRuleEngine`, not `mode` — the field the dashboard actually reads and applies. Remember to switch back to `On` once the false positive is diagnosed; `DetectionOnly` logs attacks without blocking them.
 
 **If services are down:**
 
@@ -619,5 +624,5 @@ sudo docker compose up -d --build
 
 ---
 
-**Last Updated:** 2026-07-15  
-**Version:** 1.0.0
+**Last Updated:** 2026-09-07  
+**Version:** 1.1.0
