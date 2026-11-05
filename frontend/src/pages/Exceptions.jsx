@@ -258,7 +258,7 @@ export function CreateExceptionModal({ isOpen, log, onClose, onSubmit }) {
           </div>
           <div className="modal-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
             <button type="button" className="modal-btn secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="modal-btn primary" disabled={submitting} style={{ background: 'var(--sev-high)', borderColor: 'var(--sev-high)', color: '#000', fontWeight: 600 }}>
+            <button type="submit" className="modal-btn primary" disabled={submitting} style={{ background: 'var(--sev-high)', borderColor: 'var(--sev-high)', color: '#ffffff', fontWeight: 600 }}>
               {submitting ? "Applying exception..." : "Apply WAF Exception"}
             </button>
           </div>
@@ -568,6 +568,7 @@ export default function Exceptions() {
               <Search size={16} color="var(--text-secondary)" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
               <input
                 type="text"
+                aria-label="Search exceptions"
                 className="search-input"
                 style={{ paddingLeft: '36px', height: '38px', margin: 0, width: '100%' }}
                 placeholder="Search rule ID, endpoint, parameters, justification..."
@@ -577,6 +578,7 @@ export default function Exceptions() {
             </div>
             <div style={{ display: 'flex', gap: '12px' }}>
               <select
+                aria-label="Filter exceptions by strategy type"
                 className="filter-select"
                 style={{ width: '150px', height: '38px', margin: 0, fontSize: '13px' }}
                 value={statusFilter}
@@ -595,7 +597,8 @@ export default function Exceptions() {
             ) : exclusions.length === 0 ? (
               <NoExceptionsEmptyState />
             ) : (
-              <table className="logs-table">
+              <div className="table-responsive">
+                <table className="logs-table">
                 <thead>
                   <tr>
                     <th>Rule ID</th>
@@ -694,6 +697,7 @@ export default function Exceptions() {
                     })}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
           <Pagination
@@ -702,7 +706,7 @@ export default function Exceptions() {
           />
 
           {analytics && analytics.top_excluded_rules && analytics.top_excluded_rules.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '20px', marginTop: '10px' }}>
               <div className="glass-panel" style={{ padding: '20px' }}>
                 <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <AlertTriangle size={16} color="var(--sev-high)" />
@@ -833,7 +837,7 @@ export default function Exceptions() {
                 </div>
                 <div className="modal-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                   <button type="button" className="modal-btn secondary" onClick={() => setIsNoteModalOpen(false)}>Cancel</button>
-                  <button type="submit" className="modal-btn primary" style={{ background: 'var(--sev-low)', borderColor: 'var(--sev-low)', color: '#fff', fontWeight: 600 }}>
+                  <button type="submit" className="modal-btn primary" style={{ background: 'var(--sev-low)', borderColor: 'var(--sev-low)', color: '#ffffff', fontWeight: 600 }}>
                     Save Note
                   </button>
                 </div>

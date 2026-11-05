@@ -197,8 +197,9 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
             transition={{ duration: 0.15 }}
             style={{
               position: 'absolute', top: '38px', right: '0', width: '360px',
+              maxWidth: 'calc(100vw - 24px)',
               background: 'var(--bg-secondary)', backdropFilter: 'blur(20px)',
-              border: '1px solid var(--border-color)', borderRadius: '12px',
+              border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)',
               boxShadow: 'var(--shadow-card)',
               zIndex: 9999, overflow: 'hidden'
             }}
@@ -239,7 +240,7 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>{item.rule_name}</span>
                       <span style={{
-                        padding: '1px 6px', borderRadius: '3px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
+                        padding: '1px 6px', borderRadius: 'var(--radius-sm)', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
                         background: item.severity === 'critical' ? 'var(--danger-bg)' : 'var(--warning-bg)',
                         color: item.severity === 'critical' ? 'var(--danger-color)' : 'var(--warning-color)',
                         border: item.severity === 'critical' ? '1px solid rgba(255, 59, 92, 0.2)' : '1px solid rgba(255, 149, 0, 0.2)'
@@ -302,8 +303,8 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
 
       {/* Details View Modal */}
       {selectedAlert && (
-        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(2, 5, 9, 0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100000 }}>
-          <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="notif-bell-alert-title" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-color)', width: '560px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(4px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100000 }}>
+          <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="notif-bell-alert-title" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', width: '100%', maxWidth: 'min(560px, 92vw)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 id="notif-bell-alert-title" style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Alert details: {selectedAlert.rule_name}</h3>
               <Button variant="ghost" size="sm" icon={X} onClick={() => setSelectedAlert(null)} aria-label="Close alert details" />

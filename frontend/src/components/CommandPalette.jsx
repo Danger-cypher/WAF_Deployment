@@ -117,16 +117,17 @@ export default function CommandPalette({ isOpen, onClose, isAdmin, onNavigate, o
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 'min(560px, 92vw)', maxHeight: '70vh', display: 'flex', flexDirection: 'column',
-          background: 'rgba(8, 16, 30, 0.97)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)',
-          border: '1px solid var(--cyan-bg)', borderRadius: '14px',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.6), 0 0 0 1px var(--cyan-bg)',
+          background: 'var(--bg-card)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)',
+          border: '1px solid var(--border-strong)', borderRadius: '14px',
+          boxShadow: 'var(--shadow-card)',
           overflow: 'hidden',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px', borderBottom: '1px solid var(--cyan-bg)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px', borderBottom: '1px solid var(--border-color)' }}>
           <Search size={16} color="var(--text-muted)" style={{ flexShrink: 0 }} />
           <input
             ref={inputRef}
+            aria-label="Search navigation or commands"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}

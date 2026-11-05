@@ -45,6 +45,13 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
 
   useEffect(() => {
     if (!isOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
 
     // The wizard component stays mounted across open/close cycles (the
     // parent just toggles `isOpen`), so step/DNS/warning state from a

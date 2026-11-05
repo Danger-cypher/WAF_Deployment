@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.jsx'
 import { ThemeProvider } from './context/ThemeContext.jsx'
 import { ConfirmProvider } from './context/ConfirmContext.jsx'
+import { DensityProvider } from './context/DensityContext.jsx'
 
 // Applied synchronously, before first paint, so the correct theme is present
 // from frame one — ThemeProvider's effect would otherwise run a tick late
@@ -22,11 +23,24 @@ import { ConfirmProvider } from './context/ConfirmContext.jsx'
   document.documentElement.setAttribute('data-theme', resolved);
 })();
 
+(function applyInitialDensity() {
+  let density = 'comfortable';
+  try {
+    const stored = localStorage.getItem('cybersentinel-density');
+    if (stored === 'comfortable' || stored === 'compact') density = stored;
+  } catch {
+    // localStorage unavailable
+  }
+  document.documentElement.setAttribute('data-density', density);
+})();
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <ThemeProvider>
       <ConfirmProvider>
-        <App />
+        <DensityProvider>
+          <App />
+        </DensityProvider>
       </ConfirmProvider>
     </ThemeProvider>
   </StrictMode>,

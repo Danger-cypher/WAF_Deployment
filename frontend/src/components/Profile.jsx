@@ -28,7 +28,7 @@ const EVENT_TYPES = [
 const inputStyle = {
   width: '100%',
   padding: '9px 11px',
-  background: 'rgba(0,0,0,0.25)',
+  background: 'var(--inset-bg)',
   border: '1px solid var(--border-strong)',
   borderRadius: 'var(--radius-sm)',
   color: 'var(--text-primary)',
@@ -236,7 +236,7 @@ export default function Profile({ onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="profile-modal-title"
-        style={{ width: '620px', maxWidth: '94vw', maxHeight: '85vh' }}
+        style={{ width: '100%', maxWidth: 'min(620px, 94vw)', maxHeight: '85vh' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">

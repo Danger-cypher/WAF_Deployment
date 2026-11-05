@@ -1,6 +1,6 @@
 import { useState, useEffect, Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ShieldCheck, Activity } from 'lucide-react';
+import { ShieldCheck, Activity, Menu } from 'lucide-react';
 import {
   getCurrentUser, logoutUser, markFalsePositive, updateFalsePositiveStatus, createExclusion,
 } from './services/api';
@@ -10,6 +10,7 @@ import SsoCallback from './components/SsoCallback';
 import Sidebar from './components/Sidebar';
 import NotificationBell from './components/NotificationBell';
 import AccountMenu from './components/AccountMenu';
+import DensityToggle from './components/DensityToggle';
 import CommandPalette from './components/CommandPalette';
 
 import './index.css';
@@ -118,6 +119,7 @@ function App() {
   // Same pattern again, for Overview's "what changed" strip jumping
   // straight to Settings > Activity Log instead of just General.
   const [pendingSettingsTab, setPendingSettingsTab] = useState(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Wrapper that syncs tab state + URL together
   const setActiveTab = (tabId) => {
@@ -160,6 +162,7 @@ function App() {
       );
     }
     return () => window.removeEventListener('popstate', onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleTriggerMarkFp = (log) => {
@@ -351,11 +354,33 @@ function App() {
   return (
     <>
     <div className="app-container">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} handleLogout={handleLogout} userRole={userRole} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} />
+      <div
+        className={`mobile-sidebar-backdrop ${mobileMenuOpen ? 'open' : ''}`}
+        onClick={() => setMobileMenuOpen(false)}
+        aria-hidden="true"
+      />
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        handleLogout={handleLogout}
+        userRole={userRole}
+        collapsed={sidebarCollapsed}
+        setCollapsed={setSidebarCollapsed}
+        mobileOpen={mobileMenuOpen}
+        setMobileOpen={setMobileMenuOpen}
+      />
       <div className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`}>
         {/* SIEM Professional Top Bar */}
         <div className="siem-topbar">
           <div className="siem-topbar-left">
+            <button
+              type="button"
+              className="mobile-menu-btn"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              aria-label="Toggle navigation menu"
+            >
+              <Menu size={20} />
+            </button>
             <span className="siem-breadcrumb-sep">■</span>
             <span className="siem-breadcrumb">
               {activeTab === 'overview' && 'Security Overview'}
@@ -374,6 +399,7 @@ function App() {
             </span>
           </div>
           <div className="siem-topbar-right">
+            <DensityToggle />
             {/* WAF Active status badge */}
             <div className="siem-status-badge active">
               <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--success-color)', boxShadow: '0 0 6px var(--success-glow)' }} />
@@ -573,9 +599,9 @@ function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
               style={{
-                position: 'fixed', top: '24px', right: '24px', background: '#10b981', color: '#000',
-                padding: '12px 24px', borderRadius: '8px', zIndex: 10000, fontWeight: 600, display: 'flex', gap: '8px', alignItems: 'center',
-                boxShadow: '0 10px 15px -3px rgba(16, 185, 129, 0.4)'
+                position: 'fixed', top: '24px', right: '24px', background: 'var(--success-color)', color: '#ffffff',
+                padding: '12px 24px', borderRadius: 'var(--radius-md)', zIndex: 10000, fontWeight: 600, display: 'flex', gap: '8px', alignItems: 'center',
+                boxShadow: '0 10px 15px -3px var(--success-glow)'
               }}
             >
               <ShieldCheck size={18} />

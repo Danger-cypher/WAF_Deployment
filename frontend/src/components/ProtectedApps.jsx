@@ -579,8 +579,8 @@ export default function ProtectedApps({ onOpenWizard }) {
             padding: '10px 20px',
             background: 'var(--accent-color)',
             border: 'none',
-            borderRadius: '8px',
-            color: '#000',
+            borderRadius: 'var(--radius-md)',
+            color: '#ffffff',
             fontWeight: 600,
             cursor: 'pointer',
             display: 'flex',
@@ -838,7 +838,7 @@ export default function ProtectedApps({ onOpenWizard }) {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ background: 'rgba(20, 20, 20, 0.97)', border: '1px solid var(--border-strong)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '480px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-lg)', padding: '28px', width: '100%', maxWidth: 'min(480px, 92vw)', boxShadow: 'var(--shadow-card)' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
               <div>
@@ -939,7 +939,7 @@ export default function ProtectedApps({ onOpenWizard }) {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ background: 'rgba(20, 20, 20, 0.97)', border: '1px solid var(--border-strong)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '560px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-lg)', padding: '28px', width: '100%', maxWidth: 'min(560px, 92vw)', boxShadow: 'var(--shadow-card)' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
               <div>
@@ -1042,7 +1042,7 @@ export default function ProtectedApps({ onOpenWizard }) {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ background: 'rgba(20, 20, 20, 0.97)', border: '1px solid var(--border-strong)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '560px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-lg)', padding: '28px', width: '100%', maxWidth: 'min(560px, 92vw)', boxShadow: 'var(--shadow-card)' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
               <div>

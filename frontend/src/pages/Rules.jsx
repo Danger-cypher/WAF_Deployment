@@ -227,6 +227,14 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
   };
 
   useEffect(() => {
+    const isAnyModalOpen = selectedRule || showRolloutSettings || ruleToDisable;
+    if (!isAnyModalOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [selectedRule, showRolloutSettings, ruleToDisable]);
+
+  useEffect(() => {
     if (showRolloutSettings && !rolloutSettings) {
       handleLoadRolloutSettings();
     }
@@ -509,6 +517,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Monitoring window (hours)</div>
                     <input
                       type="number" min="1" max="720"
+                      aria-label="Monitoring window in hours"
                       value={rolloutSettings.window_hours}
                       disabled={userRole !== 'admin'}
                       onChange={(e) => setRolloutSettings({ ...rolloutSettings, window_hours: parseInt(e.target.value) || 1 })}
@@ -519,6 +528,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Min. sample size (matches)</div>
                     <input
                       type="number" min="1" max="10000"
+                      aria-label="Minimum sample size in matches"
                       value={rolloutSettings.min_sample_size}
                       disabled={userRole !== 'admin'}
                       onChange={(e) => setRolloutSettings({ ...rolloutSettings, min_sample_size: parseInt(e.target.value) || 1 })}
@@ -529,6 +539,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Promote threshold (max sole-match %)</div>
                     <input
                       type="number" min="0" max="100"
+                      aria-label="Promote threshold maximum sole-match percentage"
                       value={Math.round(rolloutSettings.promote_max_sole_match_rate * 100)}
                       disabled={userRole !== 'admin'}
                       onChange={(e) => setRolloutSettings({ ...rolloutSettings, promote_max_sole_match_rate: (parseInt(e.target.value) || 0) / 100 })}
@@ -539,6 +550,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Rollback threshold (min sole-match %)</div>
                     <input
                       type="number" min="0" max="100"
+                      aria-label="Rollback threshold minimum sole-match percentage"
                       value={Math.round(rolloutSettings.rollback_min_sole_match_rate * 100)}
                       disabled={userRole !== 'admin'}
                       onChange={(e) => setRolloutSettings({ ...rolloutSettings, rollback_min_sole_match_rate: (parseInt(e.target.value) || 0) / 100 })}
@@ -1069,7 +1081,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
                     <button
                       onClick={handleConfirmDisable}
                       className="action-btn-inspect"
-                      style={{ background: 'var(--danger-color)', color: '#fff', borderColor: 'transparent', padding: '6px 16px' }}
+                      style={{ background: 'var(--danger-color)', color: '#ffffff', borderColor: 'transparent', padding: '6px 16px', borderRadius: 'var(--radius-sm)' }}
                     >
                       Confirm Override
                     </button>

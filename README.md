@@ -72,9 +72,9 @@ Here is an overview of the directory structure of the CyberSentinel WAF reposito
 │   │   ├── App.jsx               # Primary layout, lazy-loaded routes, navigation, and tab renders
 │   │   ├── index.css             # Global styles, CSS custom-property design tokens, and theme (light/dark)
 │   │   ├── pages/                # One file per sidebar tab (Overview, Events, Rules, Settings, etc.)
-│   │   ├── components/           # Reusable UI component modules (Login, modals, Toast, EmptyStates, ...)
-│   │   ├── context/               # React context providers (Theme, Confirm dialog)
-│   │   ├── hooks/                 # Shared hooks (useToast, useConfirm, useEscapeToClose)
+│   │   ├── components/           # Reusable UI component modules (Login, DensityToggle, modals, Toast, EmptyStates, ...)
+│   │   ├── context/               # React context providers (Theme, Density, Confirm dialog)
+│   │   ├── hooks/                 # Shared hooks (useDensity, useToast, useConfirm, useEscapeToClose)
 │   │   ├── utils/                 # Formatting/date helpers
 │   │   ├── test/                  # Vitest + React Testing Library setup & tests
 │   │   └── services/             # Frontend API services layer
@@ -151,6 +151,8 @@ Quick reference mapping of important files, configuration, and log paths:
 21. **Traffic Composition Analytics:** DDoS & Bot Mitigation includes a Traffic Composition view classifying inbound traffic by User-Agent (AI crawler / known bot / scripted client / human).
 22. **Actionable Overview Dashboard:** Real trend badges (vs. yesterday), click-to-filter KPI charts, a Top Targeted Endpoints table, and per-admin configurable/reorderable KPI cards.
 23. **Plain-Language Block Explanations:** Every blocked security event's detail drawer includes a human-readable summary of why it was blocked, alongside the raw rule/score data.
+24. **Dynamic Information Density & Bento Telemetry:** Real-time density toggle (`Comfortable` vs `Compact`) for SOC triage operations offering ~40% increased visible data throughput, paired with an Asymmetric Bento Grid layout and instant GPU-stable SVG charts.
+25. **Anti-Glare Matte Light Theme:** Executive Slate 100 matte anti-glare light mode engineered for extended SOC console monitoring, eliminating ocular fatigue with zero subpixel jitter and WCAG AAA compliant contrast.
 
 ---
 

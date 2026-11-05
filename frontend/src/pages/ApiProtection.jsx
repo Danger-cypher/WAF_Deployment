@@ -442,7 +442,7 @@ export default function ApiProtection() {
                     ))}
                   </Pie>
                   <RechartsTooltip
-                    contentStyle={{ backgroundColor: 'rgba(15, 16, 22, 0.95)', border: '1px solid var(--surface-strong)', borderRadius: '8px' }}
+                    contentStyle={{ backgroundColor: 'var(--chart-tooltip-bg)', border: '1px solid var(--chart-tooltip-border)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)' }}
                     itemStyle={{ color: 'var(--text-primary)' }}
                   />
                 </PieChart>
@@ -907,7 +907,7 @@ export default function ApiProtection() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ background: 'rgba(20, 20, 20, 0.97)', border: '1px solid var(--border-strong)', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '480px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-lg)', padding: '28px', width: '100%', maxWidth: 'min(480px, 92vw)', boxShadow: 'var(--shadow-card)' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
               <div>

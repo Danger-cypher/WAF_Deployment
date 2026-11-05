@@ -33,31 +33,31 @@ const NotFound = ({ onReturnDashboard }) => {
             width: '64px',
             height: '64px',
             borderRadius: '50%',
-            background: 'rgba(239, 68, 68, 0.12)',
-            color: '#ef4444',
+            background: 'var(--danger-bg)',
+            color: 'var(--danger-color)',
             marginBottom: '20px',
           }}
         >
           <AlertCircle size={32} />
         </div>
 
-        <h2 style={{ fontSize: '24px', fontWeight: '600', marginBottom: '8px', color: 'var(--text-primary, #f3f4f6)' }}>
+        <h2 style={{ fontSize: '24px', fontWeight: '600', marginBottom: '8px', color: 'var(--text-primary)' }}>
           404 - Page Not Found
         </h2>
 
-        <p style={{ color: 'var(--text-secondary, #9ca3af)', fontSize: '14px', marginBottom: '16px', lineHeight: 1.5 }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '16px', lineHeight: 1.5 }}>
           The requested URL path was not found on this management console:
         </p>
 
         <div
           style={{
-            background: 'var(--bg-void, #080d19)',
-            border: '1px solid var(--border-color, #1e293b)',
+            background: 'var(--bg-void)',
+            border: '1px solid var(--border-color)',
             padding: '8px 14px',
-            borderRadius: '6px',
-            fontFamily: 'monospace',
+            borderRadius: 'var(--radius-sm)',
+            fontFamily: 'var(--font-mono)',
             fontSize: '13px',
-            color: '#f87171',
+            color: 'var(--danger-color)',
             wordBreak: 'break-all',
             marginBottom: '24px',
           }}
@@ -73,8 +73,8 @@ const NotFound = ({ onReturnDashboard }) => {
             justifyContent: 'center',
             gap: '8px',
             padding: '10px 20px',
-            borderRadius: '8px',
-            background: 'var(--accent-color, #3b82f6)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--accent-color)',
             color: '#ffffff',
             border: 'none',
             fontSize: '14px',

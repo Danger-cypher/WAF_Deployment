@@ -794,8 +794,10 @@ export default function SecurityReports() {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Report Template</span>
+          <label htmlFor="security-report-template" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Report Template</label>
           <select 
+            id="security-report-template"
+            aria-label="Report Template"
             className="report-select"
             value={reportType}
             onChange={(e) => setReportType(e.target.value)}

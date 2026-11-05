@@ -470,7 +470,7 @@ export default function DdosBotMitigation() {
                 <XAxis dataKey="time" stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={50} />
                 <YAxis stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} />
                 <RechartsTooltip
-                  contentStyle={{ backgroundColor: 'rgba(15, 16, 22, 0.95)', border: '1px solid var(--surface-strong)', borderRadius: '12px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}
+                  contentStyle={{ backgroundColor: 'var(--chart-tooltip-bg)', border: '1px solid var(--chart-tooltip-border)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)' }}
                   itemStyle={{ color: 'var(--text-primary)' }}
                 />
                 <Area type="monotone" dataKey="blocked" name="Dropped Connections" stroke="var(--danger-color)" strokeWidth={2} fillOpacity={1} fill="url(#colorDdos)" />

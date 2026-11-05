@@ -63,12 +63,15 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
 
   useEffect(() => {
     if (showExplain && !explainData && !explainLoading && log?.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setExplainLoading(true);
       setExplainError('');
+      let cancelled = false;
       getLogExplain(log.id)
-        .then(setExplainData)
-        .catch((err) => setExplainError(err.message || 'Failed to load explain data'))
-        .finally(() => setExplainLoading(false));
+        .then((data) => { if (!cancelled) setExplainData(data); })
+        .catch((err) => { if (!cancelled) setExplainError(err.message || 'Failed to load explain data'); })
+        .finally(() => { if (!cancelled) setExplainLoading(false); });
+      return () => { cancelled = true; };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showExplain]);

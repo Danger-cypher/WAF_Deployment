@@ -56,7 +56,7 @@ export default function CveTemplateLibrary({ userRole, showToast }) {
     }
   };
 
-  useEffect(() => { fetchLibrary(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchLibrary(); }, []); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
 
   const toggleExpand = async (entry) => {
     const next = expandedId === entry.cve_id ? null : entry.cve_id;

@@ -49,6 +49,7 @@ function AnimatedNumber({ value = 0 }) {
 
     animationFrame = requestAnimationFrame(updateNumber);
     return () => cancelAnimationFrame(animationFrame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [safeValue]);
 
   return <span>{(displayValue || 0).toLocaleString()}</span>;
@@ -505,7 +506,7 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
             />
           )}
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px' }}>
+        <div className="kpi-cards-flex" style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--kpi-gap, 16px)' }}>
           {kpiPrefs.order.filter((id) => !kpiPrefs.hidden.includes(id)).map((id) => (
             <div key={id} style={{ flex: '1 1 160px', minWidth: 0 }}>
               {id === 'total_requests' && (
@@ -612,7 +613,7 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
 
       {/* Row 2: Timeline + Severity */}
 
-      <div className="chart-card" style={{ gridColumn: 'span 8', position: 'relative' }}>
+      <div className="chart-card bento-card bento-hero" style={{ gridColumn: 'span 8', position: 'relative' }}>
         {showFlash && (
           <div style={{ position: 'absolute', inset: 0, background: 'color-mix(in srgb, var(--danger-color) 6%, transparent)', border: '1px solid var(--danger-color)', borderRadius: '10px', pointerEvents: 'none', zIndex: 10 }} />
         )}
@@ -624,9 +625,15 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
           </div>
         </div>
         <div className="chart-container" style={{ minHeight: '260px' }}>
-          {timelineLoading ? <SectionSkeleton variant="card" /> : (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={timelineData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+          {timelineLoading ? (
+            <SectionSkeleton variant="card" />
+          ) : timelineData.length === 0 ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '240px', color: 'var(--text-secondary)', fontSize: '13px' }}>
+              No attack activity recorded in this timeframe.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={timelineData} margin={{ top: 12, right: 12, bottom: 4, left: 0 }}>
                 <defs>
                   <linearGradient id="gradBlocked" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="var(--danger-color)" stopOpacity={0.35} />
@@ -634,10 +641,39 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-subtle)" vertical={false} />
-                <XAxis dataKey="time" stroke="var(--chart-axis)" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={60} />
-                <YAxis stroke="var(--chart-axis)" fontSize={10} tickLine={false} axisLine={false} />
+                <XAxis
+                  dataKey="time"
+                  stroke="var(--chart-axis)"
+                  fontSize={10}
+                  fontFamily="var(--font-mono)"
+                  tickLine={false}
+                  axisLine={false}
+                  interval="preserveStartEnd"
+                  minTickGap={50}
+                  dy={6}
+                />
+                <YAxis
+                  stroke="var(--chart-axis)"
+                  fontSize={10}
+                  fontFamily="var(--font-mono)"
+                  tickLine={false}
+                  axisLine={false}
+                  allowDecimals={false}
+                  domain={[0, 'auto']}
+                  width={38}
+                  tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v)}
+                />
                 <RechartsTooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey="attacks" name="Blocked" stroke="var(--danger-color)" strokeWidth={2} fillOpacity={1} fill="url(#gradBlocked)" />
+                <Area
+                  type="monotone"
+                  dataKey="attacks"
+                  name="Blocked"
+                  stroke="var(--danger-color)"
+                  strokeWidth={2}
+                  fillOpacity={1}
+                  fill="url(#gradBlocked)"
+                  isAnimationActive={false}
+                />
               </AreaChart>
             </ResponsiveContainer>
           )}
@@ -645,7 +681,7 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
       </div>
 
       {/* Severity Distribution */}
-      <div className="chart-card" style={{ gridColumn: 'span 4' }}>
+      <div className="chart-card bento-card bento-severity" style={{ gridColumn: 'span 4' }}>
         <div className="card-title">
           <AlertTriangleIcon size={14} color="var(--warning-color)" />
           Threat Severity
@@ -697,7 +733,7 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
       {/* Row 3: Attack Vectors + Top IPs + Top Rules */}
 
       {/* Attack Vector Distribution */}
-      <div className="chart-card" style={{ gridColumn: 'span 4' }}>
+      <div className="chart-card bento-card bento-vectors" style={{ gridColumn: 'span 4' }}>
         <div className="card-title">
           <ShieldAlert size={14} color="var(--sev-high)" />
           Attack Vectors
@@ -781,7 +817,7 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
       </div>
 
       {/* Top Attacking IPs */}
-      <div className="chart-card" style={{ gridColumn: 'span 4' }}>
+      <div className="chart-card bento-card bento-attackers" style={{ gridColumn: 'span 4' }}>
         <div className="card-title">
           <Globe size={14} color="var(--cyan-color)" />
           Top Attackers
@@ -821,7 +857,7 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
       </div>
 
       {/* Most Active OWASP Rules */}
-      <div className="chart-card" style={{ gridColumn: 'span 4' }}>
+      <div className="chart-card bento-card bento-rules" style={{ gridColumn: 'span 4' }}>
         <div className="card-title">
           <ShieldAlert size={14} color="var(--danger-color)" />
           Top OWASP Rules
@@ -867,7 +903,7 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
           top-offenders investigation flow (WAAP console teardown roadmap,
           P0 item 3). Full-width: URIs run longer than IPs or rule IDs and
           deserve the room. */}
-      <div className="chart-card" style={{ gridColumn: 'span 12' }}>
+      <div className="chart-card bento-card bento-endpoints" style={{ gridColumn: 'span 12' }}>
         <div className="card-title">
           <ShieldAlert size={14} color="var(--warning-color)" />
           Top Targeted Endpoints

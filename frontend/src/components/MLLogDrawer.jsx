@@ -23,20 +23,31 @@ export default function MLLogDrawer({ log, onClose, onLabelUpdate, showToast }) 
   useEscapeToClose(onClose, !!log);
 
   useEffect(() => {
+    if (!log) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [log]);
+
+  useEffect(() => {
     if (log && log.unique_id) {
       setLoadingCorrelated(true);
       setModalActiveTab('scores');
+      let cancelled = false;
       getLogById(log.unique_id)
         .then((data) => {
-          setCorrelatedLog(data && !data.error ? data : null);
+          if (!cancelled) setCorrelatedLog(data && !data.error ? data : null);
         })
         .catch((err) => {
-          console.warn("No correlated CyberSentinel Engine audit log found:", err);
-          setCorrelatedLog(null);
+          if (!cancelled) {
+            console.warn("No correlated CyberSentinel Engine audit log found:", err);
+            setCorrelatedLog(null);
+          }
         })
         .finally(() => {
-          setLoadingCorrelated(false);
+          if (!cancelled) setLoadingCorrelated(false);
         });
+      return () => { cancelled = true; };
     } else {
       setCorrelatedLog(null);
       setModalActiveTab('scores');

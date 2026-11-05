@@ -137,7 +137,7 @@ export default function AccountMenu({ username, userRole, onOpenProfile, onLogou
             exit={{ opacity: 0, y: 8, scale: 0.96 }}
             transition={PANEL_SPRING}
             style={{
-              position: 'absolute', top: '42px', right: 0, width: '248px',
+              position: 'absolute', top: '42px', right: 0, width: '248px', maxWidth: 'calc(100vw - 24px)',
               background: 'var(--bg-secondary)', backdropFilter: 'blur(20px)',
               border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)',
               boxShadow: 'var(--shadow-card)', zIndex: 9999, overflow: 'hidden',

@@ -1,8 +1,11 @@
 import React from 'react';
-import { ChevronRight, ChevronLeft, Clock, LogOut } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Clock, LogOut, X } from 'lucide-react';
 import { getNavGroups } from '../navigation';
 
-export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRole, collapsed, setCollapsed, recentThreats = 0 }) {
+export default function Sidebar({
+  activeTab, setActiveTab, handleLogout, userRole, collapsed, setCollapsed, recentThreats = 0,
+  mobileOpen = false, setMobileOpen,
+}) {
   const [currentTime, setCurrentTime] = React.useState(new Date());
 
   React.useEffect(() => {
@@ -15,8 +18,13 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronLeft;
 
+  const handleSelectTab = (id) => {
+    setActiveTab(id);
+    if (setMobileOpen) setMobileOpen(false);
+  };
+
   return (
-    <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
+    <div className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
       {/* Brand */}
       <div className="sidebar-brand">
         <img
@@ -40,6 +48,16 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
         >
           <ToggleIcon size={12} />
         </button>
+        {mobileOpen && (
+          <button
+            type="button"
+            onClick={() => setMobileOpen?.(false)}
+            className="sidebar-mobile-close"
+            aria-label="Close navigation"
+          >
+            <X size={18} />
+          </button>
+        )}
       </div>
 
       {/* Navigation Groups */}
@@ -56,7 +74,7 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
                   type="button"
                   key={item.id}
                   className={`nav-item ${activeTab === item.id ? 'active' : ''}`}
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => handleSelectTab(item.id)}
                   title={collapsed ? item.label : undefined}
                   aria-current={activeTab === item.id ? 'page' : undefined}
                 >
@@ -94,7 +112,16 @@ export default function Sidebar({ activeTab, setActiveTab, handleLogout, userRol
             </span>
           </div>
         )}
-        <button type="button" className="nav-item" onClick={handleLogout} title={collapsed ? 'Logout' : undefined} aria-label="Logout">
+        <button
+          type="button"
+          className="nav-item"
+          onClick={() => {
+            if (setMobileOpen) setMobileOpen(false);
+            handleLogout();
+          }}
+          title={collapsed ? 'Logout' : undefined}
+          aria-label="Logout"
+        >
           <LogOut size={16} />
           <span>Logout</span>
         </button>

@@ -263,6 +263,7 @@ export default function MLAnalytics() {
           </div>
 
           <select
+            aria-label="ML telemetry auto-refresh rate"
             value={refreshInterval}
             onChange={(e) => setRefreshInterval(Number(e.target.value))}
             disabled={!autoRefresh}
@@ -617,6 +618,7 @@ export default function MLAnalytics() {
               <div style={{ display: 'flex', gap: '12px' }}>
                 <input
                   type="text"
+                  aria-label="Search evaluated ML logs by URI or IP"
                   placeholder="Search by URI, IP, variables..."
                   value={searchQuery}
                   onChange={(e) => {
@@ -628,6 +630,7 @@ export default function MLAnalytics() {
                 />
 
                 <select
+                  aria-label="Filter evaluated ML logs by decision"
                   value={filterDecision}
                   onChange={(e) => {
                     setFilterDecision(e.target.value);

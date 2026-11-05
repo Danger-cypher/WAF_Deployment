@@ -46,6 +46,7 @@ export default function CustomRulesEditor({ userRole, initialLogContext, onConsu
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRules();
   }, []);
 
@@ -134,7 +135,7 @@ export default function CustomRulesEditor({ userRole, initialLogContext, onConsu
             loading={saving}
             disabled={loading || userRole !== 'admin'}
             onClick={handleSave}
-            style={{ background: 'var(--sev-low)', color: '#fff' }}
+            style={{ background: 'var(--accent-color)', color: '#ffffff' }}
           >
             {saving ? 'Validating & Applying...' : 'Apply & Reload WAF'}
           </Button>
@@ -194,6 +195,8 @@ export default function CustomRulesEditor({ userRole, initialLogContext, onConsu
           </div>
         </div>
         <textarea
+          id="custom-rules-editor"
+          aria-label="Custom CyberSentinel Engine rules editor"
           value={rulesContent}
           onChange={(e) => setRulesContent(e.target.value)}
           disabled={loading || userRole !== 'admin'}

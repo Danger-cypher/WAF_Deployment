@@ -83,7 +83,7 @@ export function FlagFpModal({ isOpen, log, onClose, onSubmit }) {
           </div>
           <div className="modal-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
             <button type="button" className="modal-btn secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="modal-btn primary" disabled={submitting} style={{ background: 'var(--success-color)', borderColor: 'var(--success-color)', color: '#000', fontWeight: 600 }}>
+            <button type="submit" className="modal-btn primary" disabled={submitting} style={{ background: 'var(--success-color)', borderColor: 'var(--success-color)', color: '#ffffff', fontWeight: 600 }}>
               {submitting ? "Saving..." : "Confirm & Save"}
             </button>
           </div>
@@ -243,7 +243,7 @@ function FalsePositiveDetailsModal({ isOpen, entry, onClose, onUpdateStatus, onS
                 />
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                   <button className="modal-btn secondary" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => { setNoteVal(entry.analyst_note || ''); setIsEditingNote(false); }}>Cancel</button>
-                  <button className="modal-btn primary" style={{ padding: '4px 10px', fontSize: '11px', background: 'var(--sev-low)', borderColor: 'var(--sev-low)', color: '#fff' }} onClick={handleSave}>Save</button>
+                  <button className="modal-btn primary" style={{ padding: '4px 10px', fontSize: '11px', background: 'var(--sev-low)', borderColor: 'var(--sev-low)', color: '#ffffff' }} onClick={handleSave}>Save</button>
                 </div>
               </div>
             ) : (
@@ -294,7 +294,7 @@ function FalsePositiveDetailsModal({ isOpen, entry, onClose, onUpdateStatus, onS
                   onCreateException(entry);
                   onClose();
                 }}
-                style={{ background: 'var(--sev-high)', borderColor: 'var(--sev-high)', color: '#000', fontWeight: 600 }}
+                style={{ background: 'var(--sev-high)', borderColor: 'var(--sev-high)', color: '#ffffff', fontWeight: 600 }}
               >
                 {entry.linked_exclusion_id != null ? 'Create Additional Exception' : 'Bypass & Create Exception'}
               </button>
@@ -456,6 +456,7 @@ export default function FalsePositives({ userRole, onCreateException }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Filter size={14} color="var(--text-secondary)" />
             <select
+              aria-label="Filter false positives by review status"
               className="filter-select"
               style={{ width: '130px', height: '38px', margin: 0, fontSize: '13px' }}
               value={statusFilter}
@@ -468,6 +469,7 @@ export default function FalsePositives({ userRole, onCreateException }) {
             </select>
           </div>
           <select
+            aria-label="Filter false positives by severity"
             className="filter-select"
             style={{ width: '130px', height: '38px', margin: 0, fontSize: '13px' }}
             value={severityFilter}
@@ -481,6 +483,7 @@ export default function FalsePositives({ userRole, onCreateException }) {
           </select>
           <input
             type="text"
+            aria-label="Filter false positives by Rule ID"
             className="search-input"
             style={{ width: '120px', height: '38px', margin: 0, fontSize: '13px', paddingLeft: '12px' }}
             placeholder="Rule ID..."
@@ -497,7 +500,8 @@ export default function FalsePositives({ userRole, onCreateException }) {
         ) : entries.length === 0 ? (
           <NoFalsePositivesEmptyState />
         ) : (
-          <table className="logs-table">
+          <div className="table-responsive">
+            <table className="logs-table">
             <thead>
               <tr>
                 <th>Timestamp</th>
@@ -586,6 +590,7 @@ export default function FalsePositives({ userRole, onCreateException }) {
                 })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
       <Pagination page={page} totalPages={totalPages} total={total} itemLabel="records" onPrev={goToPrev} onNext={goToNext} />

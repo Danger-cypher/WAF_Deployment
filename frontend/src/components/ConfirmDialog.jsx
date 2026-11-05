@@ -42,7 +42,7 @@ export default function ConfirmDialog({ request, onConfirm, onCancel }) {
             aria-labelledby="confirm-dialog-title"
             aria-describedby="confirm-dialog-message"
             style={{
-              width: '420px', maxWidth: '92vw', background: 'var(--bg-card)',
+              width: '100%', maxWidth: 'min(420px, 92vw)', background: 'var(--bg-card)',
               border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-lg)', padding: '20px',
               boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
             }}

@@ -326,6 +326,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchSettings();
   }, []);
 
@@ -1839,6 +1840,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                   ) : autoBlockedIps.length === 0 ? (
                     <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>No IPs currently auto-blocked.</div>
                   ) : (
+                    <div className="table-responsive">
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
                       {autoBlockedIps.map((entry) => (
                         <tr key={entry.ip} style={{ borderBottom: '1px solid var(--surface-subtle)' }}>
@@ -1859,6 +1861,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                         </tr>
                       ))}
                     </tbody></table>
+                    </div>
                   )}
                 </div>
                 </SettingsAccordionCard>
@@ -2420,6 +2423,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                     ) : apiKeys.length === 0 ? (
                       <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>No API keys created yet.</div>
                     ) : (
+                      <div className="table-responsive">
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}><tbody>
                         {apiKeys.map((k) => (
                           <tr key={k.id} style={{ borderBottom: '1px solid var(--surface-subtle)', opacity: k.enabled ? 1 : 0.5 }}>
@@ -2449,6 +2453,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                           </tr>
                         ))}
                       </tbody></table>
+                      </div>
                     )}
                   </div>
 

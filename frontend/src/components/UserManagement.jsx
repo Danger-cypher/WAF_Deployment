@@ -13,9 +13,9 @@ import Pagination from './Pagination';
 const inputStyle = {
   width: '100%',
   padding: '10px 12px',
-  background: 'rgba(0,0,0,0.25)',
+  background: 'var(--inset-bg)',
   border: '1px solid var(--border-strong)',
-  borderRadius: '8px',
+  borderRadius: 'var(--radius-md)',
   color: 'var(--text-primary)',
   fontSize: '14px',
   boxSizing: 'border-box',
@@ -400,11 +400,11 @@ export default function UserManagement({ currentUsername }) {
       {loading ? (
         <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-secondary)' }}>Loading users…</div>
       ) : (
-        <div style={{
+        <div className="table-responsive" style={{
           background: 'var(--inset-bg)', border: '1px solid var(--surface-strong)',
-          borderRadius: '12px', overflow: 'hidden',
+          borderRadius: 'var(--radius-lg)', overflowX: 'auto', WebkitOverflowScrolling: 'touch',
         }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+          <table style={{ width: '100%', minWidth: '580px', borderCollapse: 'collapse', fontSize: '14px' }}>
             <thead>
               <tr style={{ background: 'var(--surface-subtle)', textAlign: 'left' }}>
                 {['User', 'Role', 'Status', '2FA', 'Last Login', ''].map((h) => (
@@ -429,6 +429,7 @@ export default function UserManagement({ currentUsername }) {
                     </td>
                     <td style={{ padding: '14px 16px' }}>
                       <select
+                        aria-label={`Change role for user ${u.username}`}
                         value={u.role}
                         disabled={isSelf || busyId === u.id}
                         title={isSelf ? "You can't change your own role" : undefined}
