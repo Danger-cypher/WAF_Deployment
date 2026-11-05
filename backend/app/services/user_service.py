@@ -44,6 +44,7 @@ class UserService:
     def _init_database(self):
         conn = self._get_connection()
         try:
+            conn.execute("PRAGMA journal_mode=WAL;")
             cursor = conn.cursor()
             cursor.execute(
                 """

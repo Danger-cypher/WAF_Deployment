@@ -75,6 +75,7 @@ class ApiKeyService:
     def _init_database(self):
         conn = self._get_connection()
         try:
+            conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS api_keys (

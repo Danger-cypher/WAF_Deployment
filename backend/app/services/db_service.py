@@ -24,6 +24,7 @@ def get_connection():
 def init_db():
     try:
         with get_connection() as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
             cursor = conn.cursor()
             # 1. False Positives table
             cursor.execute("""

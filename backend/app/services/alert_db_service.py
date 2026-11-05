@@ -121,6 +121,7 @@ class AlertDatabaseService:
     def _init_database(self):
         """Initialize database schema if not exists"""
         conn = self._get_connection()
+        conn.execute("PRAGMA journal_mode=WAL;")
         cursor = conn.cursor()
         
         try:

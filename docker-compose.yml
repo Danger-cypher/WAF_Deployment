@@ -433,8 +433,8 @@ services:
     container_name: waf-litestream
     restart: unless-stopped
     volumes:
-      - ./backend/app/config:/data/config:ro
-      - ./backend/app/data:/data/data:ro
+      - ./backend/app/config:/data/config
+      - ./backend/app/data:/data/data
       - ./configs/litestream/litestream.yml:/etc/litestream.yml:ro
       - litestream_meta:/litestream-meta
       - litestream_backups:/backups
