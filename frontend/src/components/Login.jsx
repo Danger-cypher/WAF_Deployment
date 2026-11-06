@@ -188,7 +188,7 @@ export default function Login({ setAuth, onLoginSuccess }) {
                 <span>Zero-Trust Gateway</span>
               </div>
               <h1 id="login-heading" className="login-title">
-                {showMfa ? 'Two-Factor Verification' : 'Enterprise Access'}
+                {showMfa ? 'Two-Factor Verification' : 'WAF Login'}
               </h1>
               <p className="login-subtitle">
                 {showMfa
