@@ -756,6 +756,7 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
                         innerRadius={44} outerRadius={68}
                         paddingAngle={2}
                         dataKey="value"
+                        isAnimationActive={false}
                         activeIndex={activeVectorIndex}
                         activeShape={(props) => {
                           const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props;

@@ -451,7 +451,7 @@ export default function DdosBotMitigation() {
                 <XAxis dataKey="time" stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={50} />
                 <YAxis stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} />
                 <RechartsTooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="blocked" name="Dropped Connections" stroke="var(--danger-color)" strokeWidth={2} fillOpacity={1} fill="url(#colorDdos)" />
+                <Area type="monotone" dataKey="blocked" name="Dropped Connections" stroke="var(--danger-color)" strokeWidth={2} fillOpacity={1} fill="url(#colorDdos)" isAnimationActive={false} />
               </AreaChart>
             </ResponsiveContainer>
           </div>

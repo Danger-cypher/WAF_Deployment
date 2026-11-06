@@ -437,6 +437,7 @@ export default function ApiProtection() {
                     outerRadius={70}
                     paddingAngle={4}
                     dataKey="value"
+                    isAnimationActive={false}
                   >
                     {trafficData.filter(d => d.value > 0).map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />

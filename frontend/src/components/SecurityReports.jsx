@@ -348,7 +348,7 @@ function ReportAppView({ data, reportType }) {
               <div style={{ height: '220px', width: '100%', marginBottom: '12px' }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={data.attackTypes} cx="50%" cy="50%" innerRadius={45} outerRadius={78} paddingAngle={2} dataKey="count" nameKey="attack_type" strokeWidth={0}>
+                    <Pie data={data.attackTypes} cx="50%" cy="50%" innerRadius={45} outerRadius={78} paddingAngle={2} dataKey="count" nameKey="attack_type" strokeWidth={0} isAnimationActive={false}>
                       {data.attackTypes.map((entry, index) => (
                         <Cell key={index} fill={ATTACK_CHART_COLORS[index % ATTACK_CHART_COLORS.length]} />
                       ))}
