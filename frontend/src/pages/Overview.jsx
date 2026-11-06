@@ -14,6 +14,7 @@ import {
   getLiveStreamWsUrl,
 } from '../services/api';
 import { NoTrafficEmptyState, FetchErrorState } from '../components/EmptyStates';
+import { ChartTooltip } from '../components/ui';
 import { DEFAULT_KPI_ORDER, KPI_LABELS, loadKpiPrefs, saveKpiPrefs } from '../utils/kpiPrefs';
 import { applyLiveStatsBump } from '../utils/liveStatsBump';
 
@@ -775,7 +776,13 @@ export default function ThreatAnalytics({ username, onFilterEvents }) {
                           <Cell key={index} fill={SIEM_COLORS[entry.name] || aColors[index % aColors.length]} opacity={activeVectorIndex != null && activeVectorIndex !== index ? 0.4 : 1} />
                         ))}
                       </Pie>
-                      <RechartsTooltip contentStyle={{ background: 'var(--chart-tooltip-bg)', border: '1px solid var(--surface-strong)', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'var(--text-primary)' }} formatter={(v, n) => [`${v} (${((v/total)*100).toFixed(1)}%)`, n]} />
+                      <RechartsTooltip
+                        content={
+                          <ChartTooltip
+                            valueFormatter={(v) => `${Number(v).toLocaleString()} (${((v / (total || 1)) * 100).toFixed(1)}%)`}
+                          />
+                        }
+                      />
                     </PieChart>
                   </ResponsiveContainer>
                   <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none' }}>

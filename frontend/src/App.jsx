@@ -1,6 +1,6 @@
 import { useState, useEffect, Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ShieldCheck, Activity, Menu } from 'lucide-react';
+import { ShieldCheck, Activity, Menu, AlertCircle } from 'lucide-react';
 import {
   getCurrentUser, logoutUser, markFalsePositive, updateFalsePositiveStatus, createExclusion,
 } from './services/api';
@@ -12,6 +12,7 @@ import NotificationBell from './components/NotificationBell';
 import AccountMenu from './components/AccountMenu';
 import DensityToggle from './components/DensityToggle';
 import CommandPalette from './components/CommandPalette';
+import { Breadcrumbs } from './components/ui';
 
 import './index.css';
 
@@ -100,6 +101,7 @@ function App() {
   const [logToExclude, setLogToExclude] = useState(null);
   const [isExceptionModalOpen, setIsExceptionModalOpen] = useState(false);
   const [globalSuccessMsg, setGlobalSuccessMsg] = useState('');
+  const [globalErrorMsg, setGlobalErrorMsg] = useState('');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isAlertHistoryModalOpen, setIsAlertHistoryModalOpen] = useState(false);
   const [, setAdvancedInitialTab] = useState('false_positives');
@@ -194,7 +196,8 @@ function App() {
       setTimeout(() => setGlobalSuccessMsg(''), 3000);
     } catch (err) {
       console.error("Failed to flag false positive", err);
-      alert(err.message || "Failed to mark false positive entry.");
+      setGlobalErrorMsg(err.message || "Failed to mark false positive entry.");
+      setTimeout(() => setGlobalErrorMsg(''), 4000);
     }
   };
 
@@ -209,7 +212,8 @@ function App() {
       }
     } catch (err) {
       console.error("Failed to apply WAF exception", err);
-      alert(err.message || "Failed to commit exclusion rule.");
+      setGlobalErrorMsg(err.message || "Failed to commit exclusion rule.");
+      setTimeout(() => setGlobalErrorMsg(''), 4000);
     }
   };
 
@@ -351,6 +355,28 @@ function App() {
     );
   }
 
+  const TAB_CATEGORIES = {
+    overview: { category: 'Operations', label: 'Security Overview' },
+    protection: { category: 'Protection', label: 'Apps & DDoS Shield' },
+    events: { category: 'Live Telemetry', label: 'Security Events' },
+    ml_engine: { category: 'Intelligence', label: 'AI / ML Engine' },
+    false_positives: { category: 'Policy Tuning', label: 'False Positives & Exceptions' },
+    rules: { category: 'Ruleset', label: 'WAF Rules & CRS' },
+    api_protection: { category: 'Protection', label: 'API Protection' },
+    reports: { category: 'Analytics', label: 'Security Reports' },
+    integrations: { category: 'System', label: 'Alerts & Integrations' },
+    virtual_patching: { category: 'Ruleset', label: 'Virtual Patching' },
+    users: { category: 'Administration', label: 'User Management' },
+    settings: { category: 'Administration', label: 'System Settings' },
+    not_found: { category: 'Navigation', label: 'Page Not Found' },
+  };
+
+  const activeBreadcrumbMeta = TAB_CATEGORIES[activeTab] || { category: 'CyberSentinel', label: activeTab };
+  const breadcrumbItems = [
+    { label: activeBreadcrumbMeta.category, onClick: () => setActiveTab('overview') },
+    { label: activeBreadcrumbMeta.label, active: true },
+  ];
+
   return (
     <>
     <div className="app-container">
@@ -381,22 +407,7 @@ function App() {
             >
               <Menu size={20} />
             </button>
-            <span className="siem-breadcrumb-sep">■</span>
-            <span className="siem-breadcrumb">
-              {activeTab === 'overview' && 'Security Overview'}
-              {activeTab === 'protection' && 'Apps & DDoS Shield'}
-              {activeTab === 'events' && 'Security Events'}
-              {activeTab === 'ml_engine' && 'AI / ML Engine'}
-              {activeTab === 'false_positives' && 'False Positives & Exceptions'}
-              {activeTab === 'rules' && 'WAF Rules & CRS'}
-              {activeTab === 'api_protection' && 'API Protection'}
-              {activeTab === 'reports' && 'Security Reports'}
-              {activeTab === 'integrations' && 'Alerts & Integrations'}
-              {activeTab === 'virtual_patching' && 'Virtual Patching'}
-              {activeTab === 'users' && 'User Management'}
-              {activeTab === 'settings' && 'System Settings'}
-              {activeTab === 'not_found' && 'Page Not Found'}
-            </span>
+            <Breadcrumbs items={breadcrumbItems} />
           </div>
           <div className="siem-topbar-right">
             <DensityToggle />
@@ -449,6 +460,7 @@ function App() {
               key="events"
               onMarkFalsePositive={handleTriggerMarkFp}
               onCreateRule={userRole === 'admin' ? handleCreateRuleFromLog : undefined}
+              onCreateException={userRole === 'admin' ? handleTriggerCreateException : undefined}
               initialSearch={pendingSearch?.tab === 'events' ? pendingSearch.value : undefined}
               initialSeverity={pendingSearch?.tab === 'events' ? pendingSearch.severity : undefined}
               initialAttackType={pendingSearch?.tab === 'events' ? pendingSearch.attackType : undefined}
@@ -606,6 +618,21 @@ function App() {
             >
               <ShieldCheck size={18} />
               <span>{globalSuccessMsg}</span>
+            </motion.div>
+          )}
+          {globalErrorMsg && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              style={{
+                position: 'fixed', top: '24px', right: '24px', background: 'var(--danger-color)', color: '#ffffff',
+                padding: '12px 24px', borderRadius: 'var(--radius-md)', zIndex: 10000, fontWeight: 600, display: 'flex', gap: '8px', alignItems: 'center',
+                boxShadow: '0 10px 15px -3px var(--danger-glow)'
+              }}
+            >
+              <AlertCircle size={18} />
+              <span>{globalErrorMsg}</span>
             </motion.div>
           )}
         </AnimatePresence>

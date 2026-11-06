@@ -5,6 +5,7 @@ import {
   ShieldCheck, Activity, FileJson, RefreshCw
 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
+import { ChartTooltip } from './ui';
 import {
   getStats, getAttackTypes, getTopIPs, getHealth, getSecurityStatistics,
   getWafSettings, getHardeningSettings, getLogSettings, getProtectedApps,
@@ -335,10 +336,7 @@ function ReportAppView({ data, reportType }) {
                         <Cell key={index} fill={ATTACK_CHART_COLORS[index % ATTACK_CHART_COLORS.length]} />
                       ))}
                     </Pie>
-                    <RechartsTooltip
-                      contentStyle={{ background: 'var(--chart-tooltip-bg)', border: '1px solid var(--surface-strong)', borderRadius: '8px', fontSize: '12px' }}
-                      itemStyle={{ color: 'var(--text-primary)' }}
-                    />
+                    <RechartsTooltip content={<ChartTooltip valueFormatter={(v) => `${Number(v).toLocaleString()} attacks`} />} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>

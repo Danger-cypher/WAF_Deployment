@@ -5,6 +5,7 @@ import { listUsers, createUser, updateUser, resetUserPassword, deleteUser, admin
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import Button from './Button';
+import { Checkbox, FormField, TextInput, SelectInput } from './ui';
 import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { usePagination } from '../hooks/usePagination';
@@ -19,16 +20,6 @@ const inputStyle = {
   color: 'var(--text-primary)',
   fontSize: '14px',
   boxSizing: 'border-box',
-};
-
-const labelStyle = {
-  display: 'block',
-  fontSize: '12px',
-  fontWeight: 600,
-  color: 'var(--text-secondary)',
-  marginBottom: '6px',
-  textTransform: 'uppercase',
-  letterSpacing: '0.03em',
 };
 
 function ModalShell({ title, onClose, children }) {
@@ -58,12 +49,19 @@ function AppChecklist({ apps, selectedIds, onChange }) {
     return <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>No protected applications exist yet.</div>;
   }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto', padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '160px', overflowY: 'auto', padding: '10px', background: 'var(--inset-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
       {apps.map((app) => (
-        <label key={app.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={selectedIds.includes(app.id)} onChange={() => toggle(app.id)} />
-          {app.name} <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>({app.domain})</span>
-        </label>
+        <Checkbox
+          key={app.id}
+          id={`app-check-${app.id}`}
+          checked={selectedIds.includes(app.id)}
+          onChange={() => toggle(app.id)}
+          label={
+            <span>
+              {app.name} <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>({app.domain})</span>
+            </span>
+          }
+        />
       ))}
     </div>
   );
@@ -78,12 +76,17 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
   const [saving, setSaving] = useState(false);
   const [apps, setApps] = useState([]);
   const [appIds, setAppIds] = useState([]);
+  const [touched, setTouched] = useState({});
 
   useEffect(() => {
     getProtectedApps().then(setApps).catch(() => setApps([]));
   }, []);
 
+  const usernameError = touched.username && !username.trim() ? 'Username is required.' : '';
+  const passwordError = touched.password && password.length < 12 ? 'Password must be at least 12 characters.' : '';
+
   const handleSubmit = async () => {
+    setTouched({ username: true, password: true });
     if (!username.trim() || password.length < 12) {
       showToast('Username is required and password must be at least 12 characters.', 'error');
       return;
@@ -111,36 +114,65 @@ function CreateUserModal({ onClose, onCreated, showToast }) {
   return (
     <ModalShell title="Add New User" onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <div>
-          <label htmlFor="um-new-username" style={labelStyle}>Username</label>
-          <input id="um-new-username" style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} placeholder="jdoe" autoFocus />
-        </div>
-        <div>
-          <label htmlFor="um-new-password" style={labelStyle}>Temporary Password (min 12 chars, 3+ char types)</label>
-          <input id="um-new-password" style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
-        </div>
-        <div>
-          <label htmlFor="um-new-role" style={labelStyle}>Role</label>
-          <select id="um-new-role" style={inputStyle} value={role} onChange={(e) => setRole(e.target.value)}>
+        <FormField label="Username" id="um-new-username" required error={usernameError}>
+          <TextInput
+            id="um-new-username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onBlur={() => setTouched((prev) => ({ ...prev, username: true }))}
+            placeholder="jdoe"
+            autoFocus
+          />
+        </FormField>
+
+        <FormField label="Temporary Password" id="um-new-password" required hint="Must be at least 12 characters with 3+ character types" error={passwordError}>
+          <TextInput
+            id="um-new-password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onBlur={() => setTouched((prev) => ({ ...prev, password: true }))}
+            placeholder="••••••••••••"
+          />
+        </FormField>
+
+        <FormField label="Role" id="um-new-role" required>
+          <SelectInput
+            id="um-new-role"
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+          >
             <option value="analyst">Analyst (read-only)</option>
             <option value="admin">Admin (full access)</option>
             <option value="app_admin">App Admin (scoped to specific apps)</option>
-          </select>
-        </div>
+          </SelectInput>
+        </FormField>
+
         {role === 'app_admin' && (
-          <div>
-            <label style={labelStyle}>Protected Applications</label>
+          <FormField label="Protected Applications" id="um-new-apps">
             <AppChecklist apps={apps} selectedIds={appIds} onChange={setAppIds} />
-          </div>
+          </FormField>
         )}
-        <div>
-          <label htmlFor="um-new-display-name" style={labelStyle}>Display Name (optional)</label>
-          <input id="um-new-display-name" style={inputStyle} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Jane Doe" />
-        </div>
-        <div>
-          <label htmlFor="um-new-email" style={labelStyle}>Email (optional)</label>
-          <input id="um-new-email" style={inputStyle} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane@example.com" />
-        </div>
+
+        <FormField label="Display Name" id="um-new-display-name" optional>
+          <TextInput
+            id="um-new-display-name"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="Jane Doe"
+          />
+        </FormField>
+
+        <FormField label="Email" id="um-new-email" optional>
+          <TextInput
+            id="um-new-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="jane@example.com"
+          />
+        </FormField>
+
         <Button variant="primary" loading={saving} onClick={handleSubmit} style={{ marginTop: '4px' }}>
           {saving ? 'Creating…' : 'Create User'}
         </Button>
@@ -216,10 +248,21 @@ function ResetPasswordModal({ user, onClose, showToast }) {
   return (
     <ModalShell title={`Reset Password — ${user.username}`} onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <div>
-          <label htmlFor="um-reset-password" style={labelStyle}>New Password (min 12 chars, 3+ char types)</label>
-          <input id="um-reset-password" style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoFocus />
-        </div>
+        <FormField
+          label="New Password"
+          id="um-reset-password"
+          required
+          hint="Must be at least 12 characters with 3+ character types"
+        >
+          <TextInput
+            id="um-reset-password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••••••"
+            autoFocus
+          />
+        </FormField>
         <Button variant="primary" loading={saving} onClick={handleSubmit}>
           {saving ? 'Saving…' : 'Reset Password'}
         </Button>

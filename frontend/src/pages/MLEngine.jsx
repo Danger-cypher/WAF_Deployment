@@ -19,6 +19,7 @@ import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
 import { useConfirm } from '../hooks/useConfirm';
 import MLLogDrawer from '../components/MLLogDrawer';
+import { ChartTooltip } from '../components/ui';
 
 export default function MLAnalytics() {
   const [stats, setStats] = useState({
@@ -441,19 +442,16 @@ export default function MLAnalytics() {
                       allowDecimals={false}
                     />
                     <RechartsTooltip
-                      contentStyle={{
-                        background: 'var(--bg-secondary)',
-                        border: '1px solid var(--border-color)',
-                        borderRadius: '12px',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'inherit',
-                        boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
-                      }}
-                      labelFormatter={(label) => `Time: ${label}`}
-                      formatter={(value, name) => [
-                        name === 'avg_score' ? `${(value * 100).toFixed(1)}%` : value,
-                        name === 'avg_score' ? 'Avg Threat' : 'Request Count'
-                      ]}
+                      content={
+                        <ChartTooltip
+                          labelFormatter={(l) => `Time: ${l}`}
+                          valueFormatter={(value, name) =>
+                            name === 'avg_score' || name === 'Avg Threat'
+                              ? `${(Number(value) * 100).toFixed(1)}%`
+                              : Number(value).toLocaleString()
+                          }
+                        />
+                      }
                     />
                     {/* Request Count Bar in the background */}
                     <Bar
@@ -512,13 +510,11 @@ export default function MLAnalytics() {
                       ))}
                     </Pie>
                     <RechartsTooltip
-                      contentStyle={{
-                        background: 'var(--bg-secondary)',
-                        border: '1px solid var(--border-color)',
-                        borderRadius: '8px',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'inherit'
-                      }}
+                      content={
+                        <ChartTooltip
+                          valueFormatter={(value) => `${Number(value).toLocaleString()} actions`}
+                        />
+                      }
                     />
                   </PieChart>
                 </ResponsiveContainer>

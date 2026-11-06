@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User, X, ShieldCheck, KeyRound, Save, BellOff, Smartphone, Monitor } from 'lucide-react';
 import { useToast } from '../hooks/useToast';
+import { useConfirm } from '../hooks/useConfirm';
 import Toast from './Toast';
 import Button from './Button';
 import { initialsFor, formatLocalTime } from '../utils/helpers';
@@ -48,6 +49,7 @@ const fieldGroupStyle = { display: 'flex', flexDirection: 'column', gap: '12px' 
 
 export default function Profile({ onClose }) {
   useEscapeToClose(onClose, true);
+  const confirm = useConfirm();
   const [profile, setProfile] = useState(null);
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -98,8 +100,14 @@ export default function Profile({ onClose }) {
   }, []);
 
   const handleRevokeSession = async (sessionId, isCurrent) => {
-    if (isCurrent && !window.confirm('This is your current session — revoking it will log you out immediately. Continue?')) {
-      return;
+    if (isCurrent) {
+      const ok = await confirm({
+        title: 'Revoke Current Session?',
+        message: 'This is your current session — revoking it will log you out immediately. Continue?',
+        danger: true,
+        confirmText: 'Revoke & Log Out',
+      });
+      if (!ok) return;
     }
     setRevokingSessionId(sessionId);
     try {

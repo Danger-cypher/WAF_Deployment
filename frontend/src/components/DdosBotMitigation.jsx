@@ -6,6 +6,7 @@ import { getDdosBotSettings, saveDdosBotSettings, getDdosAnalytics, getBotTraffi
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 import Toast from './Toast';
+import { Checkbox, Button, ChartTooltip } from './ui';
 
 // Fixed per-category color, independent of rank/sort order (dataviz rule:
 // "color follows the entity, never its rank") — same fixed-array-of-
@@ -324,58 +325,38 @@ export default function DdosBotMitigation() {
             )}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={riskChallengeEnabled}
-                onChange={(e) => setRiskChallengeEnabled(e.target.checked)}
-              />
-              Challenge moderate-risk traffic (ML score)
-            </label>
-            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-              Independent of Mitigation Action above — this serves the same JS-reload interstitial,
-              but triggered by the ML risk engine's "worth a second look" band instead of a bad-bot
-              User-Agent match. Off by default.
-            </div>
-          </div>
+          <Checkbox
+            id="ddos-risk-challenge"
+            checked={riskChallengeEnabled}
+            onChange={(e) => setRiskChallengeEnabled(e.target.checked)}
+            label="Challenge moderate-risk traffic (ML score)"
+            description="Independent of Mitigation Action above — this serves the same JS-reload interstitial, but triggered by the ML risk engine's 'worth a second look' band instead of a bad-bot User-Agent match. Off by default."
+          />
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={adaptiveThrottleEnabled}
-                onChange={(e) => setAdaptiveThrottleEnabled(e.target.checked)}
-              />
-              Tighten rate limit for repeat offenders (adaptive throttle)
-            </label>
-            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-              Independent of the rate limit above — layered on top of it, never replacing it. Once an
-              IP's ML-tracked reputation crosses a threshold (roughly 3 confirmed blocks in 24h), this
-              caps it to a much stricter request rate regardless of the base limit. Off by default.
-            </div>
-          </div>
+          <Checkbox
+            id="ddos-adaptive-throttle"
+            checked={adaptiveThrottleEnabled}
+            onChange={(e) => setAdaptiveThrottleEnabled(e.target.checked)}
+            label="Tighten rate limit for repeat offenders (adaptive throttle)"
+            description="Independent of the rate limit above — layered on top of it, never replacing it. Once an IP's ML-tracked reputation crosses a threshold (roughly 3 confirmed blocks in 24h), this caps it to a much stricter request rate regardless of the base limit. Off by default."
+          />
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={apiEnumProtectionEnabled}
-                onChange={(e) => setApiEnumProtectionEnabled(e.target.checked)}
-              />
-              Detect sequential API-ID enumeration
-            </label>
-            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-              Flags a client hitting the same endpoint (e.g. /api/users/&#123;id&#125;) with numeric IDs
-              that keep stepping up or down — a classic API scanning pattern nothing else here looks
-              for, since every other check scores one request at a time. Soft-throttles (429), not a
-              hard block. Off by default — untuned against real traffic, so start cautious.
-            </div>
-          </div>
+          <Checkbox
+            id="ddos-api-enum"
+            checked={apiEnumProtectionEnabled}
+            onChange={(e) => setApiEnumProtectionEnabled(e.target.checked)}
+            label="Detect sequential API-ID enumeration"
+            description="Flags a client hitting the same endpoint (e.g. /api/users/{id}) with numeric IDs that keep stepping up or down — a classic API scanning pattern nothing else here looks for, since every other check scores one request at a time. Soft-throttles (429), not a hard block. Off by default — untuned against real traffic, so start cautious."
+          />
 
-          <button type="submit" disabled={loadingAction} className="modal-btn primary" style={{ marginTop: '4px', alignSelf: 'flex-start' }}>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={loadingAction}
+            style={{ marginTop: '8px', alignSelf: 'flex-start' }}
+          >
             {loadingAction ? 'Applying to NGINX...' : 'Enforce Policy'}
-          </button>
+          </Button>
         </form>
       </div>
 
@@ -469,10 +450,7 @@ export default function DdosBotMitigation() {
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-hover)" vertical={false} />
                 <XAxis dataKey="time" stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={50} />
                 <YAxis stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} />
-                <RechartsTooltip
-                  contentStyle={{ backgroundColor: 'var(--chart-tooltip-bg)', border: '1px solid var(--chart-tooltip-border)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)' }}
-                  itemStyle={{ color: 'var(--text-primary)' }}
-                />
+                <RechartsTooltip content={<ChartTooltip />} />
                 <Area type="monotone" dataKey="blocked" name="Dropped Connections" stroke="var(--danger-color)" strokeWidth={2} fillOpacity={1} fill="url(#colorDdos)" />
               </AreaChart>
             </ResponsiveContainer>

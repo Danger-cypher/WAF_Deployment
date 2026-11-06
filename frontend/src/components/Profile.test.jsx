@@ -2,9 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Profile from './Profile';
+import { ConfirmProvider } from '../context/ConfirmContext.jsx';
 import * as api from '../services/api';
 
 vi.mock('../services/api');
+
+function renderProfile(props = {}) {
+  return render(
+    <ConfirmProvider>
+      <Profile onClose={() => {}} {...props} />
+    </ConfirmProvider>
+  );
+}
 
 const BASE_PROFILE = {
   id: 1, username: 'admin', role: 'admin', display_name: '', email: '',
@@ -23,7 +32,7 @@ beforeEach(() => {
 
 describe('Profile', () => {
   it('loads and displays the current username and role', async () => {
-    render(<Profile onClose={() => {}} />);
+    renderProfile();
     await waitFor(() => {
       expect(screen.getByText('admin')).toBeInTheDocument();
     });
@@ -35,7 +44,7 @@ describe('Profile', () => {
       muted_severities: ['critical'], muted_event_types: [],
     });
     const user = userEvent.setup();
-    render(<Profile onClose={() => {}} />);
+    renderProfile();
 
     const criticalChip = await screen.findByRole('button', { name: 'critical' });
     expect(criticalChip).not.toHaveStyle({ textDecoration: 'line-through' });
@@ -56,7 +65,7 @@ describe('Profile', () => {
   it('reverts the optimistic toggle if saving preferences fails', async () => {
     api.updateMyNotificationPreferences.mockRejectedValue(new Error('network down'));
     const user = userEvent.setup();
-    render(<Profile onClose={() => {}} />);
+    renderProfile();
 
     const infoChip = await screen.findByRole('button', { name: 'info' });
     await user.click(infoChip);
@@ -69,7 +78,7 @@ describe('Profile', () => {
 
   it('rejects a new password shorter than 12 characters without calling the API', async () => {
     const user = userEvent.setup();
-    render(<Profile onClose={() => {}} />);
+    renderProfile();
     await screen.findByText('admin');
 
     await user.type(screen.getByPlaceholderText('Current password'), 'whatever');
@@ -89,7 +98,7 @@ describe('Profile', () => {
     api.confirmMyMfa.mockResolvedValue({ enabled: true });
 
     const user = userEvent.setup();
-    render(<Profile onClose={() => {}} />);
+    renderProfile();
 
     await user.click(await screen.findByRole('button', { name: /enable 2fa/i }));
     expect(await screen.findByAltText(/mfa qr code/i)).toBeInTheDocument();
@@ -116,7 +125,7 @@ describe('Profile', () => {
     api.disableMyMfa.mockResolvedValue({ enabled: false });
 
     const user = userEvent.setup();
-    render(<Profile onClose={() => {}} />);
+    renderProfile();
 
     await user.click(await screen.findByRole('button', { name: /^disable$/i }));
     const confirmBtn = await screen.findByRole('button', { name: /confirm disable/i });

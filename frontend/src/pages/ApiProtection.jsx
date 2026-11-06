@@ -15,6 +15,7 @@ import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { FetchErrorState } from '../components/EmptyStates';
 import Button from '../components/Button';
+import { ChartTooltip } from '../components/ui';
 
 // Strips a leading ^ / trailing $ so a stored rule pattern and a raw
 // endpoint URI can be compared regardless of whether the pattern was
@@ -441,10 +442,7 @@ export default function ApiProtection() {
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <RechartsTooltip
-                    contentStyle={{ backgroundColor: 'var(--chart-tooltip-bg)', border: '1px solid var(--chart-tooltip-border)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)' }}
-                    itemStyle={{ color: 'var(--text-primary)' }}
-                  />
+                  <RechartsTooltip content={<ChartTooltip valueFormatter={(v) => `${Number(v).toLocaleString()} requests`} />} />
                 </PieChart>
               </ResponsiveContainer>
             ) : (

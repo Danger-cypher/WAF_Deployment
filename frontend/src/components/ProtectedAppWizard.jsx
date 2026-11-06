@@ -7,6 +7,7 @@ import {
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
+import { FormField, TextInput, SelectInput, Checkbox } from './ui';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null }) => {
@@ -40,6 +41,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
   const [formData, setFormData] = useState(emptyFormData);
   const [sslWarning, setSslWarning] = useState('');
   const [pendingResult, setPendingResult] = useState(null);
+  const [touched, setTouched] = useState({});
 
   const [wafServerIP, setWafServerIP] = useState('Loading...');
 
@@ -307,50 +309,70 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 </p>
 
                 <div className="form-group">
-                  <label htmlFor="paw-app-name">Application Name</label>
-                  <input id="paw-app-name"
-                    type="text"
-                    className="wizard-input"
-                    placeholder="e.g., Production API"
-                    value={formData.appName}
-                    onChange={(e) => setFormData({ ...formData, appName: e.target.value })}
-                  />
-                  <span className="input-hint">A friendly name to identify this application</span>
+                  <FormField
+                    label="Application Name"
+                    id="paw-app-name"
+                    required
+                    hint="A friendly name to identify this application"
+                    error={touched.appName && !formData.appName.trim() ? 'Application name is required' : ''}
+                  >
+                    <TextInput
+                      id="paw-app-name"
+                      type="text"
+                      className="wizard-input"
+                      placeholder="e.g., Production API"
+                      value={formData.appName}
+                      onChange={(e) => setFormData({ ...formData, appName: e.target.value })}
+                      onBlur={() => setTouched((p) => ({ ...p, appName: true }))}
+                    />
+                  </FormField>
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="paw-public-domain">Public Domain</label>
-                  <input id="paw-public-domain"
-                    type="text"
-                    className="wizard-input"
-                    placeholder="e.g., api.example.com"
-                    value={formData.publicDomain}
-                    onChange={(e) => setFormData({ ...formData, publicDomain: e.target.value })}
-                  />
-                  <span className="input-hint">The domain users will access (must be configured in DNS)</span>
+                  <FormField
+                    label="Public Domain"
+                    id="paw-public-domain"
+                    required
+                    hint="The domain users will access (must be configured in DNS)"
+                    error={touched.publicDomain && !formData.publicDomain.trim() ? 'Public domain is required' : ''}
+                  >
+                    <TextInput
+                      id="paw-public-domain"
+                      type="text"
+                      className="wizard-input"
+                      placeholder="e.g., api.example.com"
+                      value={formData.publicDomain}
+                      onChange={(e) => setFormData({ ...formData, publicDomain: e.target.value })}
+                      onBlur={() => setTouched((p) => ({ ...p, publicDomain: true }))}
+                    />
+                  </FormField>
                 </div>
 
                 <div className="form-row">
                   <div className="form-group">
-                    <label htmlFor="paw-rate-limit">Rate Limit (Req/s)</label>
-                    <input id="paw-rate-limit"
-                      type="number"
-                      className="wizard-input"
-                      placeholder="50"
-                      value={formData.rateLimitRps}
-                      onChange={(e) => setFormData({ ...formData, rateLimitRps: e.target.value })}
-                    />
+                    <FormField label="Rate Limit (Req/s)" id="paw-rate-limit" optional hint="Per-IP rate limit">
+                      <TextInput
+                        id="paw-rate-limit"
+                        type="number"
+                        className="wizard-input"
+                        placeholder="50"
+                        value={formData.rateLimitRps}
+                        onChange={(e) => setFormData({ ...formData, rateLimitRps: e.target.value })}
+                      />
+                    </FormField>
                   </div>
 
                   <div className="form-group">
-                    <label htmlFor="paw-burst-tolerance">Burst Tolerance</label>
-                    <input id="paw-burst-tolerance"
-                      type="number"
-                      className="wizard-input"
-                      placeholder="100"
-                      value={formData.burstTolerance}
-                      onChange={(e) => setFormData({ ...formData, burstTolerance: e.target.value })}
-                    />
+                    <FormField label="Burst Tolerance" id="paw-burst-tolerance" optional hint="Max burst queue">
+                      <TextInput
+                        id="paw-burst-tolerance"
+                        type="number"
+                        className="wizard-input"
+                        placeholder="100"
+                        value={formData.burstTolerance}
+                        onChange={(e) => setFormData({ ...formData, burstTolerance: e.target.value })}
+                      />
+                    </FormField>
                   </div>
                 </div>
               </motion.div>
@@ -374,39 +396,51 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                 </p>
 
                 <div className="form-group">
-                  <label htmlFor="paw-backend-host">Backend Server IP or Hostname</label>
-                  <input id="paw-backend-host"
-                    type="text"
-                    className="wizard-input"
-                    placeholder="e.g., 192.168.1.100 or backend.internal"
-                    value={formData.backendHost}
-                    onChange={(e) => setFormData({ ...formData, backendHost: e.target.value })}
-                  />
-                  <span className="input-hint">The actual server where your application runs</span>
+                  <FormField
+                    label="Backend Server IP or Hostname"
+                    id="paw-backend-host"
+                    required
+                    hint="The actual server where your application runs"
+                    error={touched.backendHost && !formData.backendHost.trim() ? 'Backend host is required' : ''}
+                  >
+                    <TextInput
+                      id="paw-backend-host"
+                      type="text"
+                      className="wizard-input"
+                      placeholder="e.g., 192.168.1.100 or backend.internal"
+                      value={formData.backendHost}
+                      onChange={(e) => setFormData({ ...formData, backendHost: e.target.value })}
+                      onBlur={() => setTouched((p) => ({ ...p, backendHost: true }))}
+                    />
+                  </FormField>
                 </div>
 
                 <div className="form-row">
                   <div className="form-group">
-                    <label htmlFor="paw-backend-port">Backend Port</label>
-                    <input id="paw-backend-port"
-                      type="number"
-                      className="wizard-input"
-                      placeholder="80"
-                      value={formData.backendPort}
-                      onChange={(e) => setFormData({ ...formData, backendPort: e.target.value })}
-                    />
+                    <FormField label="Backend Port" id="paw-backend-port" required>
+                      <TextInput
+                        id="paw-backend-port"
+                        type="number"
+                        className="wizard-input"
+                        placeholder="80"
+                        value={formData.backendPort}
+                        onChange={(e) => setFormData({ ...formData, backendPort: e.target.value })}
+                      />
+                    </FormField>
                   </div>
 
                   <div className="form-group">
-                    <label htmlFor="paw-backend-protocol">Backend Protocol</label>
-                    <select id="paw-backend-protocol"
-                      className="wizard-input"
-                      value={formData.backendProtocol}
-                      onChange={(e) => setFormData({ ...formData, backendProtocol: e.target.value })}
-                    >
-                      <option value="http">HTTP</option>
-                      <option value="https">HTTPS</option>
-                    </select>
+                    <FormField label="Backend Protocol" id="paw-backend-protocol" required>
+                      <SelectInput
+                        id="paw-backend-protocol"
+                        className="wizard-input"
+                        value={formData.backendProtocol}
+                        onChange={(e) => setFormData({ ...formData, backendProtocol: e.target.value })}
+                      >
+                        <option value="http">HTTP</option>
+                        <option value="https">HTTPS</option>
+                      </SelectInput>
+                    </FormField>
                   </div>
                 </div>
 
@@ -482,35 +516,22 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
                   </span>
                 </div>
 
-                <div className="form-group" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--surface-strong)' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={formData.requireAuth}
-                      onChange={(e) => setFormData({ ...formData, requireAuth: e.target.checked })}
-                    />
-                    Require authentication
-                  </label>
-                  <span className="input-hint">
-                    Deny any request missing a specific header or cookie — a presence check, not full
-                    token validation. Off by default.
-                  </span>
-                </div>
+                <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <Checkbox
+                    id="paw-require-auth"
+                    checked={formData.requireAuth}
+                    onChange={(e) => setFormData({ ...formData, requireAuth: e.target.checked })}
+                    label="Require authentication"
+                    description="Deny any request missing a specific header or cookie — a presence check, not full token validation. Off by default."
+                  />
 
-                <div className="form-group" style={{ marginTop: '16px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={formData.enableResponseCache}
-                      onChange={(e) => setFormData({ ...formData, enableResponseCache: e.target.checked })}
-                    />
-                    Enable response caching
-                  </label>
-                  <span className="input-hint">
-                    Cache this app's cacheable GET/HEAD responses at the WAF gateway. Respects the
-                    backend's own Cache-Control headers — a response that sets a cookie or says
-                    "no-store" is never cached. Off by default.
-                  </span>
+                  <Checkbox
+                    id="paw-enable-cache"
+                    checked={formData.enableResponseCache}
+                    onChange={(e) => setFormData({ ...formData, enableResponseCache: e.target.checked })}
+                    label="Enable response caching"
+                    description="Cache this app's cacheable GET/HEAD responses at the WAF gateway. Respects the backend's own Cache-Control headers — a response that sets a cookie or says 'no-store' is never cached. Off by default."
+                  />
                 </div>
 
                 {formData.requireAuth && (

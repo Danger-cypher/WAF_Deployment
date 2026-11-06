@@ -8,15 +8,29 @@ import { NoLogsEmptyState, NoSearchResultsEmptyState } from '../components/Empty
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
 
-export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSearch, initialSeverity, initialAttackType, onConsumeInitialSearch }) {
+export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateException, initialSearch, initialSeverity, initialAttackType, onConsumeInitialSearch }) {
   const { toast, showToast } = useToast();
   const [logs, setLogs] = useState([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [size, setSize] = useState(15);
   const [loading, setLoading] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(3000);
   const [liveUpdates, setLiveUpdates] = useState(true);
+
+  const getInitialParam = (key, fallback = '') => {
+    try {
+      if (typeof window === 'undefined') return fallback;
+      const params = new URLSearchParams(window.location.search);
+      return params.get(key) || fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const [page, setPage] = useState(() => {
+    const p = parseInt(getInitialParam('page', '1'), 10);
+    return Number.isFinite(p) && p > 0 ? p : 1;
+  });
 
   useEffect(() => {
     getGeneralSettings().then(settings => {
@@ -32,9 +46,31 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSea
   // segment on Overview's Attack Vectors / Threat Severity charts, if
   // that's how this page was reached (App.jsx remounts this component on
   // every tab switch, so this only ever applies at that first mount).
-  const [search, setSearch] = useState(initialSearch || '');
-  const [severityFilter, setSeverityFilter] = useState(initialSeverity || '');
-  const [attackFilter, setAttackFilter] = useState(initialAttackType || '');
+  const [search, setSearch] = useState(initialSearch || getInitialParam('q', ''));
+  const [severityFilter, setSeverityFilter] = useState(initialSeverity || getInitialParam('severity', ''));
+  const [attackFilter, setAttackFilter] = useState(initialAttackType || getInitialParam('attack', ''));
+
+  useEffect(() => {
+    try {
+      if (typeof window === 'undefined') return;
+      const url = new URL(window.location.href);
+      if (search) url.searchParams.set('q', search);
+      else url.searchParams.delete('q');
+
+      if (severityFilter) url.searchParams.set('severity', severityFilter);
+      else url.searchParams.delete('severity');
+
+      if (attackFilter) url.searchParams.set('attack', attackFilter);
+      else url.searchParams.delete('attack');
+
+      if (page > 1) url.searchParams.set('page', String(page));
+      else url.searchParams.delete('page');
+
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // Ignore in non-browser or test contexts
+    }
+  }, [search, severityFilter, attackFilter, page]);
 
   useEffect(() => {
     if (initialSearch || initialSeverity || initialAttackType) onConsumeInitialSearch?.();
@@ -1002,6 +1038,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, initialSea
           }}
           onMarkFalsePositive={onMarkFalsePositive}
           onCreateRule={onCreateRule}
+          onCreateException={onCreateException}
           onNavigate={handleNavigateLog}
           canGoPrev={activeLogIndex > 0}
           canGoNext={activeLogIndex < activeLogList.length - 1}

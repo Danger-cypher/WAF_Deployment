@@ -650,7 +650,7 @@ export default function ProtectedApps({ onOpenWizard }) {
             >
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: app.is_active ? '#fff' : 'var(--text-secondary)' }}>
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: app.is_active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
                     {app.name}
                   </h3>
                   <span style={{
@@ -678,14 +678,14 @@ export default function ProtectedApps({ onOpenWizard }) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Server size={14} style={{ color: 'var(--text-muted)' }} />
                     <span style={{ color: 'var(--text-secondary)' }}>Upstream:</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: app.is_active ? '#fff' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: app.is_active ? 'var(--text-primary)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                       {app.protocol}://{app.upstream_host}:{app.upstream_port}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Shield size={14} style={{ color: 'var(--text-muted)' }} />
                     <span style={{ color: 'var(--text-secondary)' }}>Rate Limit:</span>
-                    <span style={{ color: app.is_active ? '#fff' : 'var(--text-secondary)' }}>
+                    <span style={{ color: app.is_active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
                       {app.rate_limit_rps} RPS (Burst: {app.burst_tolerance})
                     </span>
                   </div>
@@ -694,134 +694,174 @@ export default function ProtectedApps({ onOpenWizard }) {
 
               <div style={{
                 display: 'flex',
+                flexDirection: 'column',
                 gap: '10px',
                 borderTop: '1px solid var(--surface-hover)',
-                paddingTop: '16px',
-                justifyContent: 'flex-end'
+                paddingTop: '14px',
+                marginTop: 'auto'
               }}>
-                <button
-                  onClick={() => handleToggleActive(app)}
-                  disabled={actionLoading}
-                  title={app.is_active ? "Disable Application" : "Enable Application"}
-                  style={{
-                    padding: '8px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--surface-hover)',
-                    background: app.is_active ? 'rgba(255, 59, 92, 0.1)' : 'rgba(0, 212, 255, 0.1)',
-                    color: app.is_active ? 'var(--danger-color)' : 'var(--accent-color)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: '32px',
-                    height: '32px'
-                  }}
-                >
-                  {togglingId === app.id ? (
-                    <Activity size={14} className="animate-spin" style={{ color: 'var(--accent-color)' }} />
-                  ) : (
-                    <Power size={14} />
-                  )}
-                </button>
-                <button
-                  onClick={() => openLoginProtectModal(app)}
-                  disabled={actionLoading || app.domain === '_'}
-                  title={app.domain === '_' ? "Login protection needs a specific domain — not available for the wildcard/catch-all app." : undefined}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    border: getLoginRule(app) ? '1px solid var(--success-glow)' : '1px solid var(--surface-hover)',
-                    background: getLoginRule(app) ? 'var(--success-bg)' : 'var(--surface-subtle)',
-                    color: getLoginRule(app) ? 'var(--success-color)' : 'var(--text-primary)',
-                    cursor: app.domain === '_' ? 'not-allowed' : 'pointer',
-                    opacity: app.domain === '_' ? 0.5 : 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px'
-                  }}
-                >
-                  <Key size={12} />
-                  {getLoginRule(app) ? 'Login Protected' : 'Protect Login'}
-                </button>
-                <button
-                  onClick={() => openApiSchemaModal(app)}
-                  disabled={actionLoading}
-                  title="Positive-security: declare known-good endpoints for this app"
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--surface-hover)',
-                    background: 'var(--surface-subtle)',
-                    color: 'var(--text-primary)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px'
-                  }}
-                >
-                  <FileJson size={12} />
-                  API Schema
-                </button>
-                <button
-                  onClick={() => openMtlsModal(app)}
-                  disabled={actionLoading}
-                  title="Require a client certificate for this app's /api requests"
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--surface-hover)',
-                    background: 'var(--surface-subtle)',
-                    color: 'var(--text-primary)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px'
-                  }}
-                >
-                  <Lock size={12} />
-                  mTLS
-                </button>
-                <button
-                  onClick={() => onOpenWizard(app)}
-                  disabled={actionLoading}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--surface-hover)',
-                    background: 'var(--surface-subtle)',
-                    color: 'var(--text-primary)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px'
-                  }}
-                >
-                  <Edit2 size={12} />
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleDeleteApp(app.id)}
-                  disabled={actionLoading}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    border: '1px solid rgba(255,59,92,0.15)',
-                    background: 'rgba(255,59,92,0.05)',
-                    color: 'var(--danger-color)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px'
-                  }}
-                >
-                  <Trash2 size={12} />
-                  Delete
-                </button>
+                {/* Security modules row */}
+                <div style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '6px',
+                  alignItems: 'center'
+                }}>
+                  <button
+                    onClick={() => openLoginProtectModal(app)}
+                    disabled={actionLoading || app.domain === '_'}
+                    title={app.domain === '_' ? "Login protection needs a specific domain — not available for the wildcard/catch-all app." : undefined}
+                    style={{
+                      flex: '1 1 auto',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: getLoginRule(app) ? '1px solid var(--success-glow)' : '1px solid var(--surface-hover)',
+                      background: getLoginRule(app) ? 'var(--success-bg)' : 'var(--surface-subtle)',
+                      color: getLoginRule(app) ? 'var(--success-color)' : 'var(--text-primary)',
+                      cursor: app.domain === '_' ? 'not-allowed' : 'pointer',
+                      opacity: app.domain === '_' ? 0.5 : 1,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    <Key size={12} />
+                    <span>{getLoginRule(app) ? 'Login Protected' : 'Protect Login'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => openApiSchemaModal(app)}
+                    disabled={actionLoading}
+                    title="Positive-security: declare known-good endpoints for this app"
+                    style={{
+                      flex: '1 1 auto',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--surface-hover)',
+                      background: 'var(--surface-subtle)',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    <FileJson size={12} />
+                    <span>API Schema</span>
+                  </button>
+
+                  <button
+                    onClick={() => openMtlsModal(app)}
+                    disabled={actionLoading}
+                    title="Require a client certificate for this app's /api requests"
+                    style={{
+                      flex: '1 1 auto',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--surface-hover)',
+                      background: 'var(--surface-subtle)',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    <Lock size={12} />
+                    <span>mTLS</span>
+                  </button>
+                </div>
+
+                {/* Card lifecycle actions row */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  borderTop: '1px dashed var(--surface-hover)',
+                  paddingTop: '10px'
+                }}>
+                  <button
+                    onClick={() => handleToggleActive(app)}
+                    disabled={actionLoading}
+                    title={app.is_active ? "Disable Application" : "Enable Application"}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: app.is_active ? '1px solid rgba(255, 59, 92, 0.25)' : '1px solid rgba(0, 212, 255, 0.25)',
+                      background: app.is_active ? 'rgba(255, 59, 92, 0.1)' : 'rgba(0, 212, 255, 0.1)',
+                      color: app.is_active ? 'var(--danger-color)' : 'var(--accent-color)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '12px',
+                      fontWeight: 500
+                    }}
+                  >
+                    {togglingId === app.id ? (
+                      <Activity size={13} className="animate-spin" style={{ color: 'var(--accent-color)' }} />
+                    ) : (
+                      <Power size={13} />
+                    )}
+                    <span>{app.is_active ? 'Disable' : 'Enable'}</span>
+                  </button>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button
+                      onClick={() => onOpenWizard(app)}
+                      disabled={actionLoading}
+                      title="Edit Application"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--surface-hover)',
+                        background: 'var(--surface-subtle)',
+                        color: 'var(--text-primary)',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        fontSize: '12px'
+                      }}
+                    >
+                      <Edit2 size={12} />
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteApp(app.id)}
+                      disabled={actionLoading}
+                      title="Delete Application"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(255,59,92,0.2)',
+                        background: 'rgba(255,59,92,0.08)',
+                        color: 'var(--danger-color)',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        fontSize: '12px'
+                      }}
+                    >
+                      <Trash2 size={12} />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </motion.div>
           ))}

@@ -1262,34 +1262,52 @@ body::before {
   font-size: 11px;
 }
 
-/* ─── Toggle Switch ──────────────────────────────────────── */
+/* ─── Toggle Switch (Canonical Enterprise Component) ──────── */
 .toggle-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
   cursor: pointer;
-  background: var(--border-strong);
-  border-radius: 14px;
-  width: 48px;
-  height: 26px;
-  transition: all 0.3s ease;
+  background: var(--toggle-track-off);
+  border-radius: 9999px;
+  width: 44px;
+  height: 24px;
+  min-width: 44px;
+  padding: 0;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   position: relative;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-color);
+  outline: none;
+}
+.toggle-switch:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 .toggle-switch.active {
   background: var(--success-color);
   border-color: var(--success-color);
-  box-shadow: 0 0 12px var(--success-glow);
+  box-shadow: 0 0 10px var(--success-glow);
+}
+.toggle-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .toggle-knob {
-  background: #fff;
+  background: #ffffff;
   border-radius: 50%;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   position: absolute;
   top: 2px;
   left: 2px;
-  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
-.toggle-switch.active .toggle-knob { transform: translateX(22px); }
+.toggle-switch.active .toggle-knob {
+  transform: translateX(20px);
+}
 
 /* ─── Search & Filter Controls ───────────────────────────── */
 .search-input-wrapper {
@@ -3851,35 +3869,7 @@ select.setup-input {
   color: var(--text-primary);
 }
 
-.toggle-switch {
-  width: 44px;
-  height: 24px;
-  border-radius: var(--radius-lg);
-  background: var(--toggle-track-off);
-  cursor: pointer;
-  position: relative;
-  transition: background 0.2s ease;
-}
 
-.toggle-switch.active {
-  background: var(--success-color);
-}
-
-.toggle-knob {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  transition: transform 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-}
-
-.toggle-switch.active .toggle-knob {
-  transform: translateX(20px);
-}
 
 /* Protection Cards */
 .protection-level-cards {
@@ -4588,5 +4578,298 @@ select.setup-input {
   border-top-color: var(--accent-color) !important;
   background: var(--bg-card) !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   DESIGN SYSTEM FOUNDATION — ENTERPRISE UI PRIMITIVES
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── UI Checkbox ────────────────────────────────────────── */
+.ui-checkbox-wrapper {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  margin: -4px -6px;
+  transition: background-color 0.15s ease;
+}
+.ui-checkbox-wrapper:hover:not(.disabled) {
+  background-color: var(--surface-hover);
+}
+.ui-checkbox-wrapper.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ui-checkbox-input-hidden {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.ui-checkbox-box {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border-color);
+  background: var(--inset-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  transition: all 0.15s ease;
+  color: transparent;
+}
+.ui-checkbox-wrapper:hover:not(.disabled) .ui-checkbox-box {
+  border-color: var(--accent-color);
+}
+.ui-checkbox-input-hidden:focus-visible + .ui-checkbox-box {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+.ui-checkbox-box.checked {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #ffffff;
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.ui-checkbox-box.indeterminate {
+  background: var(--accent-dim);
+  border-color: var(--accent-color);
+  color: #ffffff;
+}
+.ui-checkbox-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ui-checkbox-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.ui-checkbox-description {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+/* ─── UI Form Field & Labels ─────────────────────────────── */
+.ui-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  position: relative;
+}
+.ui-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+.ui-required-mark {
+  color: var(--danger-color);
+  font-weight: 700;
+}
+.ui-optional-mark {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.ui-field-hint {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.ui-field-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--danger-color);
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* ─── UI Text Inputs & Selects ───────────────────────────── */
+.ui-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.ui-input-icon-prefix {
+  position: absolute;
+  left: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+}
+.ui-input-icon-suffix {
+  position: absolute;
+  right: 12px;
+  display: flex;
+  align-items: center;
+}
+.ui-input,
+.ui-select {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  background: var(--inset-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-body);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+}
+.ui-input::placeholder {
+  color: var(--text-muted);
+}
+.ui-input.has-prefix {
+  padding-left: 36px;
+}
+.ui-input.has-suffix {
+  padding-right: 36px;
+}
+.ui-input:focus,
+.ui-select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.ui-input.error,
+.ui-select.error {
+  border-color: var(--danger-color) !important;
+  box-shadow: 0 0 0 1px var(--danger-color);
+}
+.ui-input:disabled,
+.ui-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--surface-hover);
+}
+.ui-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  cursor: pointer;
+}
+
+/* ─── UI Breadcrumbs ─────────────────────────────────────── */
+.ui-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.ui-breadcrumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  transition: color 0.15s ease;
+}
+.ui-breadcrumb-item:hover {
+  color: var(--text-primary);
+}
+.ui-breadcrumb-item.active {
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: default;
+}
+.ui-breadcrumb-separator {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* ─── UI Status Badges ───────────────────────────────────── */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.ui-badge-success {
+  background: var(--success-bg);
+  color: var(--success-color);
+  border: 1px solid var(--success-glow);
+}
+.ui-badge-danger {
+  background: var(--danger-bg);
+  color: var(--danger-color);
+  border: 1px solid var(--danger-border);
+}
+.ui-badge-warning {
+  background: var(--warning-bg);
+  color: var(--warning-color);
+  border: 1px solid var(--warning-glow);
+}
+.ui-badge-info {
+  background: var(--accent-bg);
+  color: var(--accent-color);
+  border: 1px solid var(--accent-border);
+}
+.ui-badge-neutral {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+/* ─── Recharts Global Tooltip Overrides ────────────────── */
+.recharts-default-tooltip {
+  background: var(--chart-tooltip-bg) !important;
+  border: 1px solid var(--chart-tooltip-border, var(--border-strong)) !important;
+  border-radius: 8px !important;
+  box-shadow: var(--shadow-card) !important;
+  padding: 10px 14px !important;
+  font-family: var(--font-body) !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--text-secondary) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  margin-bottom: 6px !important;
+}
+
+.recharts-tooltip-item {
+  color: var(--text-primary) !important;
+  font-size: 12px !important;
+  padding: 2px 0 !important;
+}
+
+.recharts-tooltip-item-name,
+.recharts-tooltip-item-value {
+  color: var(--text-primary) !important;
+  font-family: var(--font-mono) !important;
+}
+
+.ui-chart-tooltip {
+  animation: fadeIn 0.15s ease-out;
+}
+
+
 
 

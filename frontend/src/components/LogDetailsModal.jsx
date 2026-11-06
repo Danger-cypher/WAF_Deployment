@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check, ChevronUp, ChevronDown, Ban } from 'lucide-react';
+import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check, ChevronUp, ChevronDown, Ban, ShieldOff } from 'lucide-react';
 import { formatLocalTime } from '../utils/helpers';
 import HighlightedJson from './JsonViewer';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { getLogExplain } from '../services/api';
+import Button from './ui/Button';
 
 /**
  * Slide-out drawer for inspecting a single WAF event, opened from Events.jsx.
@@ -14,7 +15,7 @@ import { getLogExplain } from '../services/api';
  * it, and Up/Down lets an analyst step through a triage queue without
  * closing and reopening for every row.
  */
-export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive, onCreateRule, onNavigate, canGoPrev, canGoNext }) {
+export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePositive, onCreateRule, onCreateException, onNavigate, canGoPrev, canGoNext }) {
   const [activeTab, setActiveTab] = useState('details');
   const [copied, setCopied] = useState(false);
   const [showReqHeaders, setShowReqHeaders] = useState(false);
@@ -216,6 +217,55 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('raw'); } }}
           >Raw Audit Log</span>
         </div>
+
+        {(onCreateRule || onCreateException || onMarkFalsePositive) && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '10px 16px',
+            background: 'var(--surface-subtle)',
+            borderBottom: '1px solid var(--border-color)',
+            flexWrap: 'wrap'
+          }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Incident Actions:
+            </span>
+            {onCreateRule && (
+              <Button
+                variant="danger"
+                size="sm"
+                icon={Ban}
+                onClick={() => { onCreateRule(log); onClose(); }}
+                title="Create a Virtual Patch rule for this attacker IP / URI"
+              >
+                Block / Create Rule
+              </Button>
+            )}
+            {onCreateException && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={ShieldOff}
+                onClick={() => { onCreateException(log); onClose(); }}
+                title="Create WAF rule exclusion for false positive"
+              >
+                Exclude Rule
+              </Button>
+            )}
+            {onMarkFalsePositive && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={ShieldCheck}
+                onClick={() => onMarkFalsePositive(log)}
+                title="Flag this transaction as false positive"
+              >
+                Flag as FP
+              </Button>
+            )}
+          </div>
+        )}
 
         <div
           className="log-drawer-body" id="log-details-panel" role="tabpanel"

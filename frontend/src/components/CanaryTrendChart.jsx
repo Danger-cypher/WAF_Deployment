@@ -1,4 +1,5 @@
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from 'recharts';
+import { ChartTooltip } from './ui';
 
 /**
  * Per-day sole-match vs co-matched trend for a canary report — the 3
@@ -51,17 +52,9 @@ export default function CanaryTrendChart({ data }) {
             tickLine={false}
             width={28}
           />
-          <Tooltip
-            contentStyle={{
-              background: 'var(--bg-card)', border: '1px solid var(--border-color)',
-              borderRadius: '8px', fontSize: '12px', padding: '8px 10px',
-            }}
-            labelStyle={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '4px' }}
-            formatter={(value, name) => [value, name === 'sole_match_count' ? 'Sole Match' : 'Co-Matched']}
-            labelFormatter={(label) => label}
-          />
-          <Line type="monotone" dataKey="sole_match_count" stroke="var(--danger-color)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={false} />
-          <Line type="monotone" dataKey="co_matched_count" stroke="var(--success-color)" strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={false} />
+          <Tooltip content={<ChartTooltip />} />
+          <Line type="monotone" dataKey="sole_match_count" name="Sole Match" stroke="var(--danger-color)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={false} />
+          <Line type="monotone" dataKey="co_matched_count" name="Co-Matched" stroke="var(--success-color)" strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={false} />
         </LineChart>
       </ResponsiveContainer>
     </div>
