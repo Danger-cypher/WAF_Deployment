@@ -442,9 +442,18 @@ export default function MLAnalytics() {
                       allowDecimals={false}
                     />
                     <RechartsTooltip
+                      cursor={{ fill: 'var(--surface-hover)', stroke: 'var(--surface-strong)', strokeWidth: 1, strokeDasharray: '3 3' }}
                       content={
                         <ChartTooltip
-                          labelFormatter={(l) => `Time: ${l}`}
+                          labelFormatter={(l) => {
+                            if (!l) return '';
+                            try {
+                              const parts = String(l).split(' ');
+                              return parts.length > 1 ? parts[1].slice(0, 5) : String(l);
+                            } catch {
+                              return String(l);
+                            }
+                          }}
                           valueFormatter={(value, name) =>
                             name === 'avg_score' || name === 'Avg Threat'
                               ? `${(Number(value) * 100).toFixed(1)}%`
@@ -463,6 +472,7 @@ export default function MLAnalytics() {
                       strokeWidth={1}
                       barSize={18}
                       radius={[4, 4, 0, 0]}
+                      isAnimationActive={false}
                     />
                     {/* Avg Threat Score Area in the foreground */}
                     <Area
@@ -474,6 +484,7 @@ export default function MLAnalytics() {
                       strokeWidth={2.5}
                       fillOpacity={1}
                       fill="url(#mlThreatScoreGrad)"
+                      isAnimationActive={false}
                     />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -504,6 +515,7 @@ export default function MLAnalytics() {
                       outerRadius={65}
                       paddingAngle={3}
                       dataKey="value"
+                      isAnimationActive={false}
                     >
                       {displayPieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />

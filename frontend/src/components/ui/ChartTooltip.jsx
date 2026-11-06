@@ -60,33 +60,24 @@ export default function ChartTooltip({
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '12px',
+                gap: '6px',
+                marginBottom: '2px',
                 fontSize: '12px'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                {showDot && (
-                  <div
-                    style={{
-                      width: '6px',
-                      height: '6px',
-                      borderRadius: '50%',
-                      background: itemColor,
-                      flexShrink: 0
-                    }}
-                  />
-                )}
-                <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{itemName}</span>
-              </div>
-              <span
-                style={{
-                  color: 'var(--text-primary)',
-                  fontWeight: 600,
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '12px'
-                }}
-              >
+              {showDot && (
+                <div
+                  style={{
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    background: itemColor,
+                    flexShrink: 0
+                  }}
+                />
+              )}
+              <span style={{ color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontFamily: 'var(--font-body)', marginRight: '5px' }}>{itemName}:</span>
                 {itemValue}
               </span>
             </div>
