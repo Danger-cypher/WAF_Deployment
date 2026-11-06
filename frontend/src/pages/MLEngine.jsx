@@ -165,6 +165,8 @@ export default function MLAnalytics() {
   };
 
   const isFetchingMLDataRef = useRef(false);
+  const isChartHoveredRef = useRef(false);
+  const pendingTimelineRef = useRef(null);
 
   const fetchMLData = async () => {
     if (isFetchingMLDataRef.current) return;
@@ -187,7 +189,17 @@ export default function MLAnalytics() {
 
       const timelineData = await getMLTimeline();
       if (timelineData && !timelineData.error) {
-        setTimeline(timelineData.data || []);
+        const nextData = timelineData.data || [];
+        setTimeline(prev => {
+          if (prev.length === nextData.length && JSON.stringify(prev) === JSON.stringify(nextData)) {
+            return prev;
+          }
+          if (isChartHoveredRef.current) {
+            pendingTimelineRef.current = nextData;
+            return prev;
+          }
+          return nextData;
+        });
       }
     } catch (err) {
       console.error("Error fetching ML analytics data:", err);
@@ -394,7 +406,20 @@ export default function MLAnalytics() {
               </div>
             </div>
 
-            <div className="chart-container" style={{ minHeight: '280px' }}>
+            <div
+              className="chart-container"
+              style={{ minHeight: '280px' }}
+              onMouseEnter={() => {
+                isChartHoveredRef.current = true;
+              }}
+              onMouseLeave={() => {
+                isChartHoveredRef.current = false;
+                if (pendingTimelineRef.current) {
+                  setTimeline(pendingTimelineRef.current);
+                  pendingTimelineRef.current = null;
+                }
+              }}
+            >
               {timeline.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={timeline} margin={{ top: 10, right: 15, left: -15, bottom: 0 }}>
@@ -442,6 +467,9 @@ export default function MLAnalytics() {
                       allowDecimals={false}
                     />
                     <RechartsTooltip
+                      isAnimationActive={false}
+                      animationDuration={0}
+                      useTranslate3d={false}
                       cursor={{ fill: 'var(--surface-hover)', stroke: 'var(--surface-strong)', strokeWidth: 1, strokeDasharray: '3 3' }}
                       content={
                         <ChartTooltip

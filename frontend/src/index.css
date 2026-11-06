@@ -4866,8 +4866,15 @@ select.setup-input {
   font-family: var(--font-mono) !important;
 }
 
+.recharts-tooltip-wrapper {
+  pointer-events: none !important;
+  user-select: none !important;
+  transition: none !important;
+}
+
 .ui-chart-tooltip {
-  animation: fadeIn 0.15s ease-out;
+  pointer-events: none !important;
+  user-select: none !important;
 }
 
 

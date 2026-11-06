@@ -3,6 +3,8 @@
  * or as fallback defaults for any direct <RechartsTooltip {...defaultTooltipProps} />
  */
 export const defaultTooltipProps = {
+  isAnimationActive: false,
+  animationDuration: 0,
   contentStyle: {
     background: 'var(--chart-tooltip-bg)',
     border: '1px solid var(--chart-tooltip-border, var(--border-strong))',
