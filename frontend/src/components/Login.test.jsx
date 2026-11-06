@@ -119,4 +119,30 @@ describe('Login', () => {
     // Still on the OTP step, not bounced back to the username/password form.
     expect(screen.getByPlaceholderText(/enter 6-digit otp code/i)).toBeInTheDocument();
   });
+
+  it('renders remember username checkbox and forgot password button', () => {
+    render(<Login setAuth={() => {}} onLoginSuccess={() => {}} />);
+    expect(screen.getByLabelText(/remember username/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /forgot password\?/i })).toBeInTheDocument();
+  });
+
+  it('opens and closes the enterprise credential recovery modal', async () => {
+    const user = userEvent.setup();
+    render(<Login setAuth={() => {}} onLoginSuccess={() => {}} />);
+
+    await user.click(screen.getByRole('button', { name: /forgot password\?/i }));
+    expect(screen.getByText(/enterprise credential recovery/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /understood/i }));
+    await waitFor(() => {
+      expect(screen.queryByText(/enterprise credential recovery/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders the enterprise SSO entry point', () => {
+    render(<Login setAuth={() => {}} onLoginSuccess={() => {}} />);
+    const ssoLink = screen.getByRole('link', { name: /single sign-on/i });
+    expect(ssoLink).toBeInTheDocument();
+    expect(ssoLink).toHaveAttribute('href', '/auth/sso');
+  });
 });
