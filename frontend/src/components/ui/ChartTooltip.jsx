@@ -77,7 +77,9 @@ export default function ChartTooltip({
                 />
               )}
               <span style={{ color: 'var(--text-primary)', fontWeight: 600, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontFamily: 'var(--font-body)', marginRight: '5px' }}>{itemName}:</span>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontFamily: 'var(--font-body)', marginRight: '5px' }}>
+                  <span>{itemName}</span>:
+                </span>
                 {itemValue}
               </span>
             </div>

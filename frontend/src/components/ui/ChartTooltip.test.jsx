@@ -23,10 +23,10 @@ describe('ChartTooltip', () => {
 
     render(<ChartTooltip active={true} label="14:00" payload={payload} />);
 
-    expect(screen.getByText('14:00')).toBeInTheDocument();
-    expect(screen.getByText('Blocked Attacks')).toBeInTheDocument();
+    expect(screen.getByText(/14:00/)).toBeInTheDocument();
+    expect(screen.getByText(/Blocked Attacks/)).toBeInTheDocument();
     expect(screen.getByText('1,420')).toBeInTheDocument();
-    expect(screen.getByText('Allowed Requests')).toBeInTheDocument();
+    expect(screen.getByText(/Allowed Requests/)).toBeInTheDocument();
     expect(screen.getByText('58,000')).toBeInTheDocument();
   });
 
@@ -46,7 +46,7 @@ describe('ChartTooltip', () => {
     );
 
     expect(screen.getByText('Date: 2026-11-06')).toBeInTheDocument();
-    expect(screen.getByText('Avg Threat')).toBeInTheDocument();
+    expect(screen.getByText(/Avg Threat/)).toBeInTheDocument();
     expect(screen.getByText('85.4%')).toBeInTheDocument();
   });
 

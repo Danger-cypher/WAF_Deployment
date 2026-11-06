@@ -9,6 +9,7 @@ import {
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
 import { useConfirm } from '../hooks/useConfirm';
+import { Button, Badge } from '../components/ui';
 
 export default function AlertsIntegrations({ userRole }) {
   const [loading, setLoading] = useState(true);
@@ -21,6 +22,8 @@ export default function AlertsIntegrations({ userRole }) {
   // system-level /health (Redis/ClickHouse/DB).
   const [channelHealth, setChannelHealth] = useState({});
   const [activeSubTab, setActiveSubTab] = useState('connectors'); // 'connectors', 'channels', 'rules'
+  const [channelJsonError, setChannelJsonError] = useState(false);
+  const [conditionJsonError, setConditionJsonError] = useState(false);
 
   // Alert Config State
   const [channels, setChannels] = useState([]);
@@ -213,24 +216,54 @@ export default function AlertsIntegrations({ userRole }) {
       style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}
     >
       {/* Tab Selection */}
-      <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
+      <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
         <button
           className={`tab-btn ${activeSubTab === 'connectors' ? 'active' : ''}`}
-          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'connectors' ? 'var(--sev-low-bg)' : 'transparent', border: activeSubTab === 'connectors' ? '1px solid var(--sev-low-border)' : '1px solid transparent', color: activeSubTab === 'connectors' ? 'var(--sev-low)' : 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.2s' }}
+          style={{
+            padding: '8px 18px',
+            fontSize: '13px',
+            borderRadius: '6px',
+            fontWeight: 600,
+            background: activeSubTab === 'connectors' ? 'var(--surface-hover)' : 'transparent',
+            border: activeSubTab === 'connectors' ? '1px solid var(--border-strong)' : '1px solid transparent',
+            color: activeSubTab === 'connectors' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease'
+          }}
           onClick={() => setActiveSubTab('connectors')}
         >
           Connectors & Health
         </button>
         <button
           className={`tab-btn ${activeSubTab === 'channels' ? 'active' : ''}`}
-          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'channels' ? 'var(--sev-low-bg)' : 'transparent', border: activeSubTab === 'channels' ? '1px solid var(--sev-low-border)' : '1px solid transparent', color: activeSubTab === 'channels' ? 'var(--sev-low)' : 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.2s' }}
+          style={{
+            padding: '8px 18px',
+            fontSize: '13px',
+            borderRadius: '6px',
+            fontWeight: 600,
+            background: activeSubTab === 'channels' ? 'var(--surface-hover)' : 'transparent',
+            border: activeSubTab === 'channels' ? '1px solid var(--border-strong)' : '1px solid transparent',
+            color: activeSubTab === 'channels' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease'
+          }}
           onClick={() => setActiveSubTab('channels')}
         >
           Notification Channels ({channels.length})
         </button>
         <button
           className={`tab-btn ${activeSubTab === 'rules' ? 'active' : ''}`}
-          style={{ padding: '8px 16px', fontSize: '13px', borderRadius: '6px', background: activeSubTab === 'rules' ? 'var(--sev-low-bg)' : 'transparent', border: activeSubTab === 'rules' ? '1px solid var(--sev-low-border)' : '1px solid transparent', color: activeSubTab === 'rules' ? 'var(--sev-low)' : 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.2s' }}
+          style={{
+            padding: '8px 18px',
+            fontSize: '13px',
+            borderRadius: '6px',
+            fontWeight: 600,
+            background: activeSubTab === 'rules' ? 'var(--surface-hover)' : 'transparent',
+            border: activeSubTab === 'rules' ? '1px solid var(--border-strong)' : '1px solid transparent',
+            color: activeSubTab === 'rules' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease'
+          }}
           onClick={() => setActiveSubTab('rules')}
         >
           Evaluation Rules ({rules.length})
@@ -338,23 +371,23 @@ export default function AlertsIntegrations({ userRole }) {
             </div>
           </div>
 
-          <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
-            <Lock size={18} color="var(--text-secondary)" />
-            <span>Enterprise Connectors (Future Roadmap)</span>
+          <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
+            <Lock size={16} color="var(--accent-color)" />
+            <span>Enterprise Connectors (Planned Roadmap)</span>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
             {futureIntegrations.map((item, index) => {
               const Icon = item.icon;
               return (
-                <div key={index} className="glass-panel" style={{ padding: '20px', display: 'flex', gap: '16px', opacity: 0.45, position: 'relative', overflow: 'hidden' }}>
+                <div key={index} className="glass-panel" style={{ padding: '20px', display: 'flex', gap: '16px', position: 'relative', overflow: 'hidden', border: '1px solid var(--surface-hover)' }}>
                   <div style={{ background: 'var(--surface-subtle)', border: '1px solid var(--surface-hover)', padding: '10px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '42px', width: '42px', flexShrink: 0 }}>
-                    <Icon size={20} color="var(--text-secondary)" />
+                    <Icon size={20} color="var(--accent-color)" />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span>{item.name}</span>
-                      <span style={{ fontSize: '9px', background: 'var(--surface-hover)', border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', padding: '1px 5px', borderRadius: '3px', textTransform: 'uppercase' }}>Inactive</span>
+                      <Badge variant="neutral" style={{ fontSize: '9px' }}>ROADMAP</Badge>
                     </div>
                     <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.4' }}>{item.desc}</p>
                   </div>
@@ -426,15 +459,26 @@ export default function AlertsIntegrations({ userRole }) {
                       try {
                         const cfg = JSON.parse(e.target.value);
                         setChannelForm({ ...channelForm, config: cfg });
+                        setChannelJsonError(false);
                       } catch {
-                        // ignore invalid JSON while typing
+                        setChannelJsonError(true);
                       }
                     }}
                   ></textarea>
+                  {channelJsonError ? (
+                    <div style={{ fontSize: '11px', color: 'var(--warning-color)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <AlertTriangle size={12} />
+                      <span>Invalid JSON syntax in configuration</span>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '11px', color: 'var(--success-color)' }}>
+                      ✓ Valid JSON configuration format
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
-                  <button type="submit" className="modal-btn primary" style={{ margin: 0 }}>Save Integration</button>
-                  <button type="button" className="modal-btn secondary" onClick={() => { setIsChannelCreateOpen(false); setChannelForm({ name: '', channel_type: 'slack', config: {} }); }} style={{ margin: 0 }}>Cancel</button>
+                  <Button type="submit" variant="primary" size="sm">Save Integration</Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => { setIsChannelCreateOpen(false); setChannelForm({ name: '', channel_type: 'slack', config: {} }); setChannelJsonError(false); }}>Cancel</Button>
                 </div>
               </form>
             </motion.div>
@@ -539,15 +583,34 @@ export default function AlertsIntegrations({ userRole }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label htmlFor="ai-rule-conditions" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON (Optional)</label>
-                    <textarea id="ai-rule-conditions" className="settings-input" style={{ minHeight: '90px', fontSize: '11px', fontFamily: 'monospace' }} placeholder='e.g. {"threat_score_gt": 80}' value={conditionsText} onChange={(e) => {
-                      setConditionsText(e.target.value);
-                      try {
-                        const conds = e.target.value.trim() ? JSON.parse(e.target.value) : {};
-                        setRuleForm({ ...ruleForm, conditions: conds });
-                      } catch {
-                        // ignore invalid JSON while typing
-                      }
-                    }} />
+                    <textarea
+                      id="ai-rule-conditions"
+                      className="settings-input"
+                      style={{ minHeight: '90px', fontSize: '11px', fontFamily: 'monospace' }}
+                      placeholder='e.g. {"threat_score_gt": 80}'
+                      value={conditionsText}
+                      onChange={(e) => {
+                        setConditionsText(e.target.value);
+                        if (!e.target.value.trim()) {
+                          setRuleForm({ ...ruleForm, conditions: {} });
+                          setConditionJsonError(false);
+                          return;
+                        }
+                        try {
+                          const conds = JSON.parse(e.target.value);
+                          setRuleForm({ ...ruleForm, conditions: conds });
+                          setConditionJsonError(false);
+                        } catch {
+                          setConditionJsonError(true);
+                        }
+                      }}
+                    />
+                    {conditionJsonError && (
+                      <div style={{ fontSize: '11px', color: 'var(--warning-color)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <AlertTriangle size={12} />
+                        <span>Invalid JSON syntax in conditions</span>
+                      </div>
+                    )}
                     {/* Reference for the condition keys evaluate_condition() actually
                         supports (backend/app/services/alert_manager.py) — the field
                         itself is free-text JSON with no other documentation, so this
@@ -570,17 +633,63 @@ export default function AlertsIntegrations({ userRole }) {
                     <input id="ai-rule-throttle" className="settings-input" type="number" min="1" value={ruleForm.throttle_minutes} onChange={(e) => setRuleForm({ ...ruleForm, throttle_minutes: parseInt(e.target.value) || 5 })} />
                   </div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label htmlFor="ai-rule-channels" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Routing Targets (Channel IDs, comma-separated e.g. 1, 2)</label>
-                  <input id="ai-rule-channels" className="settings-input" type="text" placeholder="Enter channel numeric IDs..." value={channelsText} onChange={(e) => {
-                    setChannelsText(e.target.value);
-                    const ids = e.target.value.split(',').map(x => parseInt(x.trim())).filter(x => !isNaN(x));
-                    setRuleForm({ ...ruleForm, channels: ids });
-                  }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <label htmlFor="ai-rule-channels" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    Routing Targets (Notification Channels)
+                  </label>
+                  {channels.length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      {channels.map((ch) => {
+                        const isSelected = (ruleForm.channels || []).includes(ch.id);
+                        return (
+                          <button
+                            key={ch.id}
+                            type="button"
+                            onClick={() => {
+                              const current = ruleForm.channels || [];
+                              const newChannels = isSelected
+                                ? current.filter(id => id !== ch.id)
+                                : [...current, ch.id];
+                              setRuleForm({ ...ruleForm, channels: newChannels });
+                              setChannelsText(newChannels.join(', '));
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '6px 12px',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: 500,
+                              cursor: 'pointer',
+                              border: isSelected ? '1px solid var(--accent-color)' : '1px solid var(--surface-hover)',
+                              background: isSelected ? 'rgba(0, 212, 255, 0.12)' : 'var(--surface-subtle)',
+                              color: isSelected ? 'var(--accent-color)' : 'var(--text-secondary)',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            <span style={{ fontWeight: 700 }}>{isSelected ? '✓' : '+'}</span>
+                            <span>{ch.name}</span>
+                            <span style={{ fontSize: '10px', textTransform: 'uppercase', opacity: 0.7 }}>({ch.channel_type})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                      No channels created yet. Add a channel in the "Notification Channels" tab first.
+                    </div>
+                  )}
+                  <input
+                    id="ai-rule-channels"
+                    type="hidden"
+                    value={channelsText}
+                    readOnly
+                  />
                 </div>
                 <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
-                  <button type="submit" className="modal-btn primary" style={{ margin: 0 }}>{editingRuleId != null ? 'Save Changes' : 'Create Rule'}</button>
-                  <button type="button" className="modal-btn secondary" onClick={resetRuleForm} style={{ margin: 0 }}>Cancel</button>
+                  <Button type="submit" variant="primary" size="sm">{editingRuleId != null ? 'Save Changes' : 'Create Rule'}</Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={resetRuleForm}>Cancel</Button>
                 </div>
               </form>
             </motion.div>
@@ -603,7 +712,19 @@ export default function AlertsIntegrations({ userRole }) {
                     <div><strong>Event type:</strong> <span className="badge-purple" style={{ padding: '2px 6px', background: 'rgba(139, 92, 246, 0.15)', color: 'var(--ml-color)', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>{rule.event_type}</span></div>
                     <div><strong>Conditions:</strong> <code style={{ fontSize: '11px', color: 'var(--success-color)', fontFamily: 'monospace' }}>{JSON.stringify(rule.conditions)}</code></div>
                     <div><strong>Cooldown throttle:</strong> {rule.throttle_minutes} min</div>
-                    <div><strong>Channels assigned:</strong> Channel IDs: {JSON.stringify(rule.channels)}</div>
+                    <div>
+                      <strong>Channels assigned:</strong>{' '}
+                      {rule.channels && rule.channels.length > 0 ? (
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                          {rule.channels.map(id => {
+                            const ch = channels.find(c => c.id === id);
+                            return ch ? ch.name : `#${id}`;
+                          }).join(', ')}
+                        </span>
+                      ) : (
+                        <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>None (unrouted)</span>
+                      )}
+                    </div>
                   </div>
                   {userRole === 'admin' && (
                     <div style={{ display: 'flex', gap: '8px', alignSelf: 'flex-end', marginTop: '8px' }}>

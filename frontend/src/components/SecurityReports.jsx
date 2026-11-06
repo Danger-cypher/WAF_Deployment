@@ -5,7 +5,7 @@ import {
   ShieldCheck, Activity, FileJson, RefreshCw
 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
-import { ChartTooltip } from './ui';
+import { ChartTooltip, Button, Badge, SelectInput } from './ui';
 import {
   getStats, getAttackTypes, getTopIPs, getHealth, getSecurityStatistics,
   getWafSettings, getHardeningSettings, getLogSettings, getProtectedApps,
@@ -171,7 +171,7 @@ function TopIpsTable({ topIps, tableClass }) {
   );
 }
 
-function ComplianceTable({ data, tableClass }) {
+function ComplianceTable({ data, tableClass, isPrint = false }) {
   return (
     <>
       <table className={tableClass}>
@@ -186,51 +186,68 @@ function ComplianceTable({ data, tableClass }) {
           <tr>
             <td>CyberSentinel Engine Enforcement</td>
             <MapsToCell mapping={COMPLIANCE_MAPPINGS.engineEnforcement} />
-            {(() => {
-              const on = data.compliance.engineEnforcement;
-              if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
-              return on === 'On'
-                ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENFORCING</td>
-                : <td style={{ textAlign: 'right', color: 'var(--danger-color)', fontWeight: 600 }}>NOT ENFORCING</td>;
-            })()}
+            <td style={{ textAlign: 'right' }}>
+              {(() => {
+                const on = data.compliance.engineEnforcement;
+                if (on == null) return isPrint ? 'UNABLE TO VERIFY' : <Badge variant="neutral">UNVERIFIED</Badge>;
+                return on === 'On'
+                  ? (isPrint ? 'ENFORCING' : <Badge variant="success">ENFORCING</Badge>)
+                  : (isPrint ? 'NOT ENFORCING' : <Badge variant="danger">NOT ENFORCING</Badge>);
+              })()}
+            </td>
           </tr>
           <tr>
             <td>SSL/TLS Dynamic Cipher Hardening (HSTS)</td>
             <MapsToCell mapping={COMPLIANCE_MAPPINGS.tlsHardening} />
-            {(() => {
-              const on = data.compliance.tlsHardening;
-              if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
-              return on
-                ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENABLED</td>
-                : <td style={{ textAlign: 'right', color: 'var(--sev-high)', fontWeight: 600 }}>DISABLED</td>;
-            })()}
+            <td style={{ textAlign: 'right' }}>
+              {(() => {
+                const on = data.compliance.tlsHardening;
+                if (on == null) return isPrint ? 'UNABLE TO VERIFY' : <Badge variant="neutral">UNVERIFIED</Badge>;
+                return on
+                  ? (isPrint ? 'ENABLED' : <Badge variant="success">ENABLED</Badge>)
+                  : (isPrint ? 'DISABLED' : <Badge variant="danger">DISABLED</Badge>);
+              })()}
+            </td>
           </tr>
           <tr>
             <td>Dynamic Web Anti-Defacement Integrity Check</td>
             <MapsToCell mapping={COMPLIANCE_MAPPINGS.antiDefacement} />
-            <td style={{
-              textAlign: 'right', fontWeight: 600,
-              color: data.health.antiDefacement === 'ACTIVE' ? 'var(--success-color)' : 'var(--text-secondary)',
-            }}>{data.health.antiDefacement}</td>
+            <td style={{ textAlign: 'right' }}>
+              {isPrint ? (
+                data.health.antiDefacement
+              ) : (
+                <Badge variant={data.health.antiDefacement === 'ACTIVE' ? 'success' : 'neutral'}>
+                  {data.health.antiDefacement}
+                </Badge>
+              )}
+            </td>
           </tr>
           <tr>
             <td>Admin Authentication Logging & Audits</td>
             <MapsToCell mapping={COMPLIANCE_MAPPINGS.adminAuditLogging} />
-            {(() => {
-              const on = data.compliance.adminAuditLogging;
-              if (on == null) return <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>UNABLE TO VERIFY</td>;
-              return on
-                ? <td style={{ textAlign: 'right', color: 'var(--success-color)', fontWeight: 600 }}>ENFORCED</td>
-                : <td style={{ textAlign: 'right', color: 'var(--danger-color)', fontWeight: 600 }}>DISABLED</td>;
-            })()}
+            <td style={{ textAlign: 'right' }}>
+              {(() => {
+                const on = data.compliance.adminAuditLogging;
+                if (on == null) return isPrint ? 'UNABLE TO VERIFY' : <Badge variant="neutral">UNVERIFIED</Badge>;
+                return on
+                  ? (isPrint ? 'ENFORCED' : <Badge variant="success">ENFORCED</Badge>)
+                  : (isPrint ? 'DISABLED' : <Badge variant="danger">DISABLED</Badge>);
+              })()}
+            </td>
           </tr>
           <tr>
             <td>Active Protected Virtual Hosts</td>
             <MapsToCell mapping={null} />
-            <td style={{ textAlign: 'right', fontWeight: 600 }}>
-              {data.compliance.activeProtectedHosts == null
-                ? 'UNABLE TO VERIFY'
-                : `${data.compliance.activeProtectedHosts} / ${data.compliance.totalProtectedHosts} ACTIVE`}
+            <td style={{ textAlign: 'right' }}>
+              {data.compliance.activeProtectedHosts == null ? (
+                isPrint ? 'UNABLE TO VERIFY' : <Badge variant="neutral">UNVERIFIED</Badge>
+              ) : (
+                isPrint ? `${data.compliance.activeProtectedHosts} / ${data.compliance.totalProtectedHosts} ACTIVE` : (
+                  <Badge variant="info">
+                    {data.compliance.activeProtectedHosts} / {data.compliance.totalProtectedHosts} ACTIVE
+                  </Badge>
+                )
+              )}
             </td>
           </tr>
         </tbody>
@@ -356,29 +373,34 @@ function ReportAppView({ data, reportType }) {
 
       {reportType === 'threat' && (
         <div className="report-app-grid">
-          <div className="glass-panel report-app-section" style={{ gridColumn: '1 / -1', '--section-accent': 'var(--danger-color)' }}>
-            <h3>Threat Intelligence & Signatures</h3>
+          <div className="glass-panel report-app-section" style={{ '--section-accent': 'var(--danger-color)' }}>
+            <h3>Threat Signatures & Inbound Vectors</h3>
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-              Signature-based detections and CyberSentinel Engine Core Rule Set (CRS) triggers recorded for this timeframe.
+              Signature detections and CyberSentinel Core Rule Set (CRS) triggers recorded for this timeframe.
             </p>
-            <div className="report-app-stat-grid" style={{ marginBottom: '20px' }}>
-              <div className="report-app-mini-stat">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div className="report-app-mini-stat" style={{ padding: '14px', background: 'var(--surface-subtle)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
                 <span className="report-app-stat-label">SQL Injection Attacks</span>
-                <span className="report-app-stat-value" style={{ fontSize: '22px' }}>{data.metrics.sqlInjections}</span>
+                <span className="report-app-stat-value" style={{ fontSize: '22px', color: 'var(--danger-color)', fontWeight: 700 }}>{data.metrics.sqlInjections}</span>
                 <span className="report-app-stat-sub">Signature database matches</span>
               </div>
-              <div className="report-app-mini-stat">
+              <div className="report-app-mini-stat" style={{ padding: '14px', background: 'var(--surface-subtle)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
                 <span className="report-app-stat-label">Cross-Site Scripting (XSS)</span>
-                <span className="report-app-stat-value" style={{ fontSize: '22px' }}>{data.metrics.xssAttacks}</span>
+                <span className="report-app-stat-value" style={{ fontSize: '22px', color: 'var(--warning-color)', fontWeight: 700 }}>{data.metrics.xssAttacks}</span>
                 <span className="report-app-stat-sub">Browser payloads filtered</span>
               </div>
-              <div className="report-app-mini-stat">
+              <div className="report-app-mini-stat" style={{ padding: '14px', background: 'var(--surface-subtle)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
                 <span className="report-app-stat-label">Primary Attack Vector</span>
-                <span className="report-app-stat-value" style={{ fontSize: '18px', color: 'var(--accent-color)' }}>{data.metrics.topAttackType}</span>
-                <span className="report-app-stat-sub">Most frequent category</span>
+                <span className="report-app-stat-value" style={{ fontSize: '18px', color: 'var(--accent-color)', fontWeight: 700 }}>{data.metrics.topAttackType}</span>
+                <span className="report-app-stat-sub">Most frequent violation category</span>
               </div>
             </div>
+          </div>
+          <div className="glass-panel report-app-section" style={{ '--section-accent': 'var(--sev-high)' }}>
             <h3>Top Threat Originators</h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+              Source IP addresses originating the highest volume of blocked malicious requests.
+            </p>
             <div className="report-app-table-wrapper">
               <TopIpsTable topIps={data.topIps} tableClass="report-app-table" />
             </div>
@@ -553,7 +575,7 @@ function ReportPrintView({ data, reportType }) {
             <div className="report-print-section" style={{ '--section-accent': 'var(--accent-color)' }}>
               <h3>System Configuration & Compliance</h3>
               <div className="report-print-table-wrapper">
-                <ComplianceTable data={data} tableClass="report-print-table" />
+                <ComplianceTable data={data} tableClass="report-print-table" isPrint={true} />
               </div>
             </div>
             <div className="report-print-section" style={{ '--section-accent': 'var(--warning-color)' }}>
@@ -769,79 +791,116 @@ export default function SecurityReports() {
       <div className="report-controls-panel no-print">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Select Timeframe</span>
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '4px', background: 'var(--surface-hover)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
             <button 
               className={`report-btn ${timeframe === '24h' ? 'active' : ''}`}
               onClick={() => setTimeframe('24h')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: 'none',
+                background: timeframe === '24h' ? 'var(--accent-color)' : 'transparent',
+                color: timeframe === '24h' ? '#000' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
             >
               24 Hours
             </button>
             <button 
               className={`report-btn ${timeframe === '7d' ? 'active' : ''}`}
               onClick={() => setTimeframe('7d')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: 'none',
+                background: timeframe === '7d' ? 'var(--accent-color)' : 'transparent',
+                color: timeframe === '7d' ? '#000' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
             >
               7 Days
             </button>
             <button 
               className={`report-btn ${timeframe === '30d' ? 'active' : ''}`}
               onClick={() => setTimeframe('30d')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: 'none',
+                background: timeframe === '30d' ? 'var(--accent-color)' : 'transparent',
+                color: timeframe === '30d' ? '#000' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
             >
               30 Days
             </button>
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '220px' }}>
           <label htmlFor="security-report-template" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Report Template</label>
-          <select 
+          <SelectInput 
             id="security-report-template"
             aria-label="Report Template"
-            className="report-select"
             value={reportType}
             onChange={(e) => setReportType(e.target.value)}
           >
             <option value="executive">Executive Summary Report</option>
             <option value="threat">Threat Intelligence Report</option>
             <option value="compliance">System Audit & Compliance</option>
-          </select>
+          </SelectInput>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '8px', marginLeft: 'auto' }}>
-          <button 
-            className="report-action-btn primary"
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
+          <Button 
+            variant="primary"
+            size="sm"
             onClick={generateReport}
             disabled={loading}
+            loading={loading}
           >
-            {loading ? <RefreshCw size={14} className="animate-spin" /> : <Activity size={14} />}
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             <span>Re-Generate</span>
-          </button>
+          </Button>
           
-          <button 
-            className="report-action-btn secondary"
+          <Button 
+            variant="secondary"
+            size="sm"
             onClick={handlePrint}
             disabled={!reportData || loading}
           >
             <Printer size={14} />
             <span>Print / Save PDF</span>
-          </button>
+          </Button>
 
-          <button 
-            className="report-action-btn secondary"
+          <Button 
+            variant="secondary"
+            size="sm"
             onClick={handleExportCSV}
             disabled={!reportData || loading}
           >
             <Download size={14} />
             <span>Export CSV</span>
-          </button>
+          </Button>
 
-          <button 
-            className="report-action-btn secondary"
+          <Button 
+            variant="secondary"
+            size="sm"
             onClick={handleExportJSON}
             disabled={!reportData || loading}
           >
             <FileJson size={14} />
             <span>JSON</span>
-          </button>
+          </Button>
         </div>
       </div>
 
