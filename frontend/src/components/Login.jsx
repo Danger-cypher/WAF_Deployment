@@ -3,85 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Lock, Activity, Eye, EyeOff, ShieldCheck, Zap,
   AlertTriangle, KeyRound, Sun, Moon, HelpCircle,
-  ExternalLink, Layers, Cpu, X, ShieldAlert,
-  User, Server, CheckCircle2
+  ExternalLink, X, ShieldAlert, User, Server
 } from 'lucide-react';
 import { ThemeContext } from '../context/theme-context.js';
-
-/* ─── Pure SVG/CSS Radar Telemetry HUD ──────────────────────── */
-function RadarTelemetryHUD() {
-  return (
-    <div className="login-radar-wrapper" aria-hidden="true">
-      <svg className="login-radar-svg" viewBox="0 0 320 320" fill="none">
-        <defs>
-          <radialGradient id="radarSweepGrad" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="var(--accent-color)" stopOpacity="0.25" />
-            <stop offset="70%" stopColor="var(--cyan-color)" stopOpacity="0.08" />
-            <stop offset="100%" stopColor="transparent" stopOpacity="0" />
-          </radialGradient>
-          <linearGradient id="gridLineGrad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="var(--accent-color)" stopOpacity="0.1" />
-            <stop offset="100%" stopColor="var(--cyan-color)" stopOpacity="0.3" />
-          </linearGradient>
-        </defs>
-
-        {/* Outer Hexagon / Shield Frame */}
-        <polygon
-          points="160,10 295,85 295,235 160,310 25,235 25,85"
-          stroke="var(--accent-border)"
-          strokeWidth="1.2"
-          strokeDasharray="4 4"
-          fill="none"
-          opacity="0.6"
-        />
-
-        {/* Concentric Defense Perimeter Rings */}
-        <circle cx="160" cy="160" r="135" stroke="var(--border-strong)" strokeWidth="1" strokeDasharray="3 3" opacity="0.4" />
-        <circle cx="160" cy="160" r="100" stroke="var(--border-strong)" strokeWidth="1" opacity="0.5" />
-        <circle cx="160" cy="160" r="65" stroke="var(--accent-border)" strokeWidth="1.2" opacity="0.7" />
-        <circle cx="160" cy="160" r="30" stroke="var(--cyan-color)" strokeWidth="1.5" opacity="0.8" />
-        <circle cx="160" cy="160" r="4" fill="var(--cyan-color)" />
-
-        {/* Crosshair Axes */}
-        <line x1="160" y1="20" x2="160" y2="300" stroke="url(#gridLineGrad)" strokeWidth="1" opacity="0.5" />
-        <line x1="20" y1="160" x2="300" y2="160" stroke="url(#gridLineGrad)" strokeWidth="1" opacity="0.5" />
-
-        {/* Coordinate Cardinal Ticks */}
-        <text x="160" y="32" textAnchor="middle" fill="var(--text-muted)" fontSize="8" fontFamily="var(--font-mono)">000° SEC</text>
-        <text x="295" y="163" textAnchor="end" fill="var(--text-muted)" fontSize="8" fontFamily="var(--font-mono)">090°</text>
-        <text x="160" y="295" textAnchor="middle" fill="var(--text-muted)" fontSize="8" fontFamily="var(--font-mono)">180°</text>
-        <text x="28" y="163" textAnchor="start" fill="var(--text-muted)" fontSize="8" fontFamily="var(--font-mono)">270°</text>
-
-        {/* Rotating Radar Sweep Cone */}
-        <g className="login-radar-sweep-beam">
-          <path
-            d="M 160 160 L 160 25 A 135 135 0 0 1 255 65 Z"
-            fill="url(#radarSweepGrad)"
-          />
-          <line x1="160" y1="160" x2="255" y2="65" stroke="var(--cyan-color)" strokeWidth="1.8" />
-        </g>
-
-        {/* Active Defense Nodes / Intercept Blips */}
-        <g className="radar-blip blip-1">
-          <circle cx="215" cy="105" r="4" fill="var(--danger-color)" />
-          <circle cx="215" cy="105" r="9" stroke="var(--danger-color)" strokeWidth="1" opacity="0.6" className="radar-ping" />
-          <text x="224" y="102" fill="var(--danger-color)" fontSize="7.5" fontFamily="var(--font-mono)" fontWeight="600">SQLi #942100 [DROP]</text>
-        </g>
-
-        <g className="radar-blip blip-2">
-          <circle cx="100" cy="205" r="3.5" fill="var(--warning-color)" />
-          <circle cx="100" cy="205" r="8" stroke="var(--warning-color)" strokeWidth="1" opacity="0.5" className="radar-ping" />
-          <text x="108" y="215" fill="var(--warning-color)" fontSize="7.5" fontFamily="var(--font-mono)">L7 BOT [RATE_LIMIT]</text>
-        </g>
-
-        <g className="radar-blip blip-3">
-          <circle cx="225" cy="200" r="3.5" fill="var(--ml-color)" />
-          <text x="234" y="204" fill="var(--ml-color)" fontSize="7.5" fontFamily="var(--font-mono)">ML ANOMALY [SCORE: 0.94]</text>
-        </g>
-      </svg>
-    </div>
-  );
-}
 
 export default function Login({ setAuth, onLoginSuccess }) {
   const [username, setUsername] = useState(() => {
@@ -218,39 +142,15 @@ export default function Login({ setAuth, onLoginSuccess }) {
     }
   };
 
-  const securityPillars = [
-    {
-      icon: ShieldCheck,
-      color: 'var(--success-color)',
-      badge: 'CRS v4.0',
-      title: 'OWASP Core Rule Set',
-      desc: 'Standardized L7 anomaly scoring, paranoia level tuning & automated injection neutralization.'
-    },
-    {
-      icon: Cpu,
-      color: 'var(--ml-color)',
-      badge: 'DUAL ML',
-      title: 'XGBoost & Isolation Forest',
-      desc: 'Sub-millisecond inference evaluating request payload entropy, structural drift & anomaly probability.'
-    },
-    {
-      icon: Zap,
-      color: 'var(--accent-color)',
-      badge: 'ANTI-DDOS',
-      title: 'Behavioral Rate Limiting',
-      desc: 'Microsecond token-bucket throttling, cryptographic browser challenges & AbuseIPDB threat feeds.'
-    },
-    {
-      icon: Layers,
-      color: 'var(--cyan-color)',
-      badge: 'PCI-DSS v4',
-      title: 'Continuous Compliance Audit',
-      desc: 'Direct mapping to PCI-DSS v4.0 Req 6.4.2 & OWASP Top 10 with tamper-evident audit trails.'
-    }
-  ];
-
   return (
     <div className="login-container" onKeyDown={handleKeyCheck} onKeyUp={handleKeyCheck}>
+      {/* ── Ambient Background Visual (Calm, Constant, Low Context) ─ */}
+      <div className="login-ambient-backdrop" aria-hidden="true">
+        <div className="ambient-glow glow-primary" />
+        <div className="ambient-glow glow-secondary" />
+        <div className="ambient-grid-overlay" />
+      </div>
+
       {/* ── Top Bar Controls ──────────────────────────────────── */}
       <header className="login-top-bar">
         <div className="login-top-brand">
@@ -277,11 +177,9 @@ export default function Login({ setAuth, onLoginSuccess }) {
         </div>
       </header>
 
-      {/* ── Main Asymmetric Split Layout ──────────────────────── */}
-      <main className="login-split-layout">
-        
-        {/* ── Left Column: Authentication Action Zone ──────────── */}
-        <section className="login-form-section" aria-labelledby="login-heading">
+      {/* ── Main Viewport Center Stage ────────────────────────── */}
+      <main className="login-main-stage">
+        <div className="login-card-wrapper">
           <div className="login-form-card">
             
             <div className="login-card-header">
@@ -507,77 +405,7 @@ export default function Login({ setAuth, onLoginSuccess }) {
             </div>
 
           </div>
-        </section>
-
-        {/* ── Right Column: Security Operations Showcase ────────── */}
-        <section className="login-showcase-section" aria-label="CyberSentinel WAF Overview">
-          <div className="showcase-content-container">
-            
-            {/* Live Telemetry Radar HUD */}
-            <RadarTelemetryHUD />
-
-            {/* Header Telemetry Status Card */}
-            <div className="showcase-status-card">
-              <div className="showcase-brand-header">
-                <div className="showcase-logo-group">
-                  <ShieldAlert size={28} color="var(--accent-color)" />
-                  <div>
-                    <h2 className="showcase-title">CyberSentinel WAF</h2>
-                    <span className="showcase-version">Enterprise Defense Console</span>
-                  </div>
-                </div>
-
-                <div className="showcase-live-pill">
-                  <span className="status-dot-pulse" />
-                  <span>Cluster: 3 Nodes Enforcing</span>
-                </div>
-              </div>
-
-              <p className="showcase-mission-statement">
-                Autonomous Layer-7 application protection combining OWASP Core Rule Set heuristics with real-time machine learning threat classification.
-              </p>
-            </div>
-
-            {/* Security Pillars Grid */}
-            <div className="showcase-pillars-grid">
-              {securityPillars.map((p) => {
-                const Icon = p.icon;
-                return (
-                  <div key={p.title} className="pillar-card">
-                    <div className="pillar-header">
-                      <div className="pillar-icon-box" style={{ color: p.color }}>
-                        <Icon size={18} />
-                      </div>
-                      <span className="pillar-badge">{p.badge}</span>
-                    </div>
-                    <h3 className="pillar-title">{p.title}</h3>
-                    <p className="pillar-desc">{p.desc}</p>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Institutional Compliance Verification Bar */}
-            <div className="compliance-trust-bar">
-              <div className="compliance-item">
-                <CheckCircle2 size={13} color="var(--success-color)" />
-                <span>PCI-DSS v4.0 (Req 6.4.2)</span>
-              </div>
-              <div className="compliance-divider" />
-              <div className="compliance-item">
-                <CheckCircle2 size={13} color="var(--success-color)" />
-                <span>OWASP Top 10 (A01-A10)</span>
-              </div>
-              <div className="compliance-divider" />
-              <div className="compliance-item">
-                <CheckCircle2 size={13} color="var(--success-color)" />
-                <span>SOC 2 Type II Audited</span>
-              </div>
-            </div>
-
-          </div>
-        </section>
-
+        </div>
       </main>
 
       {/* ── Global Footer Bar ─────────────────────────────────── */}
