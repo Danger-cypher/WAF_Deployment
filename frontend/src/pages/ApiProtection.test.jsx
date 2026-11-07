@@ -25,6 +25,7 @@ vi.mock('../services/api', () => ({
   deleteApiSpec: vi.fn(),
   getApiDrift: vi.fn(),
   reconcileDataStores: vi.fn(),
+  exportDiscoveredEndpoints: vi.fn(),
 }));
 
 const ANALYTICS = {
@@ -221,5 +222,41 @@ describe('ApiProtection — reconcile data stores', () => {
     const dialog = await screen.findByRole('alertdialog');
     await user.click(within(dialog).getByRole('button', { name: 'Reconcile' }));
     expect(await screen.findByText('Backfilled 4 endpoints.')).toBeInTheDocument();
+  });
+});
+
+describe('ApiProtection — export & sensitive filtering', () => {
+  it('triggers exportDiscoveredEndpoints with correct arguments when export option is clicked', async () => {
+    api.exportDiscoveredEndpoints.mockResolvedValue();
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('/api/widgets');
+
+    const exportBtn = screen.getByRole('button', { name: /Export/ });
+    await user.click(exportBtn);
+
+    const csvBtn = screen.getByRole('button', { name: /Export as CSV/ });
+    await user.click(csvBtn);
+
+    expect(api.exportDiscoveredEndpoints).toHaveBeenCalledWith(
+      'csv',
+      'inventory',
+      expect.objectContaining({
+        search: undefined,
+        method: undefined,
+        grade: undefined,
+        traffic_source: undefined,
+      })
+    );
+  });
+
+  it('allows filtering by sensitive parameters', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('/api/widgets');
+
+    const sensitiveSelect = screen.getByLabelText('Filter by Sensitive Parameters');
+    await user.selectOptions(sensitiveSelect, 'SENSITIVE');
+    expect(sensitiveSelect).toHaveValue('SENSITIVE');
   });
 });

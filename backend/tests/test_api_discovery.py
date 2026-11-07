@@ -402,3 +402,34 @@ def test_generate_block_snippet_with_parameterized_template():
     snippet = _generate_block_snippet("GET", "/api/v1/users/{id}")
     assert 'SecRule REQUEST_FILENAME "@rx ^/api/v1/users/[^/]+$" ""' in snippet
     assert 'SecRule REQUEST_METHOD "@streq GET"' in snippet
+
+
+# ---------------------------------------------------------------------------
+# Filter and Export helpers
+# ---------------------------------------------------------------------------
+
+def test_filter_scored_endpoints_has_sensitive():
+    from app.routes.api_protection import _filter_scored_endpoints
+    endpoints = [
+        {"uri": "/api/v1/users", "host": "app.com", "method": "GET", "grade": "A", "traffic_source": "internal", "sensitive_params": ["token"]},
+        {"uri": "/api/v1/products", "host": "app.com", "method": "GET", "grade": "B", "traffic_source": "external", "sensitive_params": []},
+    ]
+
+    # Sensitive only
+    res = _filter_scored_endpoints(endpoints, has_sensitive="true")
+    assert len(res) == 1
+    assert res[0]["uri"] == "/api/v1/users"
+
+    # Non-sensitive only
+    res_clean = _filter_scored_endpoints(endpoints, has_sensitive="false")
+    assert len(res_clean) == 1
+    assert res_clean[0]["uri"] == "/api/v1/products"
+
+
+def test_sensitive_param_patterns_extended():
+    from app.routes.api_protection import flag_sensitive_params
+    flagged = flag_sensitive_params(["user_jwt", "session_id", "bearer_token", "normal_id"])
+    assert "user_jwt" in flagged
+    assert "session_id" in flagged
+    assert "bearer_token" in flagged
+    assert "normal_id" not in flagged

@@ -1100,6 +1100,7 @@ export async function getDiscoveredEndpoints(page = 1, size = 25, filters = {}) 
     if (filters.method && filters.method !== 'ALL') query.set('method', filters.method);
     if (filters.grade && filters.grade !== 'ALL') query.set('grade', filters.grade);
     if (filters.traffic_source && filters.traffic_source !== 'ALL') query.set('traffic_source', filters.traffic_source);
+    if (filters.has_sensitive !== undefined && filters.has_sensitive !== 'ALL') query.set('has_sensitive', filters.has_sensitive);
     const response = await fetch(`${BASE_URL}/api-protection/endpoints?${query.toString()}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
@@ -1118,6 +1119,7 @@ export async function getRecentlyDiscoveredEndpoints(page = 1, size = 25, filter
     if (filters.method && filters.method !== 'ALL') query.set('method', filters.method);
     if (filters.grade && filters.grade !== 'ALL') query.set('grade', filters.grade);
     if (filters.traffic_source && filters.traffic_source !== 'ALL') query.set('traffic_source', filters.traffic_source);
+    if (filters.has_sensitive !== undefined && filters.has_sensitive !== 'ALL') query.set('has_sensitive', filters.has_sensitive);
     const response = await fetch(`${BASE_URL}/api-protection/recently-discovered?${query.toString()}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
@@ -1137,12 +1139,49 @@ export async function getStaleEndpoints(days = 30, page = 1, size = 25, filters 
     if (filters.method && filters.method !== 'ALL') query.set('method', filters.method);
     if (filters.grade && filters.grade !== 'ALL') query.set('grade', filters.grade);
     if (filters.traffic_source && filters.traffic_source !== 'ALL') query.set('traffic_source', filters.traffic_source);
+    if (filters.has_sensitive !== undefined && filters.has_sensitive !== 'ALL') query.set('has_sensitive', filters.has_sensitive);
     const response = await fetch(`${BASE_URL}/api-protection/stale-endpoints?${query.toString()}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch stale endpoints:", error);
     throw error;
   }
+}
+
+/**
+ * Triggers a browser download of discovered API endpoints as CSV or JSON.
+ */
+export async function exportDiscoveredEndpoints(format = 'csv', scope = 'inventory', filters = {}) {
+  const query = new URLSearchParams({ scope });
+  if (filters.search) query.set('search', filters.search);
+  if (filters.method && filters.method !== 'ALL') query.set('method', filters.method);
+  if (filters.grade && filters.grade !== 'ALL') query.set('grade', filters.grade);
+  if (filters.traffic_source && filters.traffic_source !== 'ALL') query.set('traffic_source', filters.traffic_source);
+  if (filters.has_sensitive !== undefined && filters.has_sensitive !== 'ALL') query.set('has_sensitive', filters.has_sensitive);
+  if (filters.days) query.set('days', filters.days);
+
+  const endpoint = format === 'json' ? '/api-protection/export/json' : '/api-protection/export/csv';
+  const response = await fetch(`${BASE_URL}${endpoint}?${query.toString()}`);
+  if (!response.ok) {
+    throw new Error(`Failed to export API inventory (status ${response.status})`);
+  }
+
+  const disposition = response.headers.get('Content-Disposition');
+  let filename = `api_inventory_${scope}_${new Date().toISOString().slice(0, 10)}.${format}`;
+  if (disposition && disposition.includes('filename=')) {
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    if (match && match[1]) filename = match[1];
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 /**

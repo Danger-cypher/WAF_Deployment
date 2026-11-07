@@ -1,8 +1,12 @@
+import csv
 import hashlib
+import io
+import json
 import os
 import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from app.models.response_models import PaginatedEndpoints
@@ -22,7 +26,7 @@ _SENSITIVE_PARAM_PATTERNS = (
     "email", "e_mail", "phone", "mobile",
     "ssn", "social_security", "tax_id", "passport", "national_id",
     "password", "passwd", "pwd", "secret", "token", "api_key", "apikey",
-    "access_key", "private_key", "auth",
+    "access_key", "private_key", "auth", "bearer", "session", "jwt",
     "credit_card", "card_number", "cardnum", "cvv", "cvc",
     "account_number", "iban", "routing_number", "bank",
     "dob", "date_of_birth", "birthdate",
@@ -196,6 +200,7 @@ def _filter_scored_endpoints(
     method: Optional[str] = None,
     grade: Optional[str] = None,
     traffic_source: Optional[str] = None,
+    has_sensitive: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Applies search text and dropdown filters to scored endpoints prior to pagination."""
     filtered = scored
@@ -214,6 +219,12 @@ def _filter_scored_endpoints(
     if traffic_source and traffic_source.upper() != "ALL":
         ts = traffic_source.lower().strip()
         filtered = [ep for ep in filtered if ep.get("traffic_source", "").lower() == ts]
+    if has_sensitive is not None and str(has_sensitive).strip() != "":
+        hs = str(has_sensitive).lower().strip()
+        if hs in ("true", "1", "yes"):
+            filtered = [ep for ep in filtered if len(ep.get("sensitive_params") or []) > 0]
+        elif hs in ("false", "0", "no"):
+            filtered = [ep for ep in filtered if not ep.get("sensitive_params")]
     return filtered
 
 
@@ -225,6 +236,7 @@ def get_discovered_endpoints(
     method: Optional[str] = Query(None),
     grade: Optional[str] = Query(None),
     traffic_source: Optional[str] = Query(None),
+    has_sensitive: Optional[str] = Query(None),
     current_user: TokenData = Depends(require_any_role),
 ):
     """Returns discovered endpoints with scores, one page at a time.
@@ -233,7 +245,10 @@ def get_discovered_endpoints(
     this is a plain read."""
     endpoints = _overlay_real_threat_counts(db_service.get_all_discovered_endpoints())
     scored = [calculate_endpoint_score(ep) for ep in endpoints]
-    filtered = _filter_scored_endpoints(scored, search, method, grade, traffic_source)
+    filtered = _filter_scored_endpoints(
+        scored, search=search, method=method, grade=grade,
+        traffic_source=traffic_source, has_sensitive=has_sensitive
+    )
     return _paginate_scored(filtered, page, size)
 
 
@@ -245,12 +260,16 @@ def get_recently_discovered(
     method: Optional[str] = Query(None),
     grade: Optional[str] = Query(None),
     traffic_source: Optional[str] = Query(None),
+    has_sensitive: Optional[str] = Query(None),
     current_user: TokenData = Depends(require_any_role),
 ):
     """Returns endpoints discovered in the last 48 hours, one page at a time."""
     endpoints = _overlay_real_threat_counts(db_service.get_recently_discovered_endpoints(hours=48))
     scored = [calculate_endpoint_score(ep) for ep in endpoints]
-    filtered = _filter_scored_endpoints(scored, search, method, grade, traffic_source)
+    filtered = _filter_scored_endpoints(
+        scored, search=search, method=method, grade=grade,
+        traffic_source=traffic_source, has_sensitive=has_sensitive
+    )
     return _paginate_scored(filtered, page, size)
 
 
@@ -263,6 +282,7 @@ def get_stale_endpoints(
     method: Optional[str] = Query(None),
     grade: Optional[str] = Query(None),
     traffic_source: Optional[str] = Query(None),
+    has_sensitive: Optional[str] = Query(None),
     current_user: TokenData = Depends(require_any_role),
 ):
     """
@@ -275,8 +295,145 @@ def get_stale_endpoints(
     """
     endpoints = _overlay_real_threat_counts(db_service.get_stale_discovered_endpoints(days=days))
     scored = [calculate_endpoint_score(ep) for ep in endpoints]
-    filtered = _filter_scored_endpoints(scored, search, method, grade, traffic_source)
+    filtered = _filter_scored_endpoints(
+        scored, search=search, method=method, grade=grade,
+        traffic_source=traffic_source, has_sensitive=has_sensitive
+    )
     return _paginate_scored(filtered, page, size)
+
+
+@router.get("/api-protection/export/csv")
+def export_discovered_endpoints_csv(
+    scope: str = Query("inventory", pattern="^(inventory|recent|stale)$"),
+    days: int = Query(30, ge=1, le=365),
+    search: Optional[str] = Query(None),
+    method: Optional[str] = Query(None),
+    grade: Optional[str] = Query(None),
+    traffic_source: Optional[str] = Query(None),
+    has_sensitive: Optional[str] = Query(None),
+    current_user: TokenData = Depends(require_any_role),
+):
+    """Exports discovered API endpoints as CSV matching current filters."""
+    if scope == "recent":
+        raw_endpoints = db_service.get_recently_discovered_endpoints(hours=48)
+    elif scope == "stale":
+        raw_endpoints = db_service.get_stale_discovered_endpoints(days=days)
+    else:
+        raw_endpoints = db_service.get_all_discovered_endpoints()
+
+    endpoints = _overlay_real_threat_counts(raw_endpoints)
+    scored = [calculate_endpoint_score(ep) for ep in endpoints]
+    filtered = _filter_scored_endpoints(
+        scored, search=search, method=method, grade=grade,
+        traffic_source=traffic_source, has_sensitive=has_sensitive
+    )
+
+    def generate():
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "Host",
+            "Method",
+            "URI",
+            "Security Grade",
+            "Security Score",
+            "Total Hits",
+            "Malicious Count",
+            "Suspicious Count",
+            "2xx Responses",
+            "4xx Responses",
+            "5xx Responses",
+            "Avg Response Time (ms)",
+            "P95 Response Time (ms)",
+            "P99 Response Time (ms)",
+            "Traffic Source",
+            "Sensitive Params",
+            "First Seen",
+            "Last Seen",
+        ])
+        output.seek(0)
+        yield output.read()
+
+        for ep in filtered:
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow([
+                ep.get("host") or "",
+                ep.get("method") or "",
+                ep.get("uri") or "",
+                ep.get("grade") or "",
+                ep.get("score") if ep.get("score") is not None else "",
+                ep.get("hit_count", 0),
+                ep.get("malicious_count", 0),
+                ep.get("suspicious_count", 0),
+                ep.get("status_2xx", 0),
+                ep.get("status_4xx", 0),
+                ep.get("status_5xx", 0),
+                ep.get("avg_response_time_ms", 0.0),
+                ep.get("p95_response_time_ms", 0.0),
+                ep.get("p99_response_time_ms", 0.0),
+                ep.get("traffic_source") or "Unknown",
+                "; ".join(ep.get("sensitive_params") or []),
+                ep.get("first_seen") or "",
+                ep.get("last_seen") or "",
+            ])
+            output.seek(0)
+            yield output.read()
+
+    now_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = f"api_inventory_{scope}_{now_str}.csv"
+    response = StreamingResponse(generate(), media_type="text/csv")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@router.get("/api-protection/export/json")
+def export_discovered_endpoints_json(
+    scope: str = Query("inventory", pattern="^(inventory|recent|stale)$"),
+    days: int = Query(30, ge=1, le=365),
+    search: Optional[str] = Query(None),
+    method: Optional[str] = Query(None),
+    grade: Optional[str] = Query(None),
+    traffic_source: Optional[str] = Query(None),
+    has_sensitive: Optional[str] = Query(None),
+    current_user: TokenData = Depends(require_any_role),
+):
+    """Exports discovered API endpoints as JSON with structured metadata."""
+    if scope == "recent":
+        raw_endpoints = db_service.get_recently_discovered_endpoints(hours=48)
+    elif scope == "stale":
+        raw_endpoints = db_service.get_stale_discovered_endpoints(days=days)
+    else:
+        raw_endpoints = db_service.get_all_discovered_endpoints()
+
+    endpoints = _overlay_real_threat_counts(raw_endpoints)
+    scored = [calculate_endpoint_score(ep) for ep in endpoints]
+    filtered = _filter_scored_endpoints(
+        scored, search=search, method=method, grade=grade,
+        traffic_source=traffic_source, has_sensitive=has_sensitive
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    now_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    payload = {
+        "exported_at": now_iso,
+        "scope": scope,
+        "total_records": len(filtered),
+        "filters": {
+            "search": search,
+            "method": method,
+            "grade": grade,
+            "traffic_source": traffic_source,
+            "has_sensitive": has_sensitive,
+        },
+        "endpoints": filtered,
+    }
+
+    content = json.dumps(payload, indent=2, default=str)
+    filename = f"api_inventory_{scope}_{now_str}.json"
+    response = StreamingResponse(io.BytesIO(content.encode("utf-8")), media_type="application/json")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 @router.get("/api-protection/analytics", response_model=Dict[str, Any])

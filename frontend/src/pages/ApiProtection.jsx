@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, BarChart2, ChevronLeft, ChevronRight, Clock, FileUp, Globe, RefreshCw, Search, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart2, ChevronLeft, ChevronRight, Clock, Download, FileUp, Globe, RefreshCw, Search, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import {
   getApiProtectionAnalytics, getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getStaleEndpoints,
   getDdosBotSettings, saveDdosBotSettings,
   getBlockedEndpoints, blockEndpoint, unblockEndpoint,
   getApiSpec, uploadApiSpec, deleteApiSpec, getApiDrift, reconcileDataStores,
+  exportDiscoveredEndpoints,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
@@ -79,6 +80,9 @@ export default function ApiProtection() {
   const [selectedMethod, setSelectedMethod] = useState('ALL');
   const [selectedGrade, setSelectedGrade] = useState('ALL');
   const [selectedSource, setSelectedSource] = useState('ALL');
+  const [selectedSensitive, setSelectedSensitive] = useState('ALL');
+  const [exportingFormat, setExportingFormat] = useState(null); // 'csv' | 'json' | null
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   const handleSearchChange = (val) => {
     setSearchQuery(val);
@@ -96,11 +100,16 @@ export default function ApiProtection() {
     setSelectedSource(val);
     setPage(1);
   };
+  const handleSensitiveChange = (val) => {
+    setSelectedSensitive(val);
+    setPage(1);
+  };
   const handleClearFilters = () => {
     setSearchQuery('');
     setSelectedMethod('ALL');
     setSelectedGrade('ALL');
     setSelectedSource('ALL');
+    setSelectedSensitive('ALL');
     setPage(1);
   };
 
@@ -142,10 +151,11 @@ export default function ApiProtection() {
     isFetchingRef.current = true;
     try {
       const filters = {
-        search: searchQuery,
-        method: selectedMethod,
-        grade: selectedGrade,
-        traffic_source: selectedSource,
+        search: searchQuery || undefined,
+        method: selectedMethod !== 'ALL' ? selectedMethod : undefined,
+        grade: selectedGrade !== 'ALL' ? selectedGrade : undefined,
+        traffic_source: selectedSource !== 'ALL' ? selectedSource : undefined,
+        has_sensitive: selectedSensitive !== 'ALL' ? (selectedSensitive === 'SENSITIVE' ? 'true' : 'false') : undefined,
       };
       const [epsData, recentData, staleData, analyticsData, ddosData, blockedData, specData, driftData] = await Promise.all([
         getDiscoveredEndpoints(page, PAGE_SIZE, filters),
@@ -156,6 +166,7 @@ export default function ApiProtection() {
         getBlockedEndpoints(),
         getApiSpec(),
         getApiDrift(),
+        reconcileDataStores ? Promise.resolve() : Promise.resolve(), // Keep signature balanced
       ]);
       setEndpoints(epsData.data);
       setEndpointsTotal(epsData.total);
@@ -178,6 +189,28 @@ export default function ApiProtection() {
     }
   };
 
+  const handleExport = async (format) => {
+    try {
+      setExportingFormat(format);
+      setShowExportMenu(false);
+      const filters = {
+        search: searchQuery || undefined,
+        method: selectedMethod !== 'ALL' ? selectedMethod : undefined,
+        grade: selectedGrade !== 'ALL' ? selectedGrade : undefined,
+        traffic_source: selectedSource !== 'ALL' ? selectedSource : undefined,
+        has_sensitive: selectedSensitive !== 'ALL' ? (selectedSensitive === 'SENSITIVE' ? 'true' : 'false') : undefined,
+        days: activeTab === 'stale' ? 30 : undefined,
+      };
+      await exportDiscoveredEndpoints(format, activeTab, filters);
+      showToast(`Exported ${activeTab} endpoints as ${format.toUpperCase()}`, 'success');
+    } catch (err) {
+      console.error('Export failed:', err);
+      showToast(`Export failed: ${err.message || 'Unknown error'}`, 'error');
+    } finally {
+      setExportingFormat(null);
+    }
+  };
+
   useEffect(() => {
     // Re-fetches immediately on mount AND whenever `page` or filters change —
     // the 10s interval covers the "just sitting on this page" case.
@@ -190,7 +223,7 @@ export default function ApiProtection() {
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, searchQuery, selectedMethod, selectedGrade, selectedSource]);
+  }, [page, searchQuery, selectedMethod, selectedGrade, selectedSource, selectedSensitive]);
 
   // Every tab reads from a different backend list — jumping back to page 1
   // on tab switch avoids e.g. landing on "page 4" of a 1-row Recently
@@ -410,7 +443,13 @@ export default function ApiProtection() {
   const activeRows = activeTab === 'inventory' ? endpoints : activeTab === 'recent' ? recentlyDiscovered : staleEndpoints;
   const activeTotal = activeTab === 'inventory' ? endpointsTotal : activeTab === 'recent' ? recentlyDiscoveredTotal : staleEndpointsTotal;
   const totalPages = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
-  const hasActiveFilters = Boolean(searchQuery || selectedMethod !== 'ALL' || selectedGrade !== 'ALL' || selectedSource !== 'ALL');
+  const hasActiveFilters = Boolean(
+    searchQuery ||
+    selectedMethod !== 'ALL' ||
+    selectedGrade !== 'ALL' ||
+    selectedSource !== 'ALL' ||
+    selectedSensitive !== 'ALL'
+  );
   const emptyStateMessage = hasActiveFilters
     ? 'No endpoints match the selected filters.'
     : activeTab === 'stale'
@@ -779,6 +818,26 @@ export default function ApiProtection() {
               <option value="Mixed">Mixed Traffic</option>
             </select>
 
+            {/* Sensitive Params filter */}
+            <select
+              value={selectedSensitive}
+              onChange={(e) => handleSensitiveChange(e.target.value)}
+              aria-label="Filter by Sensitive Parameters"
+              style={{
+                padding: '7px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--border-subtle)',
+                backgroundColor: 'var(--surface-strong)',
+                color: 'var(--text-primary)',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="ALL">All Endpoints</option>
+              <option value="SENSITIVE">With Sensitive Params</option>
+              <option value="CLEAN">No Sensitive Params</option>
+            </select>
+
             {/* Reset button if any filter is active */}
             {hasActiveFilters && (
               <button
@@ -803,9 +862,100 @@ export default function ApiProtection() {
             )}
           </div>
 
-          {/* Right: Count */}
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-            Showing {activeRows.length} {activeTotal !== undefined ? `of ${activeTotal}` : ''} endpoints
+          {/* Right: Export Button + Count */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => setShowExportMenu((v) => !v)}
+                disabled={exportingFormat !== null}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--surface-strong)',
+                  color: 'var(--text-primary)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                }}
+                title="Export current view and filtered endpoints"
+              >
+                <Download size={13} className={exportingFormat ? 'animate-spin' : ''} />
+                {exportingFormat ? `Exporting ${exportingFormat.toUpperCase()}...` : 'Export'}
+              </button>
+              {showExportMenu && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: 'calc(100% + 4px)',
+                    zIndex: 20,
+                    backgroundColor: 'var(--surface-strong)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: '6px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+                    padding: '4px',
+                    minWidth: '130px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleExport('csv')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '6px 10px',
+                      borderRadius: '4px',
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      color: 'var(--text-primary)',
+                      fontSize: '12px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      width: '100%',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--surface-subtle)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  >
+                    <Download size={12} /> Export as CSV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExport('json')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '6px 10px',
+                      borderRadius: '4px',
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      color: 'var(--text-primary)',
+                      fontSize: '12px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      width: '100%',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--surface-subtle)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  >
+                    <Download size={12} /> Export as JSON
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+              Showing {activeRows.length} {activeTotal !== undefined ? `of ${activeTotal}` : ''} endpoints
+            </div>
           </div>
         </div>
 
