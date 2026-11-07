@@ -28,6 +28,11 @@ FULL_LINE = (
     '"GET /api/v1/orders HTTP/1.1" 200 154 "-" "Mozilla/5.0" '
     '0.012 0.010 https "gzip"'
 )
+FULL_LINE_WITH_HOST = (
+    '203.0.113.5 - - [08/Jun/2026:10:35:51 +0530] '
+    '"GET /api/v1/orders HTTP/1.1" 200 154 "-" "Mozilla/5.0" '
+    '0.012 0.010 https "gzip" "itsm.vgipl.com"'
+)
 FULL_LINE_HTTP_NO_ENCODING = (
     '203.0.113.5 - - [08/Jun/2026:10:35:51 +0530] '
     '"GET /api/v1/orders HTTP/1.1" 200 154 "-" "Mozilla/5.0" '
@@ -49,6 +54,20 @@ def test_full_tier_captures_scheme_and_encoding():
     assert m is not None
     assert m.group("scheme") == "https"
     assert m.group("encoding") == "gzip"
+
+
+def test_full_tier_captures_host():
+    m = api_discovery.ACCESS_LINE_RE.match(FULL_LINE_WITH_HOST)
+    assert m is not None
+    assert m.group("scheme") == "https"
+    assert m.group("encoding") == "gzip"
+    assert m.group("host") == "itsm.vgipl.com"
+
+
+def test_full_tier_matches_line_without_host():
+    m = api_discovery.ACCESS_LINE_RE.match(FULL_LINE)
+    assert m is not None
+    assert m.group("host") is None
 
 
 def test_full_tier_handles_empty_encoding():
@@ -228,6 +247,29 @@ def test_run_api_discovery_tags_internal_ips_without_polluting_score_metrics(fak
     assert ep["response_time_ms_sum"] == 0.0
     assert ep["has_https"] == api_discovery.HTTPS_UNKNOWN
     assert ep["content_encoding"] == api_discovery.ENCODING_UNKNOWN
+
+
+def test_static_and_dev_artifacts_ignored(fake_access_log):
+    log_path, captured = fake_access_log
+    lines = [
+        FULL_LINE.replace("/api/v1/orders", "/@vite/client"),
+        FULL_LINE.replace("/api/v1/orders", "/src/App.jsx"),
+        FULL_LINE.replace("/api/v1/orders", "/node_modules/vite/env.mjs"),
+        FULL_LINE.replace("/api/v1/orders", "/favicon.ico"),
+    ]
+    log_path.write_text("\n".join(lines) + "\n")
+    api_discovery.run_api_discovery()
+    assert len(captured) == 0
+
+
+def test_customer_auth_endpoint_is_discovered(fake_access_log):
+    """Customer endpoints under /api/auth/login must be discovered,
+    now that dashboard traffic is isolated to dashboard_access.log."""
+    log_path, captured = fake_access_log
+    auth_line = FULL_LINE.replace("/api/v1/orders", "/api/auth/login")
+    log_path.write_text(auth_line + "\n")
+    api_discovery.run_api_discovery()
+    assert ("/api/auth/login", "GET") in captured
 
 
 # ---------------------------------------------------------------------------

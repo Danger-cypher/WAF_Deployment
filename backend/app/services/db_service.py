@@ -127,6 +127,13 @@ def init_db():
                 except Exception:
                     pass  # Column already exists — expected on re-init
 
+            try:
+                cursor.execute(
+                    "ALTER TABLE discovered_endpoints ADD COLUMN host TEXT DEFAULT ''"
+                )
+            except Exception:
+                pass
+
             # Query-param NAMES observed for this endpoint, as a JSON array
             # string (never values — see api_discovery.extract_param_names).
             # Powers API Protection's sensitive-parameter flagging.
@@ -1095,6 +1102,7 @@ def _row_to_endpoint_dict(row) -> dict:
         d["param_names"] = json.loads(d.get("param_names") or "[]")
     except Exception:
         d["param_names"] = []
+    d.setdefault("host", "")
     return d
 
 
@@ -1335,6 +1343,7 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                 "content_encoding": data["content_encoding"],
                 "avg_response_time_ms": data["response_time_ms_sum"] / data["hit_count"] if data["hit_count"] > 0 else 0.0,
                 "param_names": data.get("param_names", []),
+                "host": data.get("host", ""),
             })
         clickhouse_service.insert_api_discovery(records)
 
@@ -1389,6 +1398,7 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                     except Exception:
                         existing_params = set()
                     new_params = sorted(existing_params | set(data.get("param_names", [])))
+                    host_val = data.get("host", "")
 
                     cursor.execute(
                         """
@@ -1403,7 +1413,8 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                             suspicious_count = ?,
                             has_https = ?,
                             content_encoding = ?,
-                            param_names = ?
+                            param_names = ?,
+                            host = CASE WHEN ? != '' THEN ? ELSE host END
                         WHERE uri = ? AND method = ?
                     """,
                         (
@@ -1418,6 +1429,8 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                             new_https,
                             new_encoding,
                             json.dumps(new_params),
+                            host_val,
+                            host_val,
                             uri,
                             method,
                         ),
@@ -1429,8 +1442,8 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                         INSERT INTO discovered_endpoints (
                             uri, method, first_seen, last_seen, avg_response_time_ms, hit_count,
                             external_hit_count, internal_hit_count, error_count, malicious_count,
-                            suspicious_count, has_https, has_versioning, content_encoding, param_names
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            suspicious_count, has_https, has_versioning, content_encoding, param_names, host
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                         (
                             uri,
@@ -1448,6 +1461,7 @@ def bulk_upsert_discovered_endpoints(endpoints_data: dict):
                             data["has_versioning"],
                             data["content_encoding"] or "",
                             json.dumps(sorted(data.get("param_names", []))),
+                            data.get("host", ""),
                         ),
                     )
             conn.commit()

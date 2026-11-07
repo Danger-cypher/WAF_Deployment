@@ -184,6 +184,8 @@ CREATE TABLE IF NOT EXISTS cybersentinel.api_discovery
     -- all batches per endpoint to build the full observed set.
     param_names          Array(String) DEFAULT [],
 
+    host                LowCardinality(String) DEFAULT '',
+
     first_seen          DateTime DEFAULT now()
 )
 ENGINE = SummingMergeTree((hit_count, error_count, malicious_count, suspicious_count, external_hit_count, internal_hit_count))

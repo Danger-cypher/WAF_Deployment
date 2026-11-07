@@ -37,8 +37,8 @@ def is_internal_ip(ip_str: str) -> bool:
 _discovery_lock = threading.Lock()
 
 # NGINX waf_extended log format regex (current format: real timing + real
-# scheme/Content-Encoding for API Protection's TLS/Compression scoring).
-# e.g., 10.200.11.33 - - [08/Jun/2026:10:35:51 +0530] "GET /api/stats HTTP/1.1" 200 154 "-" "Mozilla/5.0" 0.012 0.010 https "gzip"
+# scheme/Content-Encoding for API Protection's TLS/Compression scoring + host).
+# e.g., 10.200.11.33 - - [08/Jun/2026:10:35:51 +0530] "GET /api/stats HTTP/1.1" 200 154 "-" "Mozilla/5.0" 0.012 0.010 https "gzip" "itsm.vgipl.com"
 ACCESS_LINE_RE = re.compile(
     r"^(?P<ip>[\d\.:a-fA-F]+) - (?P<user>[^ ]+) \[(?P<time>[^\]]+)\] "
     r'"(?P<method>[A-Z]+) (?P<uri>[^ ]+) (?P<proto>[^"]+)" '
@@ -46,6 +46,7 @@ ACCESS_LINE_RE = re.compile(
     r'"(?P<referer>[^"]*)" "(?P<agent>[^"]*)" '
     r'(?P<request_time>[\d\.\-]+) (?P<upstream_time>[\d\.\-]+) '
     r'(?P<scheme>https?) "(?P<encoding>[^"]*)"'
+    r'(?:\s+"(?P<host>[^"]*)")?'
 )
 
 # Fallback tier: format used between the request-timing rollout and the
@@ -86,19 +87,23 @@ NGINX_ACCESS_LOG = "/var/log/nginx/access.log"
 
 # Static files patterns to ignore in API Discovery
 STATIC_EXTENSIONS = (
-    ".js",
-    ".css",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".svg",
-    ".ico",
-    ".woff",
-    ".woff2",
-    ".ttf",
-    ".eot",
-    ".map",
+    ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".css", ".scss", ".sass", ".less",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".avif",
+    ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".map", ".wasm",
+)
+
+STATIC_PATH_PREFIXES = (
+    "/@vite",
+    "/@fs",
+    "/@react-refresh",
+    "/src/",
+    "/node_modules/",
+    "/assets/",
+    "/static/",
+    "/favicon.ico",
+    "/robots.txt",
 )
 
 
@@ -245,8 +250,13 @@ def run_api_discovery():
                 uri = data["uri"]
                 method = data["method"]
                 status_code = int(data["status"])
+                host = (data.get("host") or "").strip()
 
                 clean_uri = uri.split("?")[0]
+
+                # Filter out dev server assets, source bundles, and common non-API prefixes
+                if any(clean_uri.startswith(p) for p in STATIC_PATH_PREFIXES):
+                    continue
 
                 if clean_uri.lower().endswith(STATIC_EXTENSIONS):
                     continue
@@ -255,15 +265,14 @@ def run_api_discovery():
                 if "ws" in clean_uri or "socket" in clean_uri:
                     continue
 
-                # Skip WAF dashboard's own internal API polling paths.
-                # These are requests from the dashboard browser polling /api/stats,
-                # /api/logs, etc. — they must never appear as "discovered" customer endpoints.
+                # Skip true WAF internal endpoints.
+                # Note: Dashboard GUI traffic is now isolated in dashboard_access.log,
+                # so we do NOT filter /api/auth, /api/rules, etc. here — customer apps
+                # legitimately use those paths.
                 WAF_INTERNAL_PREFIXES = (
-                    "/api/stats", "/api/logs", "/api/timeline", "/api/top-",
-                    "/api/attack-types", "/api/severity", "/api/health",
-                    "/api/rules", "/api/auth", "/api/ddos", "/api/ml",
-                    "/api/settings", "/api/false-positives", "/api/exclusions",
-                    "/api/api-protection", "/api/hardening", "/api/anti-defacement",
+                    "/api/health",
+                    "/__waf_block_page__",
+                    "/.well-known/acme-challenge/",
                 )
                 if any(clean_uri.startswith(p) for p in WAF_INTERNAL_PREFIXES):
                     continue
@@ -315,6 +324,7 @@ def run_api_discovery():
                 key = (clean_uri, method)
                 if key not in endpoints_aggregated:
                     endpoints_aggregated[key] = {
+                        "host": host,
                         "response_time_ms_sum": 0.0,
                         "hit_count": 0,
                         "error_count": 0,
@@ -330,6 +340,8 @@ def run_api_discovery():
                     }
 
                 ep = endpoints_aggregated[key]
+                if host and not ep.get("host"):
+                    ep["host"] = host
                 # Keep the latest timestamp regardless of traffic origin —
                 # an internal-only hit still means the endpoint is alive.
                 ep["timestamp"] = timestamp

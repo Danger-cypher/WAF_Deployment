@@ -657,7 +657,22 @@ export default function ApiProtection() {
                     <tr key={`${ep.method} ${ep.uri}`} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
                       <td style={{ padding: '12px 8px', ...getMethodStyle(ep.method) }}>{ep.method}</td>
                       <td style={{ padding: '12px 8px', fontFamily: 'monospace' }}>
-                        <div>{ep.uri}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          {ep.host && (
+                            <span style={{
+                              fontSize: '10px',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              backgroundColor: 'var(--surface-subtle)',
+                              color: 'var(--text-secondary)',
+                              border: '1px solid var(--border-subtle)',
+                              fontFamily: 'inherit',
+                            }}>
+                              {ep.host}
+                            </span>
+                          )}
+                          <span>{ep.uri}</span>
+                        </div>
                         {ep.sensitive_params?.length > 0 && (
                           <div
                             style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '4px', padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 600, fontFamily: 'inherit', color: 'var(--sev-medium)', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)' }}

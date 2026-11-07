@@ -168,6 +168,20 @@ def ensure_api_discovery_param_names_column() -> None:
         logger.warning(f"ClickHouse api_discovery.param_names migration check failed: {e}")
 
 
+def ensure_api_discovery_host_column() -> None:
+    """Idempotent schema migration: adds api_discovery.host
+    (LowCardinality(String)) for installs whose table predates host-aware logging."""
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        client.command(
+            "ALTER TABLE api_discovery ADD COLUMN IF NOT EXISTS host LowCardinality(String) DEFAULT ''"
+        )
+    except Exception as e:
+        logger.warning(f"ClickHouse api_discovery.host migration check failed: {e}")
+
+
 def ensure_alert_history_channel_results_column() -> None:
     """Idempotent schema migration: adds alert_history.channel_results
     (String, JSON-serialized) for installs whose table predates per-channel
@@ -1646,13 +1660,14 @@ def insert_api_discovery(records: List[Dict[str, Any]]) -> int:
             float(r.get("avg_response_time_ms", 0.0)),
             [str(p) for p in (r.get("param_names") or [])],
             ts,
+            str(r.get("host", "")),
         ])
 
     columns = [
         "uri", "method", "timestamp", "hit_count", "error_count",
         "malicious_count", "suspicious_count", "external_hit_count", "internal_hit_count",
         "has_https", "has_versioning", "content_encoding", "avg_response_time_ms",
-        "param_names", "first_seen",
+        "param_names", "first_seen", "host",
     ]
 
     try:
@@ -1686,7 +1701,7 @@ def _fetch_all_discovered_endpoints() -> List[Dict[str, Any]]:
                 external_hit_count, internal_hit_count,
                 has_https, has_versioning, content_encoding,
                 weighted_response_sum, p95_response_time_ms, p99_response_time_ms,
-                param_names
+                param_names, host
             FROM (
                 SELECT uri, method,
                        min(first_seen)  AS first_seen,
@@ -1725,7 +1740,12 @@ def _fetch_all_discovered_endpoints() -> List[Dict[str, Any]]:
                        -- Union of every param name seen across all batches
                        -- for this endpoint — each row only carries what one
                        -- ~10s batch observed.
-                       arrayDistinct(arrayFlatten(groupArray(param_names))) AS param_names
+                       arrayDistinct(arrayFlatten(groupArray(param_names))) AS param_names,
+                       if(
+                           countIf(host != '') > 0,
+                           anyIf(host, host != ''),
+                           ''
+                       ) AS host
                 FROM api_discovery
                 GROUP BY uri, method
             )
@@ -1736,7 +1756,7 @@ def _fetch_all_discovered_endpoints() -> List[Dict[str, Any]]:
             "uri", "method", "first_seen", "last_seen", "hit_count", "error_count",
             "malicious_count", "suspicious_count", "external_hit_count", "internal_hit_count",
             "has_https", "has_versioning", "content_encoding", "weighted_response_sum",
-            "p95_response_time_ms", "p99_response_time_ms", "param_names",
+            "p95_response_time_ms", "p99_response_time_ms", "param_names", "host",
         ]
         rows = []
         for row in result.result_rows:
@@ -1886,13 +1906,14 @@ def backfill_api_discovery_rows(rows: List[Dict[str, Any]]) -> int:
             float(r.get("avg_response_time_ms", 0.0)),
             [str(p) for p in (r.get("param_names") or [])],
             first_seen,  # first_seen column -> preserves the true historical date
+            str(r.get("host", "")),
         ])
 
     columns = [
         "uri", "method", "timestamp", "hit_count", "error_count",
         "malicious_count", "suspicious_count", "external_hit_count", "internal_hit_count",
         "has_https", "has_versioning", "content_encoding", "avg_response_time_ms",
-        "param_names", "first_seen",
+        "param_names", "first_seen", "host",
     ]
     try:
         client.insert("api_discovery", ch_rows, column_names=columns)
