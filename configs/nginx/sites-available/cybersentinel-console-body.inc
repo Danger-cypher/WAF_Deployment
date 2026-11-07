@@ -57,6 +57,10 @@
     # what confines the list to where it belongs.
     set $waf_control_plane "1";
 
+    # Dedicated access log for the Control Plane (WAF Dashboard & Management API)
+    # Isolates admin console requests so /var/log/nginx/access.log remains pure Data Plane customer traffic.
+    access_log /var/log/nginx/dashboard_access.log waf_extended buffer=64k flush=5s;
+
     # Keep ML-WAF engine active (full protection)
     access_by_lua_file /opt/ml-waf/ml_check.lua;
 
