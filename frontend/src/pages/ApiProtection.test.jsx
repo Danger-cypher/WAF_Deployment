@@ -85,6 +85,19 @@ describe('ApiProtection — inventory', () => {
     await user.click(screen.getByRole('button', { name: /Stale \/ Zombie/ }));
     expect(await screen.findByText(/No stale endpoints/)).toBeInTheDocument();
   });
+
+  it('allows typing into search input and selecting filters', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('/api/widgets');
+    const searchInput = screen.getByPlaceholderText(/Search URI or Host/);
+    await user.type(searchInput, 'widgets');
+    expect(searchInput).toHaveValue('widgets');
+
+    const methodSelect = screen.getByLabelText('Filter by HTTP Method');
+    await user.selectOptions(methodSelect, 'POST');
+    expect(methodSelect).toHaveValue('POST');
+  });
 });
 
 describe('ApiProtection — protect endpoint', () => {
@@ -94,6 +107,17 @@ describe('ApiProtection — protect endpoint', () => {
     await user.click(await screen.findByRole('button', { name: /Protect/ }));
     expect(screen.getByLabelText('Rule Name')).toHaveValue('Protect GET /api/widgets');
     expect(screen.getByLabelText('Match Pattern (Request URI)')).toHaveValue('^/api/widgets$');
+  });
+
+  it('pre-fills regex pattern when protecting a parameterized endpoint', async () => {
+    api.getDiscoveredEndpoints.mockResolvedValue({
+      data: [{ ...ENDPOINT, uri: '/api/v1/users/{id}' }],
+      total: 1,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: /Protect/ }));
+    expect(screen.getByLabelText('Match Pattern (Request URI)')).toHaveValue('^/api/v1/users/[^/]+$');
   });
 
   it('refuses to create a duplicate-pattern rule', async () => {

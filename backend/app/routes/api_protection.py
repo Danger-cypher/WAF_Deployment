@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from app.models.response_models import PaginatedEndpoints
 from app.services import db_service, clickhouse_service, api_spec
 from app.services.auth import require_admin, require_any_role, TokenData
@@ -190,10 +190,41 @@ def _paginate_scored(scored: List[Dict[str, Any]], page: int, size: int) -> Dict
     return {"data": scored[start:start + size], "total": total, "page": page, "size": size}
 
 
+def _filter_scored_endpoints(
+    scored: List[Dict[str, Any]],
+    search: Optional[str] = None,
+    method: Optional[str] = None,
+    grade: Optional[str] = None,
+    traffic_source: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Applies search text and dropdown filters to scored endpoints prior to pagination."""
+    filtered = scored
+    if search:
+        s = search.lower().strip()
+        filtered = [
+            ep for ep in filtered
+            if s in ep.get("uri", "").lower() or s in ep.get("host", "").lower()
+        ]
+    if method and method.upper() != "ALL":
+        m = method.upper().strip()
+        filtered = [ep for ep in filtered if ep.get("method", "").upper() == m]
+    if grade and grade.upper() != "ALL":
+        g = grade.upper().strip()
+        filtered = [ep for ep in filtered if ep.get("grade", "").upper() == g]
+    if traffic_source and traffic_source.upper() != "ALL":
+        ts = traffic_source.lower().strip()
+        filtered = [ep for ep in filtered if ep.get("traffic_source", "").lower() == ts]
+    return filtered
+
+
 @router.get("/api-protection/endpoints", response_model=PaginatedEndpoints)
 def get_discovered_endpoints(
     page: int = Query(1, ge=1),
     size: int = Query(25, ge=1, le=200),
+    search: Optional[str] = Query(None),
+    method: Optional[str] = Query(None),
+    grade: Optional[str] = Query(None),
+    traffic_source: Optional[str] = Query(None),
     current_user: TokenData = Depends(require_any_role),
 ):
     """Returns discovered endpoints with scores, one page at a time.
@@ -202,19 +233,25 @@ def get_discovered_endpoints(
     this is a plain read."""
     endpoints = _overlay_real_threat_counts(db_service.get_all_discovered_endpoints())
     scored = [calculate_endpoint_score(ep) for ep in endpoints]
-    return _paginate_scored(scored, page, size)
+    filtered = _filter_scored_endpoints(scored, search, method, grade, traffic_source)
+    return _paginate_scored(filtered, page, size)
 
 
 @router.get("/api-protection/recently-discovered", response_model=PaginatedEndpoints)
 def get_recently_discovered(
     page: int = Query(1, ge=1),
     size: int = Query(25, ge=1, le=200),
+    search: Optional[str] = Query(None),
+    method: Optional[str] = Query(None),
+    grade: Optional[str] = Query(None),
+    traffic_source: Optional[str] = Query(None),
     current_user: TokenData = Depends(require_any_role),
 ):
     """Returns endpoints discovered in the last 48 hours, one page at a time."""
     endpoints = _overlay_real_threat_counts(db_service.get_recently_discovered_endpoints(hours=48))
     scored = [calculate_endpoint_score(ep) for ep in endpoints]
-    return _paginate_scored(scored, page, size)
+    filtered = _filter_scored_endpoints(scored, search, method, grade, traffic_source)
+    return _paginate_scored(filtered, page, size)
 
 
 @router.get("/api-protection/stale-endpoints", response_model=PaginatedEndpoints)
@@ -222,6 +259,10 @@ def get_stale_endpoints(
     days: int = 30,
     page: int = Query(1, ge=1),
     size: int = Query(25, ge=1, le=200),
+    search: Optional[str] = Query(None),
+    method: Optional[str] = Query(None),
+    grade: Optional[str] = Query(None),
+    traffic_source: Optional[str] = Query(None),
     current_user: TokenData = Depends(require_any_role),
 ):
     """
@@ -234,7 +275,8 @@ def get_stale_endpoints(
     """
     endpoints = _overlay_real_threat_counts(db_service.get_stale_discovered_endpoints(days=days))
     scored = [calculate_endpoint_score(ep) for ep in endpoints]
-    return _paginate_scored(scored, page, size)
+    filtered = _filter_scored_endpoints(scored, search, method, grade, traffic_source)
+    return _paginate_scored(filtered, page, size)
 
 
 @router.get("/api-protection/analytics", response_model=Dict[str, Any])
@@ -326,6 +368,15 @@ def _rule_id_for(method: str, uri: str) -> int:
 
 def _generate_block_snippet(method: str, uri: str) -> str:
     rule_id = _rule_id_for(method, uri)
+    if "{id}" in uri:
+        regex_uri = re.escape(uri).replace(r"\{id\}", r"[^/]+")
+        return (
+            f"{_block_marker(method, uri)}\n"
+            f'SecRule REQUEST_METHOD "@streq {method}" '
+            f'"id:{rule_id},phase:1,deny,status:403,log,'
+            f"msg:'Blocked by API Protection: {method} {uri}',chain\"\n"
+            f'    SecRule REQUEST_FILENAME "@rx ^{regex_uri}$" ""\n'
+        )
     return (
         f"{_block_marker(method, uri)}\n"
         f'SecRule REQUEST_METHOD "@streq {method}" '

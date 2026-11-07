@@ -370,3 +370,35 @@ def test_grade_recomputed_after_sensitive_param_deduction():
     )
     assert scored["score"] == 60
     assert scored["grade"] == "D"
+
+
+# ---------------------------------------------------------------------------
+# Path parameterization & block rule generation
+# ---------------------------------------------------------------------------
+
+def test_normalize_path_template_numeric_and_uuids():
+    assert api_discovery.normalize_path_template("/api/v1/users/123") == "/api/v1/users/{id}"
+    assert api_discovery.normalize_path_template("/api/v1/users/123/profile") == "/api/v1/users/{id}/profile"
+    assert api_discovery.normalize_path_template("/api/v1/orders/550e8400-e29b-41d4-a716-446655440000") == "/api/v1/orders/{id}"
+    assert api_discovery.normalize_path_template("/api/v1/items/64a7f0e9b1c2d3e4f5a6b7c8") == "/api/v1/items/{id}"
+    assert api_discovery.normalize_path_template("/api/v1/products") == "/api/v1/products"
+    assert api_discovery.normalize_path_template("/api/auth/login") == "/api/auth/login"
+
+
+def test_parameterized_paths_aggregated_into_template(fake_access_log):
+    log_path, captured = fake_access_log
+    line1 = FULL_LINE.replace("/api/v1/orders", "/api/v1/users/101")
+    line2 = FULL_LINE.replace("/api/v1/orders", "/api/v1/users/102")
+    log_path.write_text(line1 + "\n" + line2 + "\n")
+
+    api_discovery.run_api_discovery()
+
+    assert ("/api/v1/users/{id}", "GET") in captured
+    assert captured[("/api/v1/users/{id}", "GET")]["hit_count"] == 2
+
+
+def test_generate_block_snippet_with_parameterized_template():
+    from app.routes.api_protection import _generate_block_snippet
+    snippet = _generate_block_snippet("GET", "/api/v1/users/{id}")
+    assert 'SecRule REQUEST_FILENAME "@rx ^/api/v1/users/[^/]+$" ""' in snippet
+    assert 'SecRule REQUEST_METHOD "@streq GET"' in snippet

@@ -106,6 +106,31 @@ STATIC_PATH_PREFIXES = (
     "/robots.txt",
 )
 
+NUM_ID_RE = re.compile(r"^\d+$")
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+HEX_ID_RE = re.compile(r"^[0-9a-fA-F]{24,64}$")
+
+
+def normalize_path_template(path: str) -> str:
+    """Normalizes dynamic path parameters (numeric IDs, UUIDs, hex hashes)
+    into `{id}` templates to prevent path explosion in API Discovery.
+    E.g.:
+      /api/v1/users/123 -> /api/v1/users/{id}
+      /api/v1/orders/550e8400-e29b-41d4-a716-446655440000 -> /api/v1/orders/{id}
+      /api/v1/items/64a7f0e9b1c2d3e4f5a6b7c8 -> /api/v1/items/{id}
+    """
+    segments = path.split("/")
+    normalized = []
+    for seg in segments:
+        if not seg:
+            normalized.append(seg)
+            continue
+        if NUM_ID_RE.match(seg) or UUID_RE.match(seg) or HEX_ID_RE.match(seg):
+            normalized.append("{id}")
+        else:
+            normalized.append(seg)
+    return "/".join(normalized)
+
 
 def parse_nginx_timestamp(ts_str: str) -> str:
     """
@@ -310,10 +335,13 @@ def run_api_discovery():
                     has_https = HTTPS_UNKNOWN
                     content_encoding = ENCODING_UNKNOWN
 
+                # Normalize dynamic path segments into template (e.g. /users/{id})
+                normalized_uri = normalize_path_template(clean_uri)
+
                 has_versioning = (
                     1
                     if any(
-                        v in clean_uri.lower()
+                        v in normalized_uri.lower()
                         for v in ("/v1/", "/v2/", "/v3/", "/api/")
                     )
                     else 0
@@ -321,7 +349,7 @@ def run_api_discovery():
 
                 param_names = extract_param_names(uri)
 
-                key = (clean_uri, method)
+                key = (normalized_uri, method)
                 if key not in endpoints_aggregated:
                     endpoints_aggregated[key] = {
                         "host": host,

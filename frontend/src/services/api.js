@@ -1093,9 +1093,14 @@ export async function getExclusionsHistory() {
 /**
  * Fetch all auto-discovered API endpoints and their scoring
  */
-export async function getDiscoveredEndpoints(page = 1, size = 25) {
+export async function getDiscoveredEndpoints(page = 1, size = 25, filters = {}) {
   try {
-    const response = await fetch(`${BASE_URL}/api-protection/endpoints?page=${page}&size=${size}`, { cache: 'no-store' });
+    const query = new URLSearchParams({ page, size });
+    if (filters.search) query.set('search', filters.search);
+    if (filters.method && filters.method !== 'ALL') query.set('method', filters.method);
+    if (filters.grade && filters.grade !== 'ALL') query.set('grade', filters.grade);
+    if (filters.traffic_source && filters.traffic_source !== 'ALL') query.set('traffic_source', filters.traffic_source);
+    const response = await fetch(`${BASE_URL}/api-protection/endpoints?${query.toString()}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch discovered endpoints:", error);
@@ -1106,9 +1111,14 @@ export async function getDiscoveredEndpoints(page = 1, size = 25) {
 /**
  * Fetch recently discovered API endpoints (discovered in last 48h)
  */
-export async function getRecentlyDiscoveredEndpoints(page = 1, size = 25) {
+export async function getRecentlyDiscoveredEndpoints(page = 1, size = 25, filters = {}) {
   try {
-    const response = await fetch(`${BASE_URL}/api-protection/recently-discovered?page=${page}&size=${size}`, { cache: 'no-store' });
+    const query = new URLSearchParams({ page, size });
+    if (filters.search) query.set('search', filters.search);
+    if (filters.method && filters.method !== 'ALL') query.set('method', filters.method);
+    if (filters.grade && filters.grade !== 'ALL') query.set('grade', filters.grade);
+    if (filters.traffic_source && filters.traffic_source !== 'ALL') query.set('traffic_source', filters.traffic_source);
+    const response = await fetch(`${BASE_URL}/api-protection/recently-discovered?${query.toString()}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch recently discovered endpoints:", error);
@@ -1120,9 +1130,14 @@ export async function getRecentlyDiscoveredEndpoints(page = 1, size = 25) {
  * Fetch API endpoints not seen in at least `days` days — shadow/zombie
  * API candidates (default 30 days, matches the backend default).
  */
-export async function getStaleEndpoints(days = 30, page = 1, size = 25) {
+export async function getStaleEndpoints(days = 30, page = 1, size = 25, filters = {}) {
   try {
-    const response = await fetch(`${BASE_URL}/api-protection/stale-endpoints?days=${days}&page=${page}&size=${size}`, { cache: 'no-store' });
+    const query = new URLSearchParams({ days, page, size });
+    if (filters.search) query.set('search', filters.search);
+    if (filters.method && filters.method !== 'ALL') query.set('method', filters.method);
+    if (filters.grade && filters.grade !== 'ALL') query.set('grade', filters.grade);
+    if (filters.traffic_source && filters.traffic_source !== 'ALL') query.set('traffic_source', filters.traffic_source);
+    const response = await fetch(`${BASE_URL}/api-protection/stale-endpoints?${query.toString()}`, { cache: 'no-store' });
     return await handleResponse(response);
   } catch (error) {
     console.error("Failed to fetch stale endpoints:", error);

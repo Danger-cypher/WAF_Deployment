@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, BarChart2, ChevronLeft, ChevronRight, Clock, FileUp, Globe, RefreshCw, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart2, ChevronLeft, ChevronRight, Clock, FileUp, Globe, RefreshCw, Search, Shield, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import {
   getApiProtectionAnalytics, getDiscoveredEndpoints, getRecentlyDiscoveredEndpoints, getStaleEndpoints,
@@ -74,6 +74,36 @@ export default function ApiProtection() {
   const [activeTab, setActiveTab] = useState('inventory'); // 'inventory', 'recent', 'stale'
   const [topListTab, setTopListTab] = useState('consumed'); // 'consumed', 'resource'
 
+  // Search and filter state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedMethod, setSelectedMethod] = useState('ALL');
+  const [selectedGrade, setSelectedGrade] = useState('ALL');
+  const [selectedSource, setSelectedSource] = useState('ALL');
+
+  const handleSearchChange = (val) => {
+    setSearchQuery(val);
+    setPage(1);
+  };
+  const handleMethodChange = (val) => {
+    setSelectedMethod(val);
+    setPage(1);
+  };
+  const handleGradeChange = (val) => {
+    setSelectedGrade(val);
+    setPage(1);
+  };
+  const handleSourceChange = (val) => {
+    setSelectedSource(val);
+    setPage(1);
+  };
+  const handleClearFilters = () => {
+    setSearchQuery('');
+    setSelectedMethod('ALL');
+    setSelectedGrade('ALL');
+    setSelectedSource('ALL');
+    setPage(1);
+  };
+
   // Protect-this-endpoint state — reuses DDoS & Bot Shield's existing
   // advanced_rules mechanism (same backend, same nginx_manager.py apply
   // path) rather than inventing a separate enforcement engine.
@@ -111,10 +141,16 @@ export default function ApiProtection() {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
+      const filters = {
+        search: searchQuery,
+        method: selectedMethod,
+        grade: selectedGrade,
+        traffic_source: selectedSource,
+      };
       const [epsData, recentData, staleData, analyticsData, ddosData, blockedData, specData, driftData] = await Promise.all([
-        getDiscoveredEndpoints(page, PAGE_SIZE),
-        getRecentlyDiscoveredEndpoints(page, PAGE_SIZE),
-        getStaleEndpoints(30, page, PAGE_SIZE),
+        getDiscoveredEndpoints(page, PAGE_SIZE, filters),
+        getRecentlyDiscoveredEndpoints(page, PAGE_SIZE, filters),
+        getStaleEndpoints(30, page, PAGE_SIZE, filters),
         getApiProtectionAnalytics(),
         getDdosBotSettings(),
         getBlockedEndpoints(),
@@ -143,9 +179,8 @@ export default function ApiProtection() {
   };
 
   useEffect(() => {
-    // Re-fetches immediately on mount AND whenever `page` changes (a page
-    // click shouldn't have to wait for the next poll tick) — the 10s
-    // interval still covers the "just sitting on this page" case.
+    // Re-fetches immediately on mount AND whenever `page` or filters change —
+    // the 10s interval covers the "just sitting on this page" case.
     const timer = setTimeout(() => {
       fetchData();
     }, 0);
@@ -154,11 +189,8 @@ export default function ApiProtection() {
       clearTimeout(timer);
       clearInterval(interval);
     };
-    // fetchData is redefined every render and reads `page` via closure —
-    // deliberately depending on `page` alone (not fetchData itself, which
-    // would defeat the point by re-running on every unrelated render too).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  }, [page, searchQuery, selectedMethod, selectedGrade, selectedSource]);
 
   // Every tab reads from a different backend list — jumping back to page 1
   // on tab switch avoids e.g. landing on "page 4" of a 1-row Recently
@@ -170,8 +202,11 @@ export default function ApiProtection() {
 
   const isProtected = (ep) => {
     const rules = ddosSettings?.advanced_rules || [];
+    const targetPattern = ep.uri.includes('{id}')
+      ? ep.uri.replace(/\{id\}/g, '[^/]+')
+      : ep.uri;
     return rules.some(
-      (r) => r.enabled && r.parameter_type === 'URI' && stripAnchors(r.parameter_value) === ep.uri
+      (r) => r.enabled && r.parameter_type === 'URI' && stripAnchors(r.parameter_value) === targetPattern
     );
   };
 
@@ -179,7 +214,10 @@ export default function ApiProtection() {
     const { rps, burst } = suggestLimits(ep);
     setProtectTarget(ep);
     setRuleName(`Protect ${ep.method} ${ep.uri}`);
-    setRulePattern(`^${ep.uri}$`);
+    const pattern = ep.uri.includes('{id}')
+      ? `^${ep.uri.replace(/\{id\}/g, '[^/]+')}$`
+      : `^${ep.uri}$`;
+    setRulePattern(pattern);
     setRuleRps(rps);
     setRuleBurst(burst);
   };
@@ -372,9 +410,12 @@ export default function ApiProtection() {
   const activeRows = activeTab === 'inventory' ? endpoints : activeTab === 'recent' ? recentlyDiscovered : staleEndpoints;
   const activeTotal = activeTab === 'inventory' ? endpointsTotal : activeTab === 'recent' ? recentlyDiscoveredTotal : staleEndpointsTotal;
   const totalPages = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
-  const emptyStateMessage = activeTab === 'stale'
-    ? "No stale endpoints — nothing discovered has gone 30+ days without traffic."
-    : 'No discovered endpoints listed.';
+  const hasActiveFilters = Boolean(searchQuery || selectedMethod !== 'ALL' || selectedGrade !== 'ALL' || selectedSource !== 'ALL');
+  const emptyStateMessage = hasActiveFilters
+    ? 'No endpoints match the selected filters.'
+    : activeTab === 'stale'
+      ? "No stale endpoints — nothing discovered has gone 30+ days without traffic."
+      : 'No discovered endpoints listed.';
 
   return (
     <motion.div
@@ -611,6 +652,160 @@ export default function ApiProtection() {
             <button className="refresh-btn" onClick={fetchData} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--surface-strong)', backgroundColor: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '12px' }}>
               Scan Logs Now
             </button>
+          </div>
+        </div>
+
+        {/* Search & Filter Toolbar */}
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '12px',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 14px',
+          backgroundColor: 'var(--surface-subtle)',
+          borderRadius: '8px',
+          border: '1px solid var(--border-subtle)',
+        }}>
+          {/* Left: Search input + dropdowns */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', flex: 1, minWidth: '280px' }}>
+            <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: '360px' }}>
+              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                placeholder="Search URI or Host (e.g. /api/auth, itsm.vgipl.com)..."
+                value={searchQuery}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '7px 28px 7px 32px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--surface-strong)',
+                  color: 'var(--text-primary)',
+                  fontSize: '12px',
+                  outline: 'none',
+                }}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => handleSearchChange('')}
+                  style={{
+                    position: 'absolute',
+                    right: '8px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    padding: 0,
+                    display: 'flex',
+                  }}
+                  title="Clear search"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            {/* Method filter */}
+            <select
+              value={selectedMethod}
+              onChange={(e) => handleMethodChange(e.target.value)}
+              aria-label="Filter by HTTP Method"
+              style={{
+                padding: '7px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--border-subtle)',
+                backgroundColor: 'var(--surface-strong)',
+                color: 'var(--text-primary)',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="ALL">All Methods</option>
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="DELETE">DELETE</option>
+              <option value="PATCH">PATCH</option>
+              <option value="HEAD">HEAD</option>
+              <option value="OPTIONS">OPTIONS</option>
+            </select>
+
+            {/* Grade filter */}
+            <select
+              value={selectedGrade}
+              onChange={(e) => handleGradeChange(e.target.value)}
+              aria-label="Filter by Security Grade"
+              style={{
+                padding: '7px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--border-subtle)',
+                backgroundColor: 'var(--surface-strong)',
+                color: 'var(--text-primary)',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="ALL">All Grades</option>
+              <option value="A">Grade A (90+)</option>
+              <option value="B">Grade B (80-89)</option>
+              <option value="C">Grade C (70-79)</option>
+              <option value="D">Grade D (60-69)</option>
+              <option value="F">Grade F (&lt;60)</option>
+            </select>
+
+            {/* Traffic Source filter */}
+            <select
+              value={selectedSource}
+              onChange={(e) => handleSourceChange(e.target.value)}
+              aria-label="Filter by Traffic Source"
+              style={{
+                padding: '7px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--border-subtle)',
+                backgroundColor: 'var(--surface-strong)',
+                color: 'var(--text-primary)',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="ALL">All Sources</option>
+              <option value="External">External Traffic</option>
+              <option value="Internal">Internal Management</option>
+              <option value="Mixed">Mixed Traffic</option>
+            </select>
+
+            {/* Reset button if any filter is active */}
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+                title="Reset all filters"
+              >
+                <X size={12} /> Clear
+              </button>
+            )}
+          </div>
+
+          {/* Right: Count */}
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+            Showing {activeRows.length} {activeTotal !== undefined ? `of ${activeTotal}` : ''} endpoints
           </div>
         </div>
 
