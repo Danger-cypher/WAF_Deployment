@@ -497,6 +497,10 @@ class EndpointBlockRequest(BaseModel):
     uri: str
 
 
+class BulkEndpointBlockRequest(BaseModel):
+    endpoints: List[EndpointBlockRequest]
+
+
 def _sanitize_for_rule(value: str) -> str:
     """Strips characters that could break out of the generated SecRule's
     quoted operand/msg strings, AND out of the marker comment line — a
@@ -649,6 +653,70 @@ def unblock_endpoint(req: EndpointBlockRequest, current_user: TokenData = Depend
             detail=f"Failed to remove endpoint block: {err_msg}",
         )
     return {"message": f"{method} {uri} is no longer blocked."}
+
+
+@router.post("/api-protection/endpoints/bulk-block")
+def bulk_block_endpoints(req: BulkEndpointBlockRequest, current_user: TokenData = Depends(require_admin)):
+    """Blocks multiple endpoints in a single atomic configuration reload (Admin only)."""
+    from app.services.nginx_manager import write_and_apply_configs
+
+    if not req.endpoints:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No endpoints provided.")
+
+    current_content = _read_custom_rules()
+    new_content = current_content
+    blocked_count = 0
+    for ep in req.endpoints:
+        method = _sanitize_for_rule(ep.method.strip().upper())
+        uri = _sanitize_for_rule(ep.uri.strip())
+        if method and uri:
+            updated = _upsert_block(new_content, method, uri)
+            if updated != new_content:
+                new_content = updated
+                blocked_count += 1
+
+    if new_content == current_content:
+        return {"message": "Selected endpoints are already blocked.", "blocked_count": 0}
+
+    success, err_msg = write_and_apply_configs({CUSTOM_RULES_FILE: new_content})
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to apply bulk endpoint block: {err_msg}",
+        )
+    return {"message": f"Successfully blocked {blocked_count} endpoint(s).", "blocked_count": blocked_count}
+
+
+@router.post("/api-protection/endpoints/bulk-unblock")
+def bulk_unblock_endpoints(req: BulkEndpointBlockRequest, current_user: TokenData = Depends(require_admin)):
+    """Unblocks multiple endpoints in a single atomic configuration reload (Admin only)."""
+    from app.services.nginx_manager import write_and_apply_configs
+
+    if not req.endpoints:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No endpoints provided.")
+
+    current_content = _read_custom_rules()
+    new_content = current_content
+    unblocked_count = 0
+    for ep in req.endpoints:
+        method = _sanitize_for_rule(ep.method.strip().upper())
+        uri = _sanitize_for_rule(ep.uri.strip())
+        if method and uri:
+            updated = _remove_block(new_content, method, uri)
+            if updated != new_content:
+                new_content = updated
+                unblocked_count += 1
+
+    if new_content == current_content:
+        return {"message": "None of the selected endpoints were blocked.", "unblocked_count": 0}
+
+    success, err_msg = write_and_apply_configs({CUSTOM_RULES_FILE: new_content})
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove bulk endpoint block: {err_msg}",
+        )
+    return {"message": f"Successfully unblocked {unblocked_count} endpoint(s).", "unblocked_count": unblocked_count}
 
 
 # ============================================================================

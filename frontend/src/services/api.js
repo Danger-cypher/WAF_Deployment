@@ -1320,6 +1320,40 @@ export async function unblockEndpoint(method, uri) {
 }
 
 /**
+ * Bulk block multiple endpoints in a single atomic reload
+ */
+export async function bulkBlockEndpoints(endpoints) {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/endpoints/bulk-block`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoints }),
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to bulk block endpoints:", error);
+    throw error;
+  }
+}
+
+/**
+ * Bulk unblock multiple endpoints in a single atomic reload
+ */
+export async function bulkUnblockEndpoints(endpoints) {
+  try {
+    const response = await fetch(`${BASE_URL}/api-protection/endpoints/bulk-unblock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoints }),
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to bulk unblock endpoints:", error);
+    throw error;
+  }
+}
+
+/**
  * Fetch Infrastructure Hardening & Cloaking settings
  */
 export async function getHardeningSettings() {

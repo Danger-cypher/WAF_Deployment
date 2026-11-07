@@ -26,6 +26,8 @@ vi.mock('../services/api', () => ({
   getApiDrift: vi.fn(),
   reconcileDataStores: vi.fn(),
   exportDiscoveredEndpoints: vi.fn(),
+  bulkBlockEndpoints: vi.fn(),
+  bulkUnblockEndpoints: vi.fn(),
 }));
 
 const ANALYTICS = {
@@ -258,5 +260,29 @@ describe('ApiProtection — export & sensitive filtering', () => {
     const sensitiveSelect = screen.getByLabelText('Filter by Sensitive Parameters');
     await user.selectOptions(sensitiveSelect, 'SENSITIVE');
     expect(sensitiveSelect).toHaveValue('SENSITIVE');
+  });
+});
+
+describe('ApiProtection — bulk actions & shadow API selection', () => {
+  it('selects endpoints and triggers bulk block after confirmation', async () => {
+    api.bulkBlockEndpoints.mockResolvedValue({ message: 'Blocked 1 endpoints.' });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('/api/widgets');
+
+    const checkbox = screen.getByLabelText('Select GET /api/widgets');
+    await user.click(checkbox);
+
+    expect(screen.getByText(/endpoint selected/)).toBeInTheDocument();
+
+    const bulkBlockBtn = screen.getByRole('button', { name: /Bulk Block/ });
+    await user.click(bulkBlockBtn);
+
+    const dialog = await screen.findByRole('alertdialog');
+    await user.click(within(dialog).getByRole('button', { name: /Block 1 Endpoints/ }));
+
+    expect(api.bulkBlockEndpoints).toHaveBeenCalledWith([
+      { method: 'GET', uri: '/api/widgets' },
+    ]);
   });
 });

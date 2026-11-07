@@ -8,7 +8,7 @@ import {
   getDdosBotSettings, saveDdosBotSettings,
   getBlockedEndpoints, blockEndpoint, unblockEndpoint,
   getApiSpec, uploadApiSpec, deleteApiSpec, getApiDrift, reconcileDataStores,
-  exportDiscoveredEndpoints,
+  exportDiscoveredEndpoints, bulkBlockEndpoints, bulkUnblockEndpoints,
 } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
@@ -75,6 +75,10 @@ export default function ApiProtection() {
   const [activeTab, setActiveTab] = useState('inventory'); // 'inventory', 'recent', 'stale'
   const [topListTab, setTopListTab] = useState('consumed'); // 'consumed', 'resource'
 
+  const activeRows = activeTab === 'inventory' ? endpoints : activeTab === 'recent' ? recentlyDiscovered : staleEndpoints;
+  const activeTotal = activeTab === 'inventory' ? endpointsTotal : activeTab === 'recent' ? recentlyDiscoveredTotal : staleEndpointsTotal;
+  const totalPages = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
+
   // Search and filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMethod, setSelectedMethod] = useState('ALL');
@@ -129,6 +133,13 @@ export default function ApiProtection() {
   // limiting: generates a ModSecurity deny rule for the exact method+URI.
   const [blockedEndpoints, setBlockedEndpoints] = useState([]);
   const [blockingKey, setBlockingKey] = useState(null); // "METHOD uri" currently in flight
+
+  // Bulk actions state
+  const [selectedEndpoints, setSelectedEndpoints] = useState([]);
+  const [bulkProtectModalOpen, setBulkProtectModalOpen] = useState(false);
+  const [bulkRps, setBulkRps] = useState(15);
+  const [bulkBurst, setBulkBurst] = useState(30);
+  const [isBulkActionInFlight, setIsBulkActionInFlight] = useState(false);
 
   // OpenAPI spec upload + drift detection
   const [apiSpec, setApiSpec] = useState(null); // metadata, or null if none uploaded
@@ -339,6 +350,126 @@ export default function ApiProtection() {
     }
   };
 
+  const getEpKey = (ep) => `${ep.method} ${ep.uri}`;
+
+  const isRowSelected = (ep) => selectedEndpoints.some((s) => getEpKey(s) === getEpKey(ep));
+
+  const toggleSelectRow = (ep) => {
+    setSelectedEndpoints((prev) => {
+      const key = getEpKey(ep);
+      const exists = prev.some((s) => getEpKey(s) === key);
+      return exists ? prev.filter((s) => getEpKey(s) !== key) : [...prev, ep];
+    });
+  };
+
+  const isAllPageSelected = activeRows.length > 0 && activeRows.every((ep) => isRowSelected(ep));
+
+  const toggleSelectAllPage = () => {
+    if (isAllPageSelected) {
+      const activeKeys = new Set(activeRows.map(getEpKey));
+      setSelectedEndpoints((prev) => prev.filter((s) => !activeKeys.has(getEpKey(s))));
+    } else {
+      setSelectedEndpoints((prev) => {
+        const existingKeys = new Set(prev.map(getEpKey));
+        const toAdd = activeRows.filter((ep) => !existingKeys.has(getEpKey(ep)));
+        return [...prev, ...toAdd];
+      });
+    }
+  };
+
+  const clearSelection = () => setSelectedEndpoints([]);
+
+  const handleBulkBlock = async () => {
+    if (selectedEndpoints.length === 0) return;
+    if (!(await confirm({
+      title: `Bulk Block (${selectedEndpoints.length} endpoints)`,
+      message: `Block ALL traffic to the ${selectedEndpoints.length} selected endpoint(s)? Every request matching these methods and paths will be denied (403) at the WAF.`,
+      confirmLabel: `Block ${selectedEndpoints.length} Endpoints`,
+      danger: true,
+    }))) {
+      return;
+    }
+    setIsBulkActionInFlight(true);
+    try {
+      const res = await bulkBlockEndpoints(selectedEndpoints.map((ep) => ({ method: ep.method, uri: ep.uri })));
+      showToast(res.message || `Blocked ${selectedEndpoints.length} endpoints.`, 'success');
+      const blocked = await getBlockedEndpoints();
+      setBlockedEndpoints(blocked);
+      clearSelection();
+    } catch (err) {
+      showToast('Bulk block failed: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsBulkActionInFlight(false);
+    }
+  };
+
+  const handleBulkUnblock = async () => {
+    if (selectedEndpoints.length === 0) return;
+    if (!(await confirm({
+      title: `Bulk Unblock (${selectedEndpoints.length} endpoints)`,
+      message: `Remove block rules for the ${selectedEndpoints.length} selected endpoint(s)? Traffic to these endpoints will no longer be denied.`,
+      confirmLabel: `Unblock ${selectedEndpoints.length} Endpoints`,
+    }))) {
+      return;
+    }
+    setIsBulkActionInFlight(true);
+    try {
+      const res = await bulkUnblockEndpoints(selectedEndpoints.map((ep) => ({ method: ep.method, uri: ep.uri })));
+      showToast(res.message || `Unblocked ${selectedEndpoints.length} endpoints.`, 'success');
+      const blocked = await getBlockedEndpoints();
+      setBlockedEndpoints(blocked);
+      clearSelection();
+    } catch (err) {
+      showToast('Bulk unblock failed: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsBulkActionInFlight(false);
+    }
+  };
+
+  const handleBulkProtect = async (e) => {
+    e.preventDefault();
+    if (selectedEndpoints.length === 0) return;
+    setIsBulkActionInFlight(true);
+    try {
+      const current = await getDdosBotSettings();
+      const existingRules = current.advanced_rules || [];
+      const newRules = [];
+      for (const ep of selectedEndpoints) {
+        const pattern = ep.uri.includes('{id}')
+          ? `^${ep.uri.replace(/\{id\}/g, '[^/]+')}$`
+          : `^${ep.uri}$`;
+        const alreadyExists = existingRules.some((r) => r.parameter_type === 'URI' && r.parameter_value === pattern) ||
+          newRules.some((r) => r.parameter_value === pattern);
+        if (!alreadyExists) {
+          newRules.push({
+            id: 'rule_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+            name: `Protect ${ep.method} ${ep.uri}`,
+            parameter_type: 'URI',
+            parameter_value: pattern,
+            rate_limit_rps: Number(bulkRps),
+            burst_tolerance: Number(bulkBurst),
+            enabled: true,
+          });
+        }
+      }
+      if (newRules.length === 0) {
+        showToast('All selected endpoints already have active rate limiting rules.');
+        setBulkProtectModalOpen(false);
+        return;
+      }
+      const updated = { ...current, advanced_rules: [...existingRules, ...newRules] };
+      await saveDdosBotSettings(updated);
+      setDdosSettings(updated);
+      showToast(`Created rate limiting rules for ${newRules.length} endpoints.`);
+      setBulkProtectModalOpen(false);
+      clearSelection();
+    } catch (err) {
+      showToast('Bulk protect failed: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsBulkActionInFlight(false);
+    }
+  };
+
   const handleSpecFileSelected = async (e) => {
     const file = e.target.files?.[0];
     // Clear the input immediately so selecting the same file again still fires onChange
@@ -440,9 +571,6 @@ export default function ApiProtection() {
     { name: 'Malicious', value: analytics.traffic_bands.malicious, color: 'var(--danger-color)' }
   ] : [];
 
-  const activeRows = activeTab === 'inventory' ? endpoints : activeTab === 'recent' ? recentlyDiscovered : staleEndpoints;
-  const activeTotal = activeTab === 'inventory' ? endpointsTotal : activeTab === 'recent' ? recentlyDiscoveredTotal : staleEndpointsTotal;
-  const totalPages = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
   const hasActiveFilters = Boolean(
     searchQuery ||
     selectedMethod !== 'ALL' ||
@@ -959,6 +1087,103 @@ export default function ApiProtection() {
           </div>
         </div>
 
+        {/* Bulk Action Controls Bar */}
+        {selectedEndpoints.length > 0 && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '10px',
+            padding: '10px 14px',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            border: '1px solid rgba(59, 130, 246, 0.3)',
+            borderRadius: '8px',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 500 }}>
+              <Shield size={16} color="var(--sev-low)" />
+              <span><strong>{selectedEndpoints.length}</strong> endpoint{selectedEndpoints.length > 1 ? 's' : ''} selected</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setBulkProtectModalOpen(true)}
+                disabled={isBulkActionInFlight}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '5px 12px',
+                  borderRadius: '5px',
+                  border: '1px solid var(--sev-low-border)',
+                  backgroundColor: 'var(--sev-low-bg)',
+                  color: 'var(--sev-low)',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <ShieldCheck size={13} /> Bulk Rate Limit
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkBlock}
+                disabled={isBulkActionInFlight}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '5px 12px',
+                  borderRadius: '5px',
+                  border: '1px solid var(--danger-color)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--danger-color)',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <ShieldOff size={13} /> Bulk Block
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkUnblock}
+                disabled={isBulkActionInFlight}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '5px 12px',
+                  borderRadius: '5px',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--text-secondary)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                }}
+              >
+                Bulk Unblock
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                style={{
+                  padding: '5px 10px',
+                  borderRadius: '5px',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  color: 'var(--text-muted)',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                }}
+              >
+                Clear Selection
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Table representation — scrolls within its own fixed-height area
             instead of pushing the rest of the page down, since inventory
             can run into the hundreds of rows. */}
@@ -966,6 +1191,15 @@ export default function ApiProtection() {
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--surface-strong)', color: 'var(--text-secondary)', position: 'sticky', top: 0, zIndex: 1, backgroundColor: 'var(--glass-bg)' }}>
+                <th style={{ padding: '12px 10px', width: '38px', textAlign: 'center' }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all endpoints on page"
+                    checked={isAllPageSelected}
+                    onChange={toggleSelectAllPage}
+                    style={{ cursor: 'pointer' }}
+                  />
+                </th>
                 <th style={{ padding: '12px 8px' }}>Method</th>
                 <th style={{ padding: '12px 8px' }}>Endpoint URI</th>
                 <th style={{ padding: '12px 8px' }}>Avg Latency</th>
@@ -1000,6 +1234,15 @@ export default function ApiProtection() {
                     // every one of these ~382 rows from scratch each tick instead of
                     // patching just the ones that actually changed.
                     <tr key={`${ep.method} ${ep.uri}`} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
+                      <td style={{ padding: '12px 10px', width: '38px', textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${ep.method} ${ep.uri}`}
+                          checked={isRowSelected(ep)}
+                          onChange={() => toggleSelectRow(ep)}
+                          style={{ cursor: 'pointer' }}
+                        />
+                      </td>
                       <td style={{ padding: '12px 8px', ...getMethodStyle(ep.method) }}>{ep.method}</td>
                       <td style={{ padding: '12px 8px', fontFamily: 'monospace' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -1104,7 +1347,7 @@ export default function ApiProtection() {
                 })
               ) : (
                 <tr>
-                  <td colSpan="10" style={{ padding: '32px 8px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  <td colSpan="11" style={{ padding: '32px 8px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                     {emptyStateMessage}
                   </td>
                 </tr>
@@ -1221,6 +1464,43 @@ export default function ApiProtection() {
             {driftTab === 'shadow' ? (
               drift?.shadow_endpoints?.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '10px',
+                    padding: '10px 14px',
+                    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                    border: '1px solid rgba(239, 68, 68, 0.25)',
+                    borderRadius: '6px',
+                    marginBottom: '4px',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-primary)' }}>
+                      <AlertTriangle size={15} color="var(--danger-color)" />
+                      <span><strong>{drift.shadow_endpoints.length} Shadow APIs detected:</strong> Real traffic observed on endpoints missing from the OpenAPI specification.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedEndpoints(drift.shadow_endpoints.map((ep) => ({ method: ep.method, uri: ep.uri, hit_count: ep.hit_count })));
+                        switchTab('inventory');
+                        showToast(`Selected ${drift.shadow_endpoints.length} shadow endpoints in inventory. Use the bulk actions bar to protect or block them.`);
+                      }}
+                      style={{
+                        padding: '5px 12px',
+                        borderRadius: '4px',
+                        border: '1px solid var(--danger-color)',
+                        backgroundColor: 'var(--danger-color)',
+                        color: '#fff',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Select All Shadow APIs for Action
+                    </button>
+                  </div>
                   {drift.shadow_endpoints.map((ep, idx) => (
                     <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--surface-subtle)', borderRadius: '6px' }}>
                       <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -1355,6 +1635,72 @@ export default function ApiProtection() {
                 </Button>
                 <button type="submit" disabled={savingRule} className="modal-btn primary" style={{ margin: 0 }}>
                   {savingRule ? 'Applying to NGINX...' : 'Create and Apply Rule'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {bulkProtectModalOpen && createPortal(
+        <div
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+          onClick={() => !isBulkActionInFlight && setBulkProtectModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-lg)', padding: '28px', width: '100%', maxWidth: 'min(500px, 92vw)', boxShadow: 'var(--shadow-card)' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: 'var(--text-primary)' }}>Bulk Rate Limit</h3>
+                <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--sev-low)' }}>
+                  Applying to {selectedEndpoints.length} selected endpoint{selectedEndpoints.length > 1 ? 's' : ''}
+                </div>
+              </div>
+              <Button variant="ghost" size="md" icon={X} onClick={() => !isBulkActionInFlight && setBulkProtectModalOpen(false)} aria-label="Close" />
+            </div>
+
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: 0, marginBottom: '16px', lineHeight: 1.5 }}>
+              This creates NGINX rate-limiting rules for all selected endpoints in a single atomic update.
+              Parameterized paths (e.g. <code>&#123;id&#125;</code>) are automatically converted into regex patterns.
+            </p>
+
+            <form onSubmit={handleBulkProtect} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label htmlFor="bulk-rl-rate" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rate Limit</label>
+                    <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{bulkRps} req/s</span>
+                  </div>
+                  <input
+                    id="bulk-rl-rate"
+                    type="range" min="1" max="500"
+                    value={bulkRps} onChange={(e) => setBulkRps(parseInt(e.target.value) || 1)}
+                    style={{ width: '100%', accentColor: 'var(--accent-color)' }}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label htmlFor="bulk-rl-burst" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Burst Tolerance</label>
+                    <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 600 }}>{bulkBurst} reqs</span>
+                  </div>
+                  <input
+                    id="bulk-rl-burst"
+                    type="range" min="1" max="1000"
+                    value={bulkBurst} onChange={(e) => setBulkBurst(parseInt(e.target.value) || 1)}
+                    style={{ width: '100%', accentColor: 'var(--accent-color)' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '4px' }}>
+                <Button type="button" variant="secondary" onClick={() => setBulkProtectModalOpen(false)} disabled={isBulkActionInFlight}>
+                  Cancel
+                </Button>
+                <button type="submit" disabled={isBulkActionInFlight} className="modal-btn primary" style={{ margin: 0 }}>
+                  {isBulkActionInFlight ? 'Applying to NGINX...' : `Apply to ${selectedEndpoints.length} Endpoint(s)`}
                 </button>
               </div>
             </form>
