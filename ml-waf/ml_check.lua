@@ -364,19 +364,34 @@ end
 local function check_geo_block(red)
     local mode = red:get("waf:geo:block_mode")
     if not mode or mode == ngx.null or mode == "disabled" then
-        return false
+        return false, nil
     end
+
+    -- 1. Check ASN Block first (Datacenter / Scraper ASN defense)
+    local asn = get_request_asn()
+    if asn then
+        local is_asn_blocked = red:sismember("waf:geo:blocked_asns", tostring(asn))
+        if is_asn_blocked == 1 then
+            return true, "asn_block"
+        end
+    end
+
+    -- 2. Check Country Geo-Block
     local country = get_geo_country()
     if not country then
-        return false
+        return false, nil
     end
     local is_member = red:sismember("waf:geo:countries", country)
     if mode == "deny" then
-        return is_member == 1
+        if is_member == 1 then
+            return true, "geo_block"
+        end
     elseif mode == "allow" then
-        return is_member ~= 1
+        if is_member ~= 1 then
+            return true, "geo_block"
+        end
     end
-    return false
+    return false, nil
 end
 
 -- Adaptive per-identity throttle (opt-in, DDoS & Bot Shield settings).
@@ -584,12 +599,18 @@ if red then
             ngx.exit(ngx.HTTP_FORBIDDEN)
         end
 
-        if check_geo_block(red) then
-            ngx.log(ngx.WARN, "WAF-LUA-BLOCK reason=geo_block code=403 client=", client_ip, " uri=", ngx.var.uri or "")
+        local is_geo_blocked, geo_reason = check_geo_block(red)
+        if is_geo_blocked then
+            local reason_str = geo_reason or "geo_block"
+            local user_msg = "Blocked by WAF (Geo-Restriction)"
+            if reason_str == "asn_block" then
+                user_msg = "Blocked by WAF (ASN Restriction)"
+            end
+            ngx.log(ngx.WARN, "WAF-LUA-BLOCK reason=", reason_str, " code=403 client=", client_ip, " uri=", ngx.var.uri or "")
             red:set_keepalive(10000, 100)
             ngx.status = ngx.HTTP_FORBIDDEN
             ngx.header.content_type = "text/html; charset=UTF-8"
-            ngx.say("<h1>403 Forbidden</h1><p>Blocked by WAF (Geo-Restriction)</p>")
+            ngx.say("<h1>403 Forbidden</h1><p>", user_msg, "</p>")
             ngx.exit(ngx.HTTP_FORBIDDEN)
         end
 

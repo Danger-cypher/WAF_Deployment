@@ -76,6 +76,7 @@ DEFAULT_SETTINGS = {
         "enabled": False,
         "mode": "deny",
         "countries": [],
+        "blocked_asns": [],
     },
     "threat_intel": {
         "enabled": False,

@@ -61,6 +61,14 @@ const ALL_SETTINGS_LABELS = [
   'Security & Danger Zone', 'Activity Log', 'Backups',
 ];
 
+const DATACENTER_ASN_PRESETS = [
+  { asn: 24940, label: 'Hetzner (24940)' },
+  { asn: 14061, label: 'DigitalOcean (14061)' },
+  { asn: 16276, label: 'OVH (16276)' },
+  { asn: 20473, label: 'Vultr (20473)' },
+  { asn: 16509, label: 'AWS (16509)' },
+];
+
 export default function Settings({ onLogout, initialSettingsTab, onConsumeInitialSettingsTab }) {
   // General Settings
   const [refreshInterval, setRefreshInterval] = useState('5s');
@@ -94,12 +102,12 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
   const [ipWhitelist, setIpWhitelist] = useState("");
   const [ja4Blacklist, setJa4Blacklist] = useState("");
 
-  // Geo-Block Settings — country allow/deny list, enforced in ml_check.lua
-  // via $geoip2_data_country_code (requires GeoIP2 to be enabled to have
-  // any effect; degrades to a no-op otherwise).
+  // Geo-Block Settings — country allow/deny list & ASN datacenter defense, enforced in ml_check.lua
+  // via $geoip2_data_country_code and $geoip2_data_asn
   const [geoBlockEnabled, setGeoBlockEnabled] = useState(false);
   const [geoBlockMode, setGeoBlockMode] = useState('deny');
   const [geoBlockCountries, setGeoBlockCountries] = useState("");
+  const [geoBlockAsns, setGeoBlockAsns] = useState("");
 
   // External Threat-Intel Feed (Spamhaus DROP/EDROP) — populates a
   // separate Redis key ml_check.lua also checks, never clobbers the
@@ -269,6 +277,7 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
           if (geoBlock.enabled !== undefined) setGeoBlockEnabled(geoBlock.enabled);
           if (geoBlock.mode) setGeoBlockMode(geoBlock.mode);
           if (geoBlock.countries !== undefined) setGeoBlockCountries(geoBlock.countries.join(', '));
+          if (geoBlock.blocked_asns !== undefined) setGeoBlockAsns(geoBlock.blocked_asns.join(', '));
         }
         if (threatIntel) {
           if (threatIntel.enabled !== undefined) setThreatIntelEnabled(threatIntel.enabled);
@@ -392,15 +401,37 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
     }
   };
 
+  const toggleAsnPreset = (asnNumber) => {
+    const current = geoBlockAsns
+      .split(',')
+      .map(a => a.trim().replace(/^AS/i, ''))
+      .filter(a => /^\d+$/.test(a))
+      .map(a => parseInt(a, 10));
+    let next;
+    if (current.includes(asnNumber)) {
+      next = current.filter(n => n !== asnNumber);
+    } else {
+      next = [...current, asnNumber];
+    }
+    setGeoBlockAsns(next.join(', '));
+    markDirty('geoblock');
+  };
+
   const handleSaveGeoBlock = async (e) => {
     e.preventDefault();
     setLoadingAction(true);
     try {
       const countries = geoBlockCountries.split(',').map(c => c.trim().toUpperCase()).filter(c => c);
+      const asns = geoBlockAsns
+        .split(',')
+        .map(a => a.trim().replace(/^AS/i, ''))
+        .filter(a => /^\d+$/.test(a))
+        .map(a => parseInt(a, 10));
       await saveGeoBlockSettings({
         enabled: geoBlockEnabled,
         mode: geoBlockMode,
         countries,
+        blocked_asns: asns,
       });
       clearDirty('geoblock');
       showToast("Geo-Block policy updated.");
@@ -1547,6 +1578,53 @@ export default function Settings({ onLogout, initialSettingsTab, onConsumeInitia
                             onChange={(e) => setGeoBlockCountries(e.target.value)}
                             placeholder="RU, CN, KP"
                           />
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <label style={{ fontSize: '13px', color: 'var(--text-secondary)' }} htmlFor="settings-geoblock-asns">
+                              Blocked ASNs (Autonomous System Numbers, e.g. 24940, 14061)
+                            </label>
+                          </div>
+                          <textarea id="settings-geoblock-asns"
+                            className="settings-input"
+                            style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
+                            value={geoBlockAsns}
+                            onChange={(e) => setGeoBlockAsns(e.target.value)}
+                            placeholder="24940, 14061, 16276"
+                          />
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                            <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
+                              Quick-toggle common cloud / scraper datacenters:
+                            </span>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                              {DATACENTER_ASN_PRESETS.map((preset) => {
+                                const active = geoBlockAsns
+                                  .split(',')
+                                  .map(a => a.trim().replace(/^AS/i, ''))
+                                  .includes(String(preset.asn));
+                                return (
+                                  <button
+                                    key={preset.asn}
+                                    type="button"
+                                    onClick={() => toggleAsnPreset(preset.asn)}
+                                    className={`filter-btn ${active ? 'active' : ''}`}
+                                    style={{
+                                      fontSize: '11px',
+                                      padding: '4px 8px',
+                                      borderRadius: '6px',
+                                      border: active ? '1px solid var(--accent-primary)' : '1px solid var(--surface-hover)',
+                                      background: active ? 'var(--accent-subtle)' : 'var(--surface-subtle)',
+                                      color: active ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    {preset.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
                         </div>
                       </motion.div>
                     )}

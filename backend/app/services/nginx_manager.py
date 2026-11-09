@@ -859,7 +859,7 @@ def apply_hardening_settings(settings: dict) -> tuple[bool, str]:
 
 def apply_geo_block_settings(settings: dict) -> tuple[bool, str]:
     """
-    Pushes the country allow/deny list into Redis for ml_check.lua to read —
+    Pushes the country allow/deny list and ASN blocklist into Redis for ml_check.lua to read —
     zero-reload, same pattern as apply_hardening_settings' IP whitelist/
     blacklist above. Requires GeoIP2 to actually be enabled (see
     apply_ddos_settings' geoip2 {} block generation) to have any effect;
@@ -871,8 +871,11 @@ def apply_geo_block_settings(settings: dict) -> tuple[bool, str]:
         enabled = settings.get("enabled", False)
         mode = settings.get("mode", "deny")
         countries = settings.get("countries", [])
+        blocked_asns = settings.get("blocked_asns", [])
 
         r.delete("waf:geo:countries")
+        r.delete("waf:geo:blocked_asns")
+
         if enabled and mode in ("allow", "deny"):
             r.set("waf:geo:block_mode", mode)
             for code in countries:
@@ -882,9 +885,17 @@ def apply_geo_block_settings(settings: dict) -> tuple[bool, str]:
         else:
             r.set("waf:geo:block_mode", "disabled")
 
+        if enabled and blocked_asns:
+            for asn in blocked_asns:
+                s = str(asn).strip().upper()
+                if s.startswith("AS"):
+                    s = s[2:]
+                if s.isdigit():
+                    r.sadd("waf:geo:blocked_asns", s)
+
         logger.info(
             f"Successfully updated geo-block settings in Redis "
-            f"(mode={mode if enabled else 'disabled'}, {len(countries)} countries)."
+            f"(mode={mode if enabled else 'disabled'}, {len(countries)} countries, {len(blocked_asns)} ASNs)."
         )
         return True, ""
     except Exception as e:

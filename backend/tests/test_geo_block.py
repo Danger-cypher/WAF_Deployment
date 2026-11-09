@@ -63,3 +63,51 @@ def test_allow_mode_stores_mode_correctly(monkeypatch):
     assert ok, msg
     assert fake.strings["waf:geo:block_mode"] == "allow"
     assert fake.sets["waf:geo:countries"] == {"US"}
+
+
+def test_asn_blocking_populates_redis(monkeypatch):
+    fake = _FakeRedis()
+    monkeypatch.setattr(nginx_manager, "get_redis_client", lambda: fake)
+
+    ok, msg = nginx_manager.apply_geo_block_settings(
+        {
+            "enabled": True,
+            "mode": "deny",
+            "countries": ["RU"],
+            "blocked_asns": [24940, "AS14061", "16276"],
+        }
+    )
+
+    assert ok, msg
+    assert fake.strings["waf:geo:block_mode"] == "deny"
+    assert fake.sets["waf:geo:countries"] == {"RU"}
+    assert fake.sets["waf:geo:blocked_asns"] == {"24940", "14061", "16276"}
+
+
+def test_asn_blocking_cleared_when_disabled(monkeypatch):
+    fake = _FakeRedis()
+    monkeypatch.setattr(nginx_manager, "get_redis_client", lambda: fake)
+
+    # First add
+    nginx_manager.apply_geo_block_settings(
+        {
+            "enabled": True,
+            "mode": "deny",
+            "countries": ["RU"],
+            "blocked_asns": [24940],
+        }
+    )
+    assert "waf:geo:blocked_asns" in fake.sets
+
+    # Now disable
+    ok, msg = nginx_manager.apply_geo_block_settings(
+        {
+            "enabled": False,
+            "mode": "deny",
+            "countries": [],
+            "blocked_asns": [24940],
+        }
+    )
+    assert ok, msg
+    assert fake.strings["waf:geo:block_mode"] == "disabled"
+    assert fake.sets.get("waf:geo:blocked_asns", set()) == set()

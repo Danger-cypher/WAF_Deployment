@@ -253,3 +253,45 @@ describe('Settings — Backups', () => {
     await waitFor(() => expect(api.downloadBackup).toHaveBeenCalledWith('bk1', 'backup.tar.gz.enc'));
   });
 });
+
+describe('Settings — Geo-Block & ASN Blocking', () => {
+  async function openHardeningTab(user) {
+    await user.click(await screen.findByRole('button', { name: /Server Hardening/ }));
+  }
+
+  it('renders existing ASN blocklist and saves updated ASN blocklist', async () => {
+    api.getGeoBlockSettings.mockResolvedValue({
+      enabled: true,
+      mode: 'deny',
+      countries: ['RU'],
+      blocked_asns: [24940, 14061],
+    });
+    api.saveGeoBlockSettings.mockResolvedValue({ success: true });
+
+    const user = userEvent.setup();
+    renderPage();
+    await openHardeningTab(user);
+
+    // Open Geo-Block accordion card
+    const geoAccordionBtn = await screen.findByRole('button', { name: /Geo-Block/i });
+    await user.click(geoAccordionBtn);
+
+    const asnInput = await screen.findByLabelText(/Blocked ASNs/i);
+    expect(asnInput).toHaveValue('24940, 14061');
+
+    await user.clear(asnInput);
+    await user.type(asnInput, '24940, 16276');
+
+    const saveBtn = screen.getByRole('button', { name: /Apply Geo-Block Changes/i });
+    await user.click(saveBtn);
+
+    await waitFor(() => {
+      expect(api.saveGeoBlockSettings).toHaveBeenCalledWith({
+        enabled: true,
+        mode: 'deny',
+        countries: ['RU'],
+        blocked_asns: [24940, 16276],
+      });
+    });
+  });
+});

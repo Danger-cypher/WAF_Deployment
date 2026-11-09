@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 from pydantic import BaseModel, field_validator
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 
 from app.services.settings_manager import settings_manager
 from app.services.auth import verify_password, require_admin, require_any_role, TokenData
@@ -153,6 +153,7 @@ class GeoBlockModel(BaseModel):
     enabled: bool
     mode: str  # "deny" (block listed countries) | "allow" (block everyone else)
     countries: List[str]  # ISO 3166-1 alpha-2 codes, e.g. "RU", "CN"
+    blocked_asns: Optional[List[Union[int, str]]] = []  # Autonomous System Numbers, e.g. [24940, "AS14061"]
 
 
 class ThreatIntelSourcesModel(BaseModel):
@@ -570,7 +571,21 @@ async def update_geo_block_settings(request: Request,
                 detail=f"Invalid ISO 3166-1 alpha-2 country code: '{code}'",
             )
 
-    saved_settings = settings_manager.update_geo_block(settings.dict())
+    asn_re = _re.compile(r"^(?:AS|as)?(\d{1,10})$")
+    cleaned_asns = []
+    for asn_raw in (settings.blocked_asns or []):
+        asn_str = str(asn_raw).strip()
+        m = asn_re.match(asn_str)
+        if not m:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid ASN identifier: '{asn_raw}'. Must be an integer ASN like 24940 or AS24940.",
+            )
+        cleaned_asns.append(int(m.group(1)))
+
+    payload = settings.dict()
+    payload["blocked_asns"] = cleaned_asns
+    saved_settings = settings_manager.update_geo_block(payload)
 
     from app.services import nginx_manager
 
