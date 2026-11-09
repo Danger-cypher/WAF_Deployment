@@ -1,8 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
-import { motion } from 'framer-motion';
-import { AlertTriangle, Activity, Database, Server, Bot } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { AlertTriangle, Activity, Database, Server, Bot, Shield, ShieldAlert, Lock, Unlock, Clock, Eye, EyeOff, Plus, Check } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
-import { getDdosBotSettings, saveDdosBotSettings, getDdosAnalytics, getBotTrafficBreakdown, getTopBotIdentities } from '../services/api';
+import {
+  getDdosBotSettings,
+  saveDdosBotSettings,
+  getDdosAnalytics,
+  getBotTrafficBreakdown,
+  getTopBotIdentities,
+  getAutoBlockedIps,
+  releaseAutoBlockedIp,
+  manualJailIp,
+} from '../services/api';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
 import Toast from './Toast';
@@ -46,6 +55,22 @@ export default function DdosBotMitigation() {
   const [adaptiveThrottleEnabled, setAdaptiveThrottleEnabled] = useState(false);
   const [apiEnumProtectionEnabled, setApiEnumProtectionEnabled] = useState(false);
 
+  // Challenge Provider State (Step 2.2)
+  const [challengeProvider, setChallengeProvider] = useState("native");
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState("");
+  const [turnstileSecretKey, setTurnstileSecretKey] = useState("");
+  const [hcaptchaSiteKey, setHcaptchaSiteKey] = useState("");
+  const [hcaptchaSecretKey, setHcaptchaSecretKey] = useState("");
+  const [showSecretKey, setShowSecretKey] = useState(false);
+
+  // Dynamic IP Auto-Jail State (Step 2.3)
+  const [jailedIps, setJailedIps] = useState([]);
+  const [jailedIpsLoading, setJailedIpsLoading] = useState(false);
+  const [showManualJailModal, setShowManualJailModal] = useState(false);
+  const [manualJailIpInput, setManualJailIpInput] = useState("");
+  const [manualJailDuration, setManualJailDuration] = useState(24);
+  const [jailSubmitting, setJailSubmitting] = useState(false);
+
   // Advanced Rate Limiting State
   const [advancedRules, setAdvancedRules] = useState([]);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -80,6 +105,11 @@ export default function DdosBotMitigation() {
         if (ddos.adaptive_throttle_enabled !== undefined) setAdaptiveThrottleEnabled(ddos.adaptive_throttle_enabled);
         if (ddos.api_enum_protection_enabled !== undefined) setApiEnumProtectionEnabled(ddos.api_enum_protection_enabled);
         if (ddos.advanced_rules !== undefined) setAdvancedRules(ddos.advanced_rules);
+        if (ddos.challenge_provider) setChallengeProvider(ddos.challenge_provider);
+        if (ddos.turnstile_site_key !== undefined) setTurnstileSiteKey(ddos.turnstile_site_key);
+        if (ddos.turnstile_secret_key !== undefined) setTurnstileSecretKey(ddos.turnstile_secret_key);
+        if (ddos.hcaptcha_site_key !== undefined) setHcaptchaSiteKey(ddos.hcaptcha_site_key);
+        if (ddos.hcaptcha_secret_key !== undefined) setHcaptchaSecretKey(ddos.hcaptcha_secret_key);
       }
     } catch (err) {
       console.error("Failed to load DDoS settings", err);
@@ -124,20 +154,85 @@ export default function DdosBotMitigation() {
     }
   };
 
+  const fetchJailedIps = async () => {
+    try {
+      setJailedIpsLoading(true);
+      const data = await getAutoBlockedIps();
+      setJailedIps(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Failed to load auto-jailed IPs", err);
+    } finally {
+      setJailedIpsLoading(false);
+    }
+  };
+
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchSettings();
       fetchAnalytics();
       fetchBotTraffic();
+      fetchJailedIps();
     }, 0);
     const interval = setInterval(fetchAnalytics, 3000);
     const botInterval = setInterval(fetchBotTraffic, 30000);
+    const jailInterval = setInterval(fetchJailedIps, 10000);
     return () => {
       clearTimeout(timer);
       clearInterval(interval);
       clearInterval(botInterval);
+      clearInterval(jailInterval);
     };
   }, []);
+
+  const formatRemainingTtl = (ttlSeconds) => {
+    if (!ttlSeconds || ttlSeconds <= 0) return "Expiring soon";
+    const hours = Math.floor(ttlSeconds / 3600);
+    const minutes = Math.floor((ttlSeconds % 3600) / 60);
+    const seconds = ttlSeconds % 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  };
+
+  const handleReleaseJailedIp = async (ip) => {
+    if (!(await confirm({
+      message: `Pardon and release IP "${ip}" from threat quarantine? It will be removed from the active auto-jail immediately.`,
+      danger: false,
+    }))) return;
+
+    try {
+      await releaseAutoBlockedIp(ip);
+      showToast(`IP ${ip} released from quarantine.`);
+      fetchJailedIps();
+    } catch (err) {
+      showToast(`Failed to release IP: ${err.message || 'Unknown error'}`, "error");
+    }
+  };
+
+  const handleManualJailSubmit = async (e) => {
+    e.preventDefault();
+    const cleanIp = manualJailIpInput.trim();
+    if (!cleanIp) {
+      showToast("Please enter a valid IP address to quarantine.", "error");
+      return;
+    }
+    setJailSubmitting(true);
+    try {
+      await manualJailIp(cleanIp, Number(manualJailDuration));
+      showToast(`IP ${cleanIp} quarantined for ${manualJailDuration} hours.`);
+      setManualJailIpInput("");
+      setShowManualJailModal(false);
+      fetchJailedIps();
+    } catch (err) {
+      showToast(`Failed to quarantine IP: ${err.message || 'Unknown error'}`, "error");
+    } finally {
+      setJailSubmitting(false);
+    }
+  };
 
   const handleSaveSettings = async (e) => {
     e.preventDefault();
@@ -152,7 +247,12 @@ export default function DdosBotMitigation() {
         risk_challenge_enabled: riskChallengeEnabled,
         adaptive_throttle_enabled: adaptiveThrottleEnabled,
         api_enum_protection_enabled: apiEnumProtectionEnabled,
-        advanced_rules: advancedRules
+        advanced_rules: advancedRules,
+        challenge_provider: challengeProvider,
+        turnstile_site_key: turnstileSiteKey.trim(),
+        turnstile_secret_key: turnstileSecretKey.trim(),
+        hcaptcha_site_key: hcaptchaSiteKey.trim(),
+        hcaptcha_secret_key: hcaptchaSecretKey.trim(),
       });
       showToast("Anti-DDoS & Bot Mitigation settings updated successfully.");
     } catch (err) {
@@ -174,7 +274,12 @@ export default function DdosBotMitigation() {
         risk_challenge_enabled: riskChallengeEnabled,
         adaptive_throttle_enabled: adaptiveThrottleEnabled,
         api_enum_protection_enabled: apiEnumProtectionEnabled,
-        advanced_rules: updatedRules
+        advanced_rules: updatedRules,
+        challenge_provider: challengeProvider,
+        turnstile_site_key: turnstileSiteKey.trim(),
+        turnstile_secret_key: turnstileSecretKey.trim(),
+        hcaptcha_site_key: hcaptchaSiteKey.trim(),
+        hcaptcha_secret_key: hcaptchaSecretKey.trim(),
       });
       setAdvancedRules(updatedRules);
       showToast("Advanced rate limiting rules updated and applied to NGINX.");
@@ -310,20 +415,135 @@ export default function DdosBotMitigation() {
               <option value="Silent Drop">Silent Drop (Connection Reset / 444)</option>
               <option value="Block">Standard Block (429 Too Many Requests)</option>
               <option value="JS Challenge">JS Challenge (interstitial page — real browsers pass automatically, scripts never do)</option>
-              {/* FIX 7: CAPTCHA is not integrated — disable to avoid misleading operators */}
-              <option value="CAPTCHA Challenge" disabled>
-                CAPTCHA Challenge (Coming Soon — requires provider integration)
-              </option>
+              <option value="CAPTCHA Challenge">CAPTCHA Challenge (Cloudflare Turnstile / hCaptcha verification)</option>
             </select>
             {botMitigationAction === 'JS Challenge' && (
               <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                 Matching traffic gets a page that silently redirects itself via JavaScript — a real
                 browser clears it in under a second and is remembered for 1 hour; scripted clients
-                (curl, sqlmap, etc.) never execute the redirect and stay stuck on it. No 403/429 is
-                ever returned, so a scanner can't tell which control caught it.
+                (curl, sqlmap, etc.) never execute the redirect and stay stuck on it.
+              </div>
+            )}
+            {botMitigationAction === 'CAPTCHA Challenge' && (
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                Suspicious bot traffic is presented with an interactive managed challenge (Turnstile or hCaptcha) before granting access.
               </div>
             )}
           </div>
+
+          {(botMitigationAction === 'JS Challenge' || botMitigationAction === 'CAPTCHA Challenge' || riskChallengeEnabled) && (
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: '12px',
+              padding: '14px', borderRadius: '10px',
+              background: 'var(--surface-subtle)', border: '1px solid var(--surface-hover)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Shield size={14} color="var(--accent-color)" />
+                  Challenge Provider
+                </span>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  {challengeProvider === 'native' ? 'Zero-Config' : 'Managed Provider'}
+                </span>
+              </div>
+
+              <select
+                id="ddos-challenge-provider"
+                className="search-input"
+                style={{ width: '100%', fontSize: '12px' }}
+                value={challengeProvider}
+                onChange={(e) => setChallengeProvider(e.target.value)}
+              >
+                <option value="native">Native JS Challenge (Automated headless filter)</option>
+                <option value="turnstile">Cloudflare Turnstile (Privacy-first interactive challenge)</option>
+                <option value="hcaptcha">hCaptcha (Interactive bot verification)</option>
+              </select>
+
+              {challengeProvider === 'native' && (
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  Real browsers execute the reload script automatically (~600ms) and are remembered for 1 hour. Automated scrapers with no JS engine stay blocked.
+                </div>
+              )}
+
+              {challengeProvider === 'turnstile' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label htmlFor="ddos-turnstile-sitekey" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Turnstile Site Key</label>
+                    <input
+                      id="ddos-turnstile-sitekey"
+                      type="text"
+                      className="search-input"
+                      placeholder="e.g., 0x4AAAAAA..."
+                      value={turnstileSiteKey}
+                      onChange={(e) => setTurnstileSiteKey(e.target.value)}
+                      style={{ fontSize: '12px', fontFamily: 'monospace' }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label htmlFor="ddos-turnstile-secret" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Turnstile Secret Key</label>
+                      <button
+                        type="button"
+                        onClick={() => setShowSecretKey(!showSecretKey)}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        {showSecretKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                        {showSecretKey ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                    <input
+                      id="ddos-turnstile-secret"
+                      type={showSecretKey ? 'text' : 'password'}
+                      className="search-input"
+                      placeholder="e.g., 0x4AAAAAA..."
+                      value={turnstileSecretKey}
+                      onChange={(e) => setTurnstileSecretKey(e.target.value)}
+                      style={{ fontSize: '12px', fontFamily: 'monospace' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {challengeProvider === 'hcaptcha' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label htmlFor="ddos-hcaptcha-sitekey" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>hCaptcha Site Key</label>
+                    <input
+                      id="ddos-hcaptcha-sitekey"
+                      type="text"
+                      className="search-input"
+                      placeholder="e.g., 10000000-ffff-ffff-ffff-111111111111"
+                      value={hcaptchaSiteKey}
+                      onChange={(e) => setHcaptchaSiteKey(e.target.value)}
+                      style={{ fontSize: '12px', fontFamily: 'monospace' }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label htmlFor="ddos-hcaptcha-secret" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>hCaptcha Secret Key</label>
+                      <button
+                        type="button"
+                        onClick={() => setShowSecretKey(!showSecretKey)}
+                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        {showSecretKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                        {showSecretKey ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                    <input
+                      id="ddos-hcaptcha-secret"
+                      type={showSecretKey ? 'text' : 'password'}
+                      className="search-input"
+                      placeholder="e.g., 0x0000000000000000000000000000000000000000"
+                      value={hcaptchaSecretKey}
+                      onChange={(e) => setHcaptchaSecretKey(e.target.value)}
+                      style={{ fontSize: '12px', fontFamily: 'monospace' }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <Checkbox
             id="ddos-risk-challenge"
@@ -364,7 +584,7 @@ export default function DdosBotMitigation() {
       <div style={{ gridColumn: 'span 8', display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
         {/* Metric Cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
           <div className="metric-card glass-panel" style={{ gridColumn: 'span 1' }}>
             <div className="metric-header">
               <span>Total Blocked (DDoS)</span>
@@ -373,7 +593,7 @@ export default function DdosBotMitigation() {
             <div className="metric-value" style={{ color: 'var(--danger-color)' }}>{analytics.total_blocks.toLocaleString()}</div>
             <div className="metric-trend trend-up">
               <div className="pulse-dot" style={{ marginRight: '6px' }}></div>
-              <span>Last {analytics.window_hours}h — genuine rejections only</span>
+              <span>Last {analytics.window_hours}h — rejections</span>
             </div>
           </div>
 
@@ -386,6 +606,18 @@ export default function DdosBotMitigation() {
             <div className="metric-value" style={{ color: 'var(--sev-high)' }}>{analytics.total_unique_ips.toLocaleString()}</div>
             <div className="metric-trend trend-down">
               <span>Distinct offenders tracked</span>
+            </div>
+          </div>
+
+          <div className="metric-card glass-panel" style={{ gridColumn: 'span 1' }}>
+            <div className="metric-header">
+              <span>Active Auto-Jail</span>
+              <div className="metric-icon-wrapper purple" style={{ color: 'var(--accent-color)', background: 'var(--accent-subtle)' }}><Lock size={18} /></div>
+            </div>
+            <div className="metric-value" style={{ color: 'var(--accent-color)' }}>{jailedIps.length}</div>
+            <div className="metric-trend trend-up">
+              <div className="pulse-dot" style={{ marginRight: '6px', background: 'var(--accent-color)' }}></div>
+              <span>Quarantined attackers</span>
             </div>
           </div>
         </div>
@@ -680,6 +912,171 @@ export default function DdosBotMitigation() {
                     <td style={{ color: 'var(--text-secondary)' }}>#{index + 1}</td>
                     <td style={{ fontFamily: 'monospace', color: 'var(--sev-low)', fontWeight: 500 }}>{ipObj.ip}</td>
                     <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--danger-color)' }}>{ipObj.count.toLocaleString()}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Dynamic IP Threat Quarantine (Auto-Jail) */}
+      <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', padding: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <ShieldAlert size={18} color="var(--danger-color)" />
+              <span>Dynamic IP Threat Quarantine (Auto-Jail)</span>
+              <span style={{
+                fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px',
+                background: jailedIps.length > 0 ? 'var(--danger-bg)' : 'var(--surface-hover)',
+                color: jailedIps.length > 0 ? 'var(--danger-color)' : 'var(--text-secondary)'
+              }}>
+                {jailedIps.length} JAILED
+              </span>
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+              Proven repeat offenders dynamically auto-isolated from the WAF. Monitored in real time with automated TTL expiration and instant pardon controls.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowManualJailModal(!showManualJailModal)}
+            className="modal-btn primary"
+            style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <Plus size={14} />
+            <span>{showManualJailModal ? 'Cancel' : '+ Quarantine Attacker IP'}</span>
+          </button>
+        </div>
+
+        {showManualJailModal && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            style={{
+              background: 'var(--surface-subtle)',
+              border: '1px solid var(--surface-hover)',
+              borderRadius: '10px',
+              padding: '16px 20px',
+              marginBottom: '20px'
+            }}
+          >
+            <form onSubmit={handleManualJailSubmit} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 240px' }}>
+                <label htmlFor="manual-jail-ip" style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                  Attacker IP Address
+                </label>
+                <input
+                  id="manual-jail-ip"
+                  type="text"
+                  className="search-input"
+                  placeholder="e.g. 198.51.100.42"
+                  value={manualJailIpInput}
+                  onChange={(e) => setManualJailIpInput(e.target.value)}
+                  style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '180px' }}>
+                <label htmlFor="manual-jail-duration" style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                  Jail Duration
+                </label>
+                <select
+                  id="manual-jail-duration"
+                  className="search-input"
+                  value={manualJailDuration}
+                  onChange={(e) => setManualJailDuration(e.target.value)}
+                  style={{ fontSize: '12px' }}
+                >
+                  <option value="1">1 Hour</option>
+                  <option value="6">6 Hours</option>
+                  <option value="24">24 Hours (1 Day)</option>
+                  <option value="72">72 Hours (3 Days)</option>
+                  <option value="168">7 Days (1 Week)</option>
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={jailSubmitting}
+                className="modal-btn primary"
+                style={{ margin: 0, height: '36px', padding: '0 18px', background: 'var(--danger-color)', borderColor: 'var(--danger-color)' }}
+              >
+                {jailSubmitting ? 'Quarantining...' : 'Quarantine Immediately'}
+              </button>
+            </form>
+          </motion.div>
+        )}
+
+        <div className="logs-table-wrapper">
+          <table className="logs-table">
+            <thead>
+              <tr>
+                <th>Quarantined IP</th>
+                <th>Status</th>
+                <th>Remaining Sentence</th>
+                <th style={{ textAlign: 'right', width: '150px' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jailedIpsLoading && jailedIps.length === 0 ? (
+                <tr>
+                  <td colSpan="4" style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
+                    Loading threat quarantine…
+                  </td>
+                </tr>
+              ) : jailedIps.length === 0 ? (
+                <tr>
+                  <td colSpan="4" style={{ textAlign: 'center', padding: '28px', color: 'var(--text-secondary)' }}>
+                    No attackers currently quarantined in the auto-jail.
+                  </td>
+                </tr>
+              ) : (
+                jailedIps.map((entry) => (
+                  <tr key={entry.ip}>
+                    <td style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--danger-color)', fontSize: '13px' }}>
+                      {entry.ip}
+                    </td>
+                    <td>
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '4px',
+                        padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700,
+                        background: 'var(--danger-bg)', color: 'var(--danger-color)'
+                      }}>
+                        <Lock size={11} /> JAILED
+                      </span>
+                    </td>
+                    <td>
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '5px',
+                        fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)'
+                      }}>
+                        <Clock size={12} color="var(--text-muted)" />
+                        {formatRemainingTtl(entry.ttl_seconds)}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleReleaseJailedIp(entry.ip)}
+                        className="action-btn-inspect"
+                        style={{
+                          background: 'var(--surface-subtle)',
+                          color: 'var(--success-color)',
+                          borderColor: 'var(--surface-hover)',
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          margin: 0
+                        }}
+                      >
+                        <Unlock size={11} /> Pardon / Release
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}

@@ -22,6 +22,9 @@ vi.mock('../services/api', () => ({
   getDdosAnalytics: vi.fn().mockResolvedValue({ timeline: [], top_ips: [], total_blocks: 0, total_unique_ips: 0 }),
   getBotTrafficBreakdown: vi.fn(),
   getTopBotIdentities: vi.fn(),
+  getAutoBlockedIps: vi.fn().mockResolvedValue([]),
+  releaseAutoBlockedIp: vi.fn().mockResolvedValue({}),
+  manualJailIp: vi.fn().mockResolvedValue({}),
 }));
 
 describe('DdosBotMitigation — Traffic Composition', () => {
@@ -121,4 +124,94 @@ describe('DdosBotMitigation — advanced rule deletion', () => {
     const savedArg = api.saveDdosBotSettings.mock.calls.at(-1)[0];
     expect(savedArg.advanced_rules).toEqual([]);
   });
+});
+
+describe('DdosBotMitigation — Challenge Provider (Step 2.2)', () => {
+  it('renders challenge provider options and saves Turnstile keys', async () => {
+    api.getDdosBotSettings.mockResolvedValue({
+      rate_limit_rps: 50,
+      burst_tolerance: 100,
+      trusted_ips: [],
+      bot_mitigation_action: 'CAPTCHA Challenge',
+      challenge_provider: 'turnstile',
+      turnstile_site_key: '0x4AAAAAA_test',
+      turnstile_secret_key: '0x4AAAAAA_secret',
+    });
+    api.getBotTrafficBreakdown.mockResolvedValue([]);
+    api.getTopBotIdentities.mockResolvedValue([]);
+    api.getAutoBlockedIps.mockResolvedValue([]);
+
+    const user = userEvent.setup();
+    renderWithConfirm(<DdosBotMitigation />);
+
+    const siteKeyInput = await screen.findByLabelText(/Turnstile Site Key/i);
+    expect(siteKeyInput).toHaveValue('0x4AAAAAA_test');
+
+    const enforceBtn = screen.getByRole('button', { name: /Enforce Policy/i });
+    await user.click(enforceBtn);
+
+    await waitFor(() => {
+      expect(api.saveDdosBotSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bot_mitigation_action: 'CAPTCHA Challenge',
+          challenge_provider: 'turnstile',
+          turnstile_site_key: '0x4AAAAAA_test',
+        })
+      );
+    });
+  });
+});
+
+describe('DdosBotMitigation — Threat Quarantine & Auto-Jail (Step 2.3)', () => {
+  it('renders quarantined attackers with remaining countdown and releases on pardon', async () => {
+    api.getDdosBotSettings.mockResolvedValue(null);
+    api.getBotTrafficBreakdown.mockResolvedValue([]);
+    api.getTopBotIdentities.mockResolvedValue([]);
+    api.getAutoBlockedIps.mockResolvedValue([
+      { ip: '203.0.113.50', ttl_seconds: 3600 },
+    ]);
+    api.releaseAutoBlockedIp.mockResolvedValue({ message: 'Released' });
+
+    const user = userEvent.setup();
+    renderWithConfirm(<DdosBotMitigation />);
+
+    expect(await screen.findByText('203.0.113.50')).toBeInTheDocument();
+    expect(screen.getByText(/1h 0m/)).toBeInTheDocument();
+    expect(screen.getByText('1 JAILED')).toBeInTheDocument();
+
+    const pardonBtn = screen.getByRole('button', { name: /Pardon \/ Release/i });
+    await user.click(pardonBtn);
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/Pardon and release IP "203.0.113.50"/)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => {
+      expect(api.releaseAutoBlockedIp).toHaveBeenCalledWith('203.0.113.50');
+    });
+  }, 15000);
+
+  it('allows manual quarantining of an attacker IP', async () => {
+    api.getDdosBotSettings.mockResolvedValue(null);
+    api.getBotTrafficBreakdown.mockResolvedValue([]);
+    api.getTopBotIdentities.mockResolvedValue([]);
+    api.getAutoBlockedIps.mockResolvedValue([]);
+    api.manualJailIp.mockResolvedValue({ message: 'Jailed' });
+
+    const user = userEvent.setup();
+    renderWithConfirm(<DdosBotMitigation />);
+
+    const openQuarantineBtn = await screen.findByRole('button', { name: /\+ Quarantine Attacker IP/i });
+    await user.click(openQuarantineBtn);
+
+    const ipInput = await screen.findByLabelText(/Attacker IP Address/i);
+    await user.type(ipInput, '198.51.100.99');
+
+    const submitBtn = screen.getByRole('button', { name: /Quarantine Immediately/i });
+    await user.click(submitBtn);
+
+    await waitFor(() => {
+      expect(api.manualJailIp).toHaveBeenCalledWith('198.51.100.99', 24);
+    });
+  }, 15000);
 });

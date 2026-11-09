@@ -29,16 +29,20 @@ local M = {}
 
 local PASSED_TTL_SECONDS = 3600 -- 1 hour
 
-local CHALLENGE_HTML = [[<!DOCTYPE html>
+local NATIVE_CHALLENGE_HTML = [[<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="robots" content="noindex,nofollow">
 <title>Just a moment...</title>
 </head>
-<body style="background:#0b0f19;color:#e5e7eb;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-<div style="text-align:center;">
-<div style="font-size:15px;">Verifying your browser...</div>
+<body style="background:#0b0f19;color:#e5e7eb;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+<div style="text-align:center;padding:24px;border:1px solid rgba(255,255,255,0.08);border-radius:12px;background:rgba(255,255,255,0.03);backdrop-filter:blur(8px);max-width:380px;width:90%;">
+  <div style="margin-bottom:16px;">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+  </div>
+  <div style="font-size:16px;font-weight:600;margin-bottom:8px;">Verifying your browser...</div>
+  <div style="font-size:13px;color:#9ca3af;">Please wait while CyberSentinel WAF inspects connection security.</div>
 </div>
 <script>
 setTimeout(function () {
@@ -50,17 +54,93 @@ setTimeout(function () {
 </body>
 </html>]]
 
+local TURNSTILE_TEMPLATE = [[<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
+<title>Security Verification - CyberSentinel</title>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+</head>
+<body style="background:#0b0f19;color:#e5e7eb;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+<div style="text-align:center;padding:32px;border:1px solid rgba(255,255,255,0.08);border-radius:14px;background:rgba(255,255,255,0.03);backdrop-filter:blur(10px);max-width:400px;width:90%;">
+  <div style="margin-bottom:16px;">
+    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+  </div>
+  <div style="font-size:17px;font-weight:600;margin-bottom:8px;">Security Verification</div>
+  <div style="font-size:13px;color:#9ca3af;margin-bottom:20px;">Please complete the security check below to proceed.</div>
+  <div style="display:flex;justify-content:center;margin-bottom:12px;">
+    <div class="cf-turnstile" data-sitekey="{{SITE_KEY}}" data-callback="onTurnstileSuccess" data-theme="dark"></div>
+  </div>
+  <div id="status" style="font-size:12px;color:#6b7280;">Protected by CyberSentinel WAF</div>
+</div>
+<script>
+function onTurnstileSuccess(token) {
+  var s = document.getElementById('status');
+  if (s) s.textContent = 'Verifying challenge...';
+  var u = new URL(window.location.href);
+  u.searchParams.set('waf_challenge_ack', '1');
+  u.searchParams.set('waf_token', token);
+  window.location.replace(u.toString());
+}
+</script>
+</body>
+</html>]]
+
+local HCAPTCHA_TEMPLATE = [[<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
+<title>Security Verification - CyberSentinel</title>
+<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+</head>
+<body style="background:#0b0f19;color:#e5e7eb;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+<div style="text-align:center;padding:32px;border:1px solid rgba(255,255,255,0.08);border-radius:14px;background:rgba(255,255,255,0.03);backdrop-filter:blur(10px);max-width:400px;width:90%;">
+  <div style="margin-bottom:16px;">
+    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+  </div>
+  <div style="font-size:17px;font-weight:600;margin-bottom:8px;">Security Verification</div>
+  <div style="font-size:13px;color:#9ca3af;margin-bottom:20px;">Please solve the CAPTCHA to verify you are a human.</div>
+  <div style="display:flex;justify-content:center;margin-bottom:12px;">
+    <div class="h-captcha" data-sitekey="{{SITE_KEY}}" data-callback="onHCaptchaSuccess" data-theme="dark"></div>
+  </div>
+  <div id="status" style="font-size:12px;color:#6b7280;">Protected by CyberSentinel WAF</div>
+</div>
+<script>
+function onHCaptchaSuccess(token) {
+  var s = document.getElementById('status');
+  if (s) s.textContent = 'Verifying CAPTCHA...';
+  var u = new URL(window.location.href);
+  u.searchParams.set('waf_challenge_ack', '1');
+  u.searchParams.set('waf_token', token);
+  window.location.replace(u.toString());
+}
+</script>
+</body>
+</html>]]
+
 local function serve_challenge_page(red)
-    -- Release the connection back to the pool before exiting — mirrors
-    -- every other ngx.exit() path in ml_check.lua (e.g. its blacklist
-    -- branch). Only done on THIS path; the plain `return` paths below
-    -- leave the connection alone since the caller (ml_check.lua) still
-    -- has its own work left to do with it.
+    local provider = red:get("waf:challenge:provider")
+    local body = NATIVE_CHALLENGE_HTML
+
+    if provider == "turnstile" then
+        local site_key = red:get("waf:challenge:turnstile_site_key")
+        if site_key and site_key ~= ngx.null and site_key ~= "" then
+            body = string.gsub(TURNSTILE_TEMPLATE, "{{SITE_KEY}}", site_key)
+        end
+    elseif provider == "hcaptcha" then
+        local site_key = red:get("waf:challenge:hcaptcha_site_key")
+        if site_key and site_key ~= ngx.null and site_key ~= "" then
+            body = string.gsub(HCAPTCHA_TEMPLATE, "{{SITE_KEY}}", site_key)
+        end
+    end
+
     red:set_keepalive(10000, 100)
     ngx.status = ngx.HTTP_OK
     ngx.header.content_type = "text/html; charset=UTF-8"
     ngx.header["Cache-Control"] = "no-store"
-    ngx.say(CHALLENGE_HTML)
+    ngx.say(body)
     ngx.exit(ngx.HTTP_OK)
 end
 

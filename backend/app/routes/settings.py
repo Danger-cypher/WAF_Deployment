@@ -131,6 +131,16 @@ class DdosBotMitigationModel(BaseModel):
     # catches. See enum_detect.lua. Off by default, same reasoning as the
     # other two.
     api_enum_protection_enabled: bool = False
+    challenge_provider: Optional[str] = "native"
+    turnstile_site_key: Optional[str] = ""
+    turnstile_secret_key: Optional[str] = ""
+    hcaptcha_site_key: Optional[str] = ""
+    hcaptcha_secret_key: Optional[str] = ""
+
+
+class ManualJailModel(BaseModel):
+    ip: str
+    duration_hours: int = 24
 
 
 class HardeningModel(BaseModel):
@@ -793,6 +803,39 @@ async def release_auto_blocked_ip_route(request: Request, ip: str, current_user:
 
     log_admin_action("settings", "auto_reputation", "release_ip", current_user, details={"ip": ip}, request=request)
     return {"message": f"{ip} released from auto-block."}
+
+
+@router.post("/settings/auto-reputation/jail")
+async def manual_jail_ip_route(
+    request: Request,
+    payload: ManualJailModel,
+    current_user: TokenData = Depends(require_admin),
+):
+    import ipaddress
+    from app.services.nginx_manager import get_redis_client
+    from app.services.auto_reputation_service import AUTO_BLACKLIST_KEY_PREFIX
+
+    clean_ip = payload.ip.strip()
+    try:
+        ipaddress.ip_address(clean_ip)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid IP address: '{clean_ip}'")
+
+    ttl_seconds = max(1, min(720, payload.duration_hours)) * 3600
+    r = get_redis_client()
+    if r is None:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+
+    r.setex(f"{AUTO_BLACKLIST_KEY_PREFIX}{clean_ip}", ttl_seconds, "1")
+    log_admin_action(
+        "settings",
+        "auto_reputation",
+        "manual_jail",
+        current_user,
+        details={"ip": clean_ip, "duration_hours": payload.duration_hours},
+        request=request,
+    )
+    return {"message": f"{clean_ip} jailed for {payload.duration_hours} hours."}
 
 
 # 3.10 Web Anti-Defacement Settings Routes

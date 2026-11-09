@@ -48,6 +48,11 @@ DEFAULT_SETTINGS = {
         "trusted_ips": [],
         "bot_mitigation_action": "Silent Drop",
         "advanced_rules": [],
+        "challenge_provider": "native",
+        "turnstile_site_key": "",
+        "turnstile_secret_key": "",
+        "hcaptcha_site_key": "",
+        "hcaptcha_secret_key": "",
     },
     "hardening": {
         "hsts_enabled": True,

@@ -139,3 +139,43 @@ def test_adaptive_throttle_independent_of_other_two_toggles(monkeypatch):
 
     throttle_start = config.index("map $host $waf_adaptive_throttle_enabled {")
     assert "default 0;" in config[throttle_start:throttle_start + 80]
+
+
+def test_captcha_challenge_action_enables_challenge_flag(monkeypatch):
+    settings = {
+        **BASE_SETTINGS,
+        "bot_mitigation_action": "CAPTCHA Challenge",
+        "challenge_provider": "turnstile",
+        "turnstile_site_key": "0x4AAAAAA_test",
+        "turnstile_secret_key": "0x4AAAAAA_secret",
+    }
+    config = _capture_generated_ddos_config(monkeypatch, settings)
+
+    assert "map $host $waf_bot_mitigation_status {\n    default 0;\n}" in config
+    assert "map $host $waf_bot_challenge_enabled {" in config
+    bot_start = config.index("map $host $waf_bot_challenge_enabled {")
+    assert "default 1;" in config[bot_start:bot_start + 60]
+
+
+def test_challenge_provider_keys_synced_to_redis(monkeypatch):
+    fake_redis_store = {}
+
+    class FakeRedis:
+        def set(self, k, v):
+            fake_redis_store[k] = v
+
+    monkeypatch.setattr(nginx_manager, "get_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(nginx_manager, "write_and_apply_configs", lambda *a, **k: (True, ""))
+
+    settings = {
+        **BASE_SETTINGS,
+        "bot_mitigation_action": "CAPTCHA Challenge",
+        "challenge_provider": "hcaptcha",
+        "hcaptcha_site_key": "test_hcaptcha_site",
+        "hcaptcha_secret_key": "test_hcaptcha_secret",
+    }
+    ok, msg = nginx_manager.apply_ddos_settings(settings)
+    assert ok, msg
+    assert fake_redis_store.get("waf:challenge:provider") == "hcaptcha"
+    assert fake_redis_store.get("waf:challenge:hcaptcha_site_key") == "test_hcaptcha_site"
+    assert fake_redis_store.get("waf:challenge:hcaptcha_secret_key") == "test_hcaptcha_secret"

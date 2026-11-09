@@ -1566,6 +1566,34 @@ export async function releaseAutoBlockedIp(ip) {
   }
 }
 
+export async function manualJailIp(ip, durationHours = 24) {
+  try {
+    const response = await fetch(`${BASE_URL}/settings/auto-reputation/jail`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip, duration_hours: durationHours })
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error(`Failed to jail IP ${ip}:`, error);
+    throw error;
+  }
+}
+
+export async function verifyChallenge(data) {
+  try {
+    const response = await fetch(`${BASE_URL}/ddos/challenge/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to verify challenge:", error);
+    throw error;
+  }
+}
+
 /**
  * Admin-login IP allowlist (P1-8 Part A): restricts /auth/login (and the
  * MFA step) to configured IPs/CIDRs — distinct from
