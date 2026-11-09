@@ -112,3 +112,50 @@ def test_old_unreachable_threshold_no_longer_gates_anything():
     # The literal bug: a crs_score that used to fall through silently
     # (anything in [4, 20)) must now correctly force a block.
     assert threat_score.get_routing_outcome(0.0, crs_score=10.0) == "block"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.1 — Dynamic Ensemble Sensitivity & Threshold Tuning
+# ---------------------------------------------------------------------------
+
+def test_dynamic_weights_affect_threat_score():
+    # Heavy XGBoost weight: 0.10 CRS, 0.80 XGB, 0.10 ISO
+    tuning = {
+        "crs_weight": 0.10,
+        "xgb_weight": 0.80,
+        "iso_weight": 0.10,
+        "reputation_boost_max": 0.15,
+        "abuseipdb_boost_max": 0.15,
+    }
+    # With crs=0 and xgb=0.5:
+    # base_score = (0*0.10 + 0.5*0.80 + 0*0.10) / 1.0 = 0.40
+    res = threat_score.calculate_threat_score(
+        crs_score=0.0, xgb_prob=0.5, iso_score=0.0, redis_rep=0.0, abuse_score=0.0, tuning=tuning
+    )
+    assert res["total"] == pytest.approx(0.40)
+
+
+def test_custom_routing_thresholds_change_decisions():
+    # Aggressive preset: block at 0.70 instead of 0.85
+    aggressive_tuning = {
+        "crs_block_threshold": 4.0,
+        "block_threshold": 0.70,
+        "rate_limit_threshold": 0.50,
+        "log_threshold": 0.25,
+        "moderate_risk_action": "log",
+    }
+    # Score 0.75 is a block under aggressive tuning, but only rate_limit under default (0.85)
+    assert threat_score.get_routing_outcome(0.75, crs_score=0.0, tuning=aggressive_tuning) == "block"
+    assert threat_score.get_routing_outcome(0.75, crs_score=0.0) == "rate_limit"
+
+
+def test_moderate_risk_action_customizable():
+    challenge_tuning = {
+        "crs_block_threshold": 4.0,
+        "block_threshold": 0.85,
+        "rate_limit_threshold": 0.70,
+        "log_threshold": 0.40,
+        "moderate_risk_action": "challenge",
+    }
+    # Score 0.45 triggers moderate risk -> "challenge" instead of "log"
+    assert threat_score.get_routing_outcome(0.45, crs_score=0.0, tuning=challenge_tuning) == "challenge"

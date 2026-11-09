@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Activity, AlertTriangle as AlertTriangleIcon, Brain, Clock, Globe, Lock,
-  Server, Settings as SettingsIcon, ShieldAlert,
+  Activity, AlertTriangle as AlertTriangleIcon, Brain, CheckCircle, Clock,
+  Gauge, Globe, Lock, Play, RotateCcw, Save, Server, Settings as SettingsIcon,
+  ShieldAlert, Sliders, Sparkles, Zap,
 } from 'lucide-react';
 import {
   Area, Bar, CartesianGrid, Cell, ComposedChart, Pie, PieChart, Tooltip as RechartsTooltip,
@@ -10,7 +11,8 @@ import {
 } from 'recharts';
 import {
   getMLBackups, getMLDriftHistory, getMLFeatureImportance, getMLLogs, getMLModelInfo,
-  getMLRetrainStatus, getMLStats, getMLTimeline, rollbackMLModel, triggerMLRetrain,
+  getMLRetrainStatus, getMLStats, getMLTimeline, getMLTuning, rollbackMLModel,
+  simulateMLTuning, triggerMLRetrain, updateMLTuning,
 } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import { HelpText } from '../components/Tooltip';
@@ -44,7 +46,7 @@ export default function MLAnalytics() {
   const confirm = useConfirm();
 
   // Model Management & Retraining States
-  const [activeSubTab, setActiveSubTab] = useState('analytics'); // 'analytics', 'management'
+  const [activeSubTab, setActiveSubTab] = useState('analytics'); // 'analytics', 'management', 'tuning'
   const [modelInfo, setModelInfo] = useState(null);
   const [retrainStatus, setRetrainStatus] = useState({ status: 'idle', logs: '' });
   const [backups, setBackups] = useState([]);
@@ -53,6 +55,166 @@ export default function MLAnalytics() {
   const [, setLoadingManagement] = useState(false);
   const [triggeringRetrain, setTriggeringRetrain] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
+
+  // Ensemble Sensitivity & Policy Tuning States
+  const [tuning, setTuning] = useState({
+    block_threshold: 0.85,
+    rate_limit_threshold: 0.70,
+    log_threshold: 0.40,
+    crs_block_threshold: 4.0,
+    crs_weight: 0.50,
+    xgb_weight: 0.30,
+    iso_weight: 0.20,
+    reputation_boost_max: 0.15,
+    abuseipdb_boost_max: 0.15,
+    sensitivity_preset: 'balanced',
+    moderate_risk_action: 'log',
+    auto_retrain_schedule: 'weekly',
+  });
+  const [loadingTuning, setLoadingTuning] = useState(false);
+  const [savingTuning, setSavingTuning] = useState(false);
+
+  // Simulation Playground States
+  const [simInput, setSimInput] = useState({
+    crs_score: 2.5,
+    xgb_prob: 0.75,
+    iso_score: -0.35,
+    redis_rep: 1,
+    abuse_score: 25,
+  });
+  const [simResult, setSimResult] = useState(null);
+  const [simulating, setSimulating] = useState(false);
+
+  const TUNING_PRESETS = {
+    aggressive: {
+      name: 'Aggressive (Zero-Trust)',
+      block_threshold: 0.75,
+      rate_limit_threshold: 0.60,
+      log_threshold: 0.30,
+      crs_block_threshold: 4.0,
+      crs_weight: 0.45,
+      xgb_weight: 0.35,
+      iso_weight: 0.20,
+      reputation_boost_max: 0.20,
+      abuseipdb_boost_max: 0.20,
+      moderate_risk_action: 'challenge',
+      description: 'Strict blocking on moderate deviations; triggers interstitial challenges for suspicious clients.',
+    },
+    balanced: {
+      name: 'Balanced (Recommended)',
+      block_threshold: 0.85,
+      rate_limit_threshold: 0.70,
+      log_threshold: 0.40,
+      crs_block_threshold: 4.0,
+      crs_weight: 0.50,
+      xgb_weight: 0.30,
+      iso_weight: 0.20,
+      reputation_boost_max: 0.15,
+      abuseipdb_boost_max: 0.15,
+      moderate_risk_action: 'log',
+      description: 'Standard production profile balancing active defense with benign traffic fluidity.',
+    },
+    permissive: {
+      name: 'Conservative (Low FP)',
+      block_threshold: 0.92,
+      rate_limit_threshold: 0.80,
+      log_threshold: 0.50,
+      crs_block_threshold: 5.0,
+      crs_weight: 0.55,
+      xgb_weight: 0.25,
+      iso_weight: 0.20,
+      reputation_boost_max: 0.10,
+      abuseipdb_boost_max: 0.10,
+      moderate_risk_action: 'log',
+      description: 'Maximizes application availability; only high-confidence attacks are actively blocked.',
+    },
+  };
+
+  const applyPreset = (presetKey) => {
+    const p = TUNING_PRESETS[presetKey];
+    if (!p) return;
+    setTuning(prev => ({
+      ...prev,
+      block_threshold: p.block_threshold,
+      rate_limit_threshold: p.rate_limit_threshold,
+      log_threshold: p.log_threshold,
+      crs_block_threshold: p.crs_block_threshold,
+      crs_weight: p.crs_weight,
+      xgb_weight: p.xgb_weight,
+      iso_weight: p.iso_weight,
+      reputation_boost_max: p.reputation_boost_max,
+      abuseipdb_boost_max: p.abuseipdb_boost_max,
+      moderate_risk_action: p.moderate_risk_action,
+      sensitivity_preset: presetKey,
+    }));
+  };
+
+  const fetchTuningData = async () => {
+    setLoadingTuning(true);
+    try {
+      const data = await getMLTuning();
+      if (data && !data.error) {
+        setTuning(data);
+      }
+    } catch (err) {
+      console.error("Failed to load ML tuning:", err);
+    } finally {
+      setLoadingTuning(false);
+    }
+  };
+
+  const handleSaveTuning = async () => {
+    if (tuning.log_threshold >= tuning.rate_limit_threshold) {
+      showToast("Log threshold must be lower than Rate Limit threshold.", "error");
+      return;
+    }
+    if (tuning.rate_limit_threshold >= tuning.block_threshold) {
+      showToast("Rate Limit threshold must be lower than Block threshold.", "error");
+      return;
+    }
+    setSavingTuning(true);
+    try {
+      const res = await updateMLTuning(tuning);
+      if (res && res.status === 'success') {
+        showToast("ML ensemble tuning saved and synchronized to Redis.");
+      } else {
+        showToast(res?.message || "Failed to save tuning", "error");
+      }
+    } catch (err) {
+      showToast("Failed to save ML tuning: " + (err.message || 'Error'), "error");
+    } finally {
+      setSavingTuning(false);
+    }
+  };
+
+  const handleSimulate = async () => {
+    setSimulating(true);
+    try {
+      const res = await simulateMLTuning({
+        crs_score: Number(simInput.crs_score),
+        xgb_prob: Number(simInput.xgb_prob),
+        iso_score: Number(simInput.iso_score),
+        redis_rep: Number(simInput.redis_rep),
+        abuse_score: Number(simInput.abuse_score),
+        tuning,
+      });
+      if (res && !res.error) {
+        setSimResult(res);
+      } else {
+        showToast(res?.message || "Simulation failed", "error");
+      }
+    } catch (err) {
+      showToast("Simulation error: " + (err.message || 'Error'), "error");
+    } finally {
+      setSimulating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSubTab === 'tuning') {
+      fetchTuningData();
+    }
+  }, [activeSubTab]);
 
   const fetchManagementData = async () => {
     setLoadingManagement(true);
@@ -315,9 +477,16 @@ export default function MLAnalytics() {
         >
           Model Control & Retraining
         </button>
+        <button 
+          className={`subtab-btn ${activeSubTab === 'tuning' ? 'active' : ''}`}
+          onClick={() => setActiveSubTab('tuning')}
+          style={{ padding: '6px 16px', fontSize: '13px', border: 'none', background: 'none', cursor: 'pointer', color: activeSubTab === 'tuning' ? 'var(--accent-color)' : 'var(--text-secondary)', borderBottom: activeSubTab === 'tuning' ? '2px solid var(--accent-color)' : 'none', fontWeight: 600 }}
+        >
+          Sensitivity & Ensemble Tuning
+        </button>
       </div>
 
-      {activeSubTab === 'analytics' ? (
+      {activeSubTab === 'analytics' && (
         <>
           {/* Metric Cards Grid */}
           <div className="metric-card glass-panel" style={{ gridColumn: 'span 3' }}>
@@ -789,7 +958,9 @@ export default function MLAnalytics() {
             )}
           </div>
         </>
-      ) : (
+      )}
+
+      {activeSubTab === 'management' && (
         <>
           {/* Models Status Cards */}
           <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -1031,6 +1202,554 @@ export default function MLAnalytics() {
             }}>
               {retrainStatus.logs || "Console output empty. Trigger retraining to view log output."}
             </pre>
+          </div>
+        </>
+      )}
+
+      {activeSubTab === 'tuning' && (
+        <>
+          {/* Preset Selector Card */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                  <Sliders size={18} color="var(--accent-color)" />
+                  <span>Ensemble Sensitivity & Threat Policy Tuning</span>
+                  <HelpText>
+                    Tune the multi-signal AI ensemble without taking down the WAF. Changes synchronize instantly to Redis and are evaluated in real time by the Lua & Python ML inspection pipeline.
+                  </HelpText>
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  Select a recommended posture preset or manually calibrate component weights and threshold cutoffs.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="modal-btn"
+                  onClick={() => applyPreset('balanced')}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 12px' }}
+                >
+                  <RotateCcw size={14} /> Reset Defaults
+                </button>
+                <button
+                  type="button"
+                  className="modal-btn primary"
+                  disabled={savingTuning}
+                  onClick={handleSaveTuning}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 16px' }}
+                >
+                  <Save size={14} /> {savingTuning ? 'Synchronizing...' : 'Save & Sync Policy'}
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Presets Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px' }}>
+              {Object.entries(TUNING_PRESETS).map(([key, p]) => {
+                const isSelected = tuning.sensitivity_preset === key;
+                return (
+                  <div
+                    key={key}
+                    onClick={() => applyPreset(key)}
+                    style={{
+                      background: isSelected ? 'var(--accent-bg, rgba(56, 189, 248, 0.08))' : 'var(--bg-tertiary)',
+                      border: `1.5px solid ${isSelected ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                      borderRadius: '8px',
+                      padding: '12px 14px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 600, fontSize: '13px', color: isSelected ? 'var(--accent-color)' : 'var(--text-primary)' }}>
+                        {p.name}
+                      </span>
+                      {isSelected && <CheckCircle size={14} color="var(--accent-color)" />}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                      {p.description}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', fontSize: '11px', marginTop: '4px', fontFamily: 'var(--font-mono)' }}>
+                      <span style={{ color: 'var(--danger-color)' }}>Block ≥ {(p.block_threshold * 100).toFixed(0)}%</span>
+                      <span style={{ color: 'var(--warning-color)' }}>Rate ≥ {(p.rate_limit_threshold * 100).toFixed(0)}%</span>
+                      <span style={{ color: 'var(--sev-low)' }}>Log ≥ {(p.log_threshold * 100).toFixed(0)}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Decision Cutoff Thresholds Card */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Gauge size={18} color="var(--accent-color)" />
+              <span>Graduated Decision Cutoff Thresholds</span>
+              <HelpText>
+                Calculated combined threat scores fall between 0.0 (benign) and 1.0 (critical attack). Configure where traffic transitions between Allow, Monitor, Throttle, and Hard Block.
+              </HelpText>
+            </div>
+
+            {/* Visual Colored Threat Zone Range Bar */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+                <span>0.00 (Benign)</span>
+                <span>Combined Threat Score (0.00 - 1.00)</span>
+                <span>1.00 (Critical)</span>
+              </div>
+              <div style={{ height: '14px', width: '100%', borderRadius: '7px', display: 'flex', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+                <div style={{ width: `${Math.max(0, tuning.log_threshold) * 100}%`, background: 'var(--success-color)' }} title="Allow Band" />
+                <div style={{ width: `${Math.max(0, tuning.rate_limit_threshold - tuning.log_threshold) * 100}%`, background: 'var(--sev-low)' }} title="Log / Monitor Band" />
+                <div style={{ width: `${Math.max(0, tuning.block_threshold - tuning.rate_limit_threshold) * 100}%`, background: 'var(--warning-color)' }} title="Rate Limit Band" />
+                <div style={{ width: `${Math.max(0, 1.0 - tuning.block_threshold) * 100}%`, background: 'var(--danger-color)' }} title="Hard Block Band" />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginTop: '2px', flexWrap: 'wrap', gap: '6px' }}>
+                <span style={{ color: 'var(--success-color)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success-color)' }} />
+                  Allow (0 - {(tuning.log_threshold * 100).toFixed(0)}%)
+                </span>
+                <span style={{ color: 'var(--sev-low)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--sev-low)' }} />
+                  Log ({(tuning.log_threshold * 100).toFixed(0)} - {(tuning.rate_limit_threshold * 100).toFixed(0)}%)
+                </span>
+                <span style={{ color: 'var(--warning-color)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--warning-color)' }} />
+                  Rate Limit ({(tuning.rate_limit_threshold * 100).toFixed(0)} - {(tuning.block_threshold * 100).toFixed(0)}%)
+                </span>
+                <span style={{ color: 'var(--danger-color)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--danger-color)' }} />
+                  Block (≥ {(tuning.block_threshold * 100).toFixed(0)}%)
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '8px' }}>
+              {/* Block Threshold Slider */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Hard Block Threshold</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--danger-color)', fontWeight: 700 }}>
+                    {(tuning.block_threshold * 100).toFixed(0)}% ({tuning.block_threshold.toFixed(2)})
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.50"
+                  max="0.99"
+                  step="0.01"
+                  value={tuning.block_threshold}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    setTuning(prev => ({
+                      ...prev,
+                      block_threshold: v,
+                      rate_limit_threshold: Math.min(prev.rate_limit_threshold, v - 0.02),
+                      log_threshold: Math.min(prev.log_threshold, v - 0.05),
+                      sensitivity_preset: 'custom',
+                    }));
+                  }}
+                  style={{ width: '100%', accentColor: 'var(--danger-color)', cursor: 'pointer' }}
+                />
+              </div>
+
+              {/* Rate Limit Threshold Slider */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Rate Limit / Throttle Threshold</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--warning-color)', fontWeight: 700 }}>
+                    {(tuning.rate_limit_threshold * 100).toFixed(0)}% ({tuning.rate_limit_threshold.toFixed(2)})
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.25"
+                  max="0.95"
+                  step="0.01"
+                  value={tuning.rate_limit_threshold}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    setTuning(prev => ({
+                      ...prev,
+                      rate_limit_threshold: v,
+                      block_threshold: Math.max(prev.block_threshold, v + 0.02),
+                      log_threshold: Math.min(prev.log_threshold, v - 0.02),
+                      sensitivity_preset: 'custom',
+                    }));
+                  }}
+                  style={{ width: '100%', accentColor: 'var(--warning-color)', cursor: 'pointer' }}
+                />
+              </div>
+
+              {/* Log Threshold Slider */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Monitor / Log Threshold</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--sev-low)', fontWeight: 700 }}>
+                    {(tuning.log_threshold * 100).toFixed(0)}% ({tuning.log_threshold.toFixed(2)})
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.10"
+                  max="0.80"
+                  step="0.01"
+                  value={tuning.log_threshold}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    setTuning(prev => ({
+                      ...prev,
+                      log_threshold: v,
+                      rate_limit_threshold: Math.max(prev.rate_limit_threshold, v + 0.02),
+                      block_threshold: Math.max(prev.block_threshold, v + 0.05),
+                      sensitivity_preset: 'custom',
+                    }));
+                  }}
+                  style={{ width: '100%', accentColor: 'var(--sev-low)', cursor: 'pointer' }}
+                />
+              </div>
+
+              {/* Moderate Risk Action Dropdown */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', gap: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>Moderate Risk Action (Log Band)</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Action to execute when traffic falls into the monitor range</div>
+                </div>
+                <select
+                  value={tuning.moderate_risk_action}
+                  onChange={(e) => setTuning(prev => ({ ...prev, moderate_risk_action: e.target.value, sensitivity_preset: 'custom' }))}
+                  className="filter-select"
+                  style={{ minWidth: '150px' }}
+                >
+                  <option value="log">Log Only (Passive)</option>
+                  <option value="challenge">Challenge Interstitial</option>
+                  <option value="rate_limit">Rate Limit</option>
+                </select>
+              </div>
+
+              {/* CRS Critical Override Threshold */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', gap: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>CRS Anomaly Hard Override</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Immediate block if raw CRS score reaches this cutoff</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    step="0.5"
+                    value={tuning.crs_block_threshold}
+                    onChange={(e) => setTuning(prev => ({ ...prev, crs_block_threshold: parseFloat(e.target.value) || 4.0, sensitivity_preset: 'custom' }))}
+                    className="filter-input"
+                    style={{ width: '80px', textAlign: 'center', fontFamily: 'var(--font-mono)' }}
+                  />
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>pts</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Model Weights & Retraining Card */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Zap size={18} color="var(--accent-color)" />
+              <span>Ensemble Component Weights & Feedback</span>
+              <HelpText>
+                Adjust the contribution of each detection mechanism. Weights are automatically normalized to form the composite base score.
+              </HelpText>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* CRS Weight */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>OWASP CRS Rules Anomaly Score Weight</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 700 }}>
+                    {(tuning.crs_weight * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.0"
+                  max="1.0"
+                  step="0.05"
+                  value={tuning.crs_weight}
+                  onChange={(e) => setTuning(prev => ({ ...prev, crs_weight: parseFloat(e.target.value), sensitivity_preset: 'custom' }))}
+                  style={{ width: '100%', accentColor: 'var(--accent-color)', cursor: 'pointer' }}
+                />
+              </div>
+
+              {/* XGBoost Weight */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Supervised XGBoost Threat Probability Weight</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 700 }}>
+                    {(tuning.xgb_weight * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.0"
+                  max="1.0"
+                  step="0.05"
+                  value={tuning.xgb_weight}
+                  onChange={(e) => setTuning(prev => ({ ...prev, xgb_weight: parseFloat(e.target.value), sensitivity_preset: 'custom' }))}
+                  style={{ width: '100%', accentColor: 'var(--accent-color)', cursor: 'pointer' }}
+                />
+              </div>
+
+              {/* Isolation Forest Weight */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Isolation Forest Zero-Day Anomaly Weight</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', fontWeight: 700 }}>
+                    {(tuning.iso_weight * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0.0"
+                  max="1.0"
+                  step="0.05"
+                  value={tuning.iso_weight}
+                  onChange={(e) => setTuning(prev => ({ ...prev, iso_weight: parseFloat(e.target.value), sensitivity_preset: 'custom' }))}
+                  style={{ width: '100%', accentColor: 'var(--accent-color)', cursor: 'pointer' }}
+                />
+              </div>
+
+              {/* Reputation Boost Max Caps */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+                <div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Max Redis Rep Boost</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                    <input
+                      type="number"
+                      min="0.0"
+                      max="0.40"
+                      step="0.01"
+                      value={tuning.reputation_boost_max}
+                      onChange={(e) => setTuning(prev => ({ ...prev, reputation_boost_max: parseFloat(e.target.value) || 0.15 }))}
+                      className="filter-input"
+                      style={{ width: '70px', fontFamily: 'var(--font-mono)' }}
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>({(tuning.reputation_boost_max * 100).toFixed(0)}% max)</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Max AbuseIPDB Boost</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                    <input
+                      type="number"
+                      min="0.0"
+                      max="0.40"
+                      step="0.01"
+                      value={tuning.abuseipdb_boost_max}
+                      onChange={(e) => setTuning(prev => ({ ...prev, abuseipdb_boost_max: parseFloat(e.target.value) || 0.15 }))}
+                      className="filter-input"
+                      style={{ width: '70px', fontFamily: 'var(--font-mono)' }}
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>({(tuning.abuseipdb_boost_max * 100).toFixed(0)}% max)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Automated Retraining Schedule */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>Automated Model Retraining Schedule</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Periodic background retraining on ClickHouse telemetry</div>
+                </div>
+                <select
+                  value={tuning.auto_retrain_schedule}
+                  onChange={(e) => setTuning(prev => ({ ...prev, auto_retrain_schedule: e.target.value }))}
+                  className="filter-select"
+                  style={{ minWidth: '150px' }}
+                >
+                  <option value="weekly">Weekly (Sundays 02:00 UTC)</option>
+                  <option value="monthly">Monthly (1st at 02:00 UTC)</option>
+                  <option value="drift_only">On Drift Breach Only</option>
+                  <option value="disabled">Manual Retraining Only</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Real-Time Decision Simulator Playground */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Sparkles size={18} color="var(--accent-color)" />
+              <span>Interactive Decision Matrix & Simulator Playground</span>
+              <HelpText>
+                Simulate how specific payload scores evaluate against your active or pending policy before applying changes to live traffic.
+              </HelpText>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>CRS Score (0 - 20)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  step="0.5"
+                  value={simInput.crs_score}
+                  onChange={(e) => setSimInput(prev => ({ ...prev, crs_score: parseFloat(e.target.value) || 0 }))}
+                  className="filter-input"
+                  style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>XGBoost Prob (0.0 - 1.0)</label>
+                <input
+                  type="number"
+                  min="0.0"
+                  max="1.0"
+                  step="0.05"
+                  value={simInput.xgb_prob}
+                  onChange={(e) => setSimInput(prev => ({ ...prev, xgb_prob: parseFloat(e.target.value) || 0 }))}
+                  className="filter-input"
+                  style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Isolation Score (-0.5 - 0.5)</label>
+                <input
+                  type="number"
+                  min="-0.5"
+                  max="0.5"
+                  step="0.05"
+                  value={simInput.iso_score}
+                  onChange={(e) => setSimInput(prev => ({ ...prev, iso_score: parseFloat(e.target.value) || 0 }))}
+                  className="filter-input"
+                  style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>IP Offenses in Redis</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  value={simInput.redis_rep}
+                  onChange={(e) => setSimInput(prev => ({ ...prev, redis_rep: parseInt(e.target.value, 10) || 0 }))}
+                  className="filter-input"
+                  style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>AbuseIPDB Conf (0 - 100%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={simInput.abuse_score}
+                  onChange={(e) => setSimInput(prev => ({ ...prev, abuse_score: parseFloat(e.target.value) || 0 }))}
+                  className="filter-input"
+                  style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="modal-btn primary"
+                  disabled={simulating}
+                  onClick={handleSimulate}
+                  style={{ width: '100%', height: '36px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px' }}
+                >
+                  <Play size={14} /> {simulating ? 'Evaluating...' : 'Simulate Decision'}
+                </button>
+              </div>
+            </div>
+
+            {simResult && (
+              <div
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '8px',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                  marginTop: '8px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Calculated Action:</div>
+                    <span
+                      style={{
+                        padding: '4px 12px',
+                        borderRadius: '6px',
+                        fontWeight: 700,
+                        fontSize: '12px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        background:
+                          simResult.decision === 'block' ? 'var(--danger-bg)' :
+                          simResult.decision === 'rate_limit' ? 'var(--warning-bg)' :
+                          simResult.decision === 'challenge' ? 'var(--warning-bg)' :
+                          simResult.decision === 'log' ? 'rgba(56, 189, 248, 0.15)' :
+                          'var(--success-bg)',
+                        color:
+                          simResult.decision === 'block' ? 'var(--danger-color)' :
+                          simResult.decision === 'rate_limit' ? 'var(--warning-color)' :
+                          simResult.decision === 'challenge' ? 'var(--warning-color)' :
+                          simResult.decision === 'log' ? 'var(--accent-color)' :
+                          'var(--success-color)',
+                        border: `1px solid ${
+                          simResult.decision === 'block' ? 'var(--danger-color)' :
+                          simResult.decision === 'rate_limit' ? 'var(--warning-color)' :
+                          simResult.decision === 'challenge' ? 'var(--warning-color)' :
+                          simResult.decision === 'log' ? 'var(--accent-color)' :
+                          'var(--success-color)'
+                        }`,
+                      }}
+                    >
+                      {simResult.decision.replace('_', ' ')}
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Threat Score:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '16px', fontWeight: 700, color: 'var(--accent-color)' }}>
+                      {(simResult.threat_score.total * 100).toFixed(1)}% ({simResult.threat_score.total.toFixed(3)})
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                    {simResult.reason}
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', fontSize: '11px' }}>
+                  <div>
+                    <span style={{ color: 'var(--text-secondary)' }}>CRS Normalized: </span>
+                    <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{(simResult.threat_score.crs * 100).toFixed(1)}%</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-secondary)' }}>XGBoost Probability: </span>
+                    <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{(simResult.threat_score.xgb * 100).toFixed(1)}%</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-secondary)' }}>Isolation Anomaly: </span>
+                    <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{(simResult.threat_score.iso * 100).toFixed(1)}%</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--text-secondary)' }}>Reputation Boost: </span>
+                    <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>+{(simResult.threat_score.reputation * 100).toFixed(1)}%</strong>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

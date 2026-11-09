@@ -180,6 +180,20 @@ DEFAULT_SETTINGS = {
         "override_lon": None,
         "override_label": "",
     },
+    "ml_tuning": {
+        "block_threshold": 0.85,
+        "rate_limit_threshold": 0.70,
+        "log_threshold": 0.40,
+        "crs_block_threshold": 4.0,
+        "crs_weight": 0.50,
+        "xgb_weight": 0.30,
+        "iso_weight": 0.20,
+        "reputation_boost_max": 0.15,
+        "abuseipdb_boost_max": 0.15,
+        "sensitivity_preset": "balanced",
+        "moderate_risk_action": "log",
+        "auto_retrain_schedule": "weekly",
+    },
 }
 
 
@@ -522,6 +536,14 @@ class SettingsManager:
             )
 
         return self.settings["anti_defacement"]
+
+    def get_ml_tuning(self) -> Dict[str, Any]:
+        return self.settings.get("ml_tuning", DEFAULT_SETTINGS["ml_tuning"])
+
+    def update_ml_tuning(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        self.settings["ml_tuning"] = data
+        self.save_settings(self.settings)
+        return self.settings["ml_tuning"]
 
 
 settings_manager = SettingsManager()

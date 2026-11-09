@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from fastapi import APIRouter, Query, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from app.services.auth import require_any_role, require_admin, TokenData
 
@@ -214,7 +214,7 @@ async def get_ml_timeline(current_user: TokenData = Depends(require_any_role)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load ML timeline: {e}")
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import asyncio
 import requests
 
@@ -279,3 +279,168 @@ async def get_ml_drift_history(current_user: TokenData = Depends(require_any_rol
 @router.get("/ml/feature-importance")
 async def get_ml_feature_importance(current_user: TokenData = Depends(require_any_role)):
     return await _ml_api_request("GET", "/models/feature-importance")
+
+
+import json
+import logging
+from app.services.settings_manager import settings_manager
+
+logger = logging.getLogger(__name__)
+
+
+def _get_redis_safe():
+    try:
+        from app.utils.redis_client import get_global_redis_client
+        return get_global_redis_client()
+    except Exception:
+        return None
+
+
+class MLTuningModel(BaseModel):
+    block_threshold: float = Field(default=0.85, ge=0.40, le=1.0)
+    rate_limit_threshold: float = Field(default=0.70, ge=0.20, le=0.99)
+    log_threshold: float = Field(default=0.40, ge=0.05, le=0.80)
+    crs_block_threshold: float = Field(default=4.0, ge=1.0, le=20.0)
+    crs_weight: float = Field(default=0.50, ge=0.0, le=1.0)
+    xgb_weight: float = Field(default=0.30, ge=0.0, le=1.0)
+    iso_weight: float = Field(default=0.20, ge=0.0, le=1.0)
+    reputation_boost_max: float = Field(default=0.15, ge=0.0, le=0.50)
+    abuseipdb_boost_max: float = Field(default=0.15, ge=0.0, le=0.50)
+    sensitivity_preset: str = Field(default="balanced")
+    moderate_risk_action: str = Field(default="log")
+    auto_retrain_schedule: str = Field(default="weekly")
+
+
+class MLSimulateRequest(BaseModel):
+    crs_score: float = Field(default=0.0, ge=0.0)
+    xgb_prob: float = Field(default=0.0, ge=0.0, le=1.0)
+    iso_score: float = Field(default=0.0)
+    redis_rep: float = Field(default=0.0, ge=0.0)
+    abuse_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    tuning: Optional[MLTuningModel] = None
+
+
+@router.get("/ml/tuning")
+async def get_ml_tuning(current_user: TokenData = Depends(require_any_role)):
+    """Fetches active ML ensemble weights and routing thresholds."""
+    r = _get_redis_safe()
+    if r:
+        try:
+            raw = r.get("waf:ml:tuning")
+            if raw:
+                data = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            logger.warning(f"Error reading ML tuning from Redis: {e}")
+    return settings_manager.get_ml_tuning()
+
+
+@router.post("/ml/tuning")
+async def update_ml_tuning(
+    payload: MLTuningModel,
+    current_user: TokenData = Depends(require_admin),
+):
+    """Updates and syncs ML ensemble weights and routing thresholds with zero-downtime."""
+    if not (payload.log_threshold < payload.rate_limit_threshold < payload.block_threshold):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Thresholds must satisfy: log_threshold < rate_limit_threshold < block_threshold."
+        )
+    if payload.moderate_risk_action not in ("log", "challenge", "rate_limit"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="moderate_risk_action must be 'log', 'challenge', or 'rate_limit'."
+        )
+
+    data = payload.model_dump()
+    settings_manager.update_ml_tuning(data)
+
+    r = _get_redis_safe()
+    if r:
+        try:
+            r.set("waf:ml:tuning", json.dumps(data))
+        except Exception as e:
+            logger.warning(f"Failed to sync ML tuning to Redis: {e}")
+
+    # Best-effort notify ML container
+    await _ml_api_request("POST", "/tuning/reload")
+
+    return {"status": "success", "message": "ML tuning updated and synchronized.", "data": data}
+
+
+@router.post("/ml/tuning/simulate")
+async def simulate_ml_tuning(
+    payload: MLSimulateRequest,
+    current_user: TokenData = Depends(require_any_role),
+):
+    """Simulates an ML threat score and decision without affecting live traffic."""
+    tuning = payload.tuning.model_dump() if payload.tuning else None
+    if not tuning:
+        r = _get_redis_safe()
+        if r:
+            try:
+                raw = r.get("waf:ml:tuning")
+                if raw:
+                    tuning = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
+            except Exception:
+                pass
+        if not tuning:
+            tuning = settings_manager.get_ml_tuning()
+
+    crs_score = float(payload.crs_score or 0.0)
+    xgb_prob = float(payload.xgb_prob or 0.0)
+    iso_score = float(payload.iso_score or 0.0)
+    redis_rep = float(payload.redis_rep or 0.0)
+    abuse_score = float(payload.abuse_score or 0.0)
+
+    crs_norm = min(crs_score / 20.0, 1.0)
+    iso_norm = min(max(-iso_score / 0.5, 0.0), 1.0)
+
+    rep_boost_max = float(tuning.get("reputation_boost_max", 0.15))
+    abuse_boost_max = float(tuning.get("abuseipdb_boost_max", 0.15))
+
+    rep_boost = min(redis_rep * 0.03, rep_boost_max)
+    abuse_boost = min((abuse_score / 100.0) * abuse_boost_max, abuse_boost_max)
+
+    w_crs = float(tuning.get("crs_weight", 0.50))
+    w_xgb = float(tuning.get("xgb_weight", 0.30))
+    w_iso = float(tuning.get("iso_weight", 0.20))
+    total_w = w_crs + w_xgb + w_iso
+    base_score = (crs_norm * w_crs + xgb_prob * w_xgb + iso_norm * w_iso) / total_w if total_w > 0 else 0.0
+    total = min(base_score + rep_boost + abuse_boost, 1.0)
+
+    crs_block = float(tuning.get("crs_block_threshold", 4.0))
+    block_th = float(tuning.get("block_threshold", 0.85))
+    rate_limit_th = float(tuning.get("rate_limit_threshold", 0.70))
+    log_th = float(tuning.get("log_threshold", 0.40))
+    moderate_risk_action = tuning.get("moderate_risk_action", "log")
+
+    if crs_score >= crs_block:
+        decision = "block"
+        reason = f"CRS Anomaly Score ({crs_score:.1f}) reached critical block threshold ({crs_block:.1f})"
+    elif total >= block_th:
+        decision = "block"
+        reason = f"Combined Threat Score ({total:.3f}) reached block threshold ({block_th:.2f})"
+    elif total >= rate_limit_th:
+        decision = "rate_limit"
+        reason = f"Combined Threat Score ({total:.3f}) reached rate limit threshold ({rate_limit_th:.2f})"
+    elif total >= log_th:
+        decision = moderate_risk_action
+        reason = f"Combined Threat Score ({total:.3f}) reached monitor threshold ({log_th:.2f}) -> {moderate_risk_action}"
+    else:
+        decision = "allow"
+        reason = f"Combined Threat Score ({total:.3f}) below anomaly threshold ({log_th:.2f})"
+
+    return {
+        "threat_score": {
+            "total": round(total, 4),
+            "crs": round(crs_norm, 4),
+            "xgb": round(xgb_prob, 4),
+            "iso": round(iso_norm, 4),
+            "reputation": round(min(rep_boost + abuse_boost, 1.0), 4),
+        },
+        "decision": decision,
+        "reason": reason,
+        "applied_tuning": tuning,
+    }

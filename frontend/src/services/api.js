@@ -1900,6 +1900,44 @@ export async function getMLFeatureImportance() {
   }
 }
 
+export async function getMLTuning() {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/tuning`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch ML tuning configuration:", error);
+    throw error;
+  }
+}
+
+export async function updateMLTuning(data) {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/tuning`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to update ML tuning configuration:", error);
+    throw error;
+  }
+}
+
+export async function simulateMLTuning(payload) {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/tuning/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to simulate ML tuning:", error);
+    throw error;
+  }
+}
+
 /**
  * Fetch all registered protected applications
  */

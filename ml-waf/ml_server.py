@@ -941,3 +941,17 @@ def predict(payload: RequestTelemetry, background_tasks: BackgroundTasks, respon
         background_tasks.add_task(send_backend_alert, "ml_anomaly", event_data)
 
     return {"decision": decision, "threat_score": score, "sub_scores": sub_scores}
+
+
+@app.get("/tuning")
+def get_tuning():
+    """Returns active ensemble tuning parameters."""
+    return threat_score.get_tuning_config()
+
+
+@app.post("/tuning/reload", dependencies=[Depends(verify_internal_key)])
+def reload_tuning():
+    """Invalidates the in-memory cache and reloads dynamic tuning from Redis."""
+    threat_score.invalidate_tuning_cache()
+    new_cfg = threat_score.get_tuning_config()
+    return {"status": "success", "message": "ML tuning reloaded successfully", "tuning": new_cfg}

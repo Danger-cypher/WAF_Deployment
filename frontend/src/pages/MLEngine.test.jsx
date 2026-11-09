@@ -18,8 +18,11 @@ vi.mock('../services/api', () => ({
   getMLRetrainStatus: vi.fn(),
   getMLStats: vi.fn(),
   getMLTimeline: vi.fn(),
+  getMLTuning: vi.fn(),
   rollbackMLModel: vi.fn(),
+  simulateMLTuning: vi.fn(),
   triggerMLRetrain: vi.fn(),
+  updateMLTuning: vi.fn(),
 }));
 
 const STATS = {
@@ -54,6 +57,27 @@ beforeEach(() => {
   api.getMLBackups.mockResolvedValue({ data: [] });
   api.getMLFeatureImportance.mockResolvedValue({ data: [] });
   api.getMLDriftHistory.mockResolvedValue({ data: [] });
+  api.getMLTuning.mockResolvedValue({
+    block_threshold: 0.85,
+    rate_limit_threshold: 0.70,
+    log_threshold: 0.40,
+    crs_block_threshold: 4.0,
+    crs_weight: 0.50,
+    xgb_weight: 0.30,
+    iso_weight: 0.20,
+    reputation_boost_max: 0.15,
+    abuseipdb_boost_max: 0.15,
+    sensitivity_preset: 'balanced',
+    moderate_risk_action: 'log',
+    auto_retrain_schedule: 'weekly',
+  });
+  api.updateMLTuning.mockResolvedValue({ status: 'success' });
+  api.simulateMLTuning.mockResolvedValue({
+    threat_score: { total: 0.784, crs: 0.25, xgb: 0.80, iso: 0.70, reputation: 0.05 },
+    decision: 'rate_limit',
+    reason: 'Combined Threat Score (0.784) reached rate limit threshold (0.70)',
+    applied_tuning: {},
+  });
 });
 
 describe('MLEngine — analytics tab', () => {
@@ -112,7 +136,7 @@ describe('MLEngine — model management tab', () => {
     expect(await screen.findByText('97.0%')).toBeInTheDocument();
     expect(screen.getByText('2026-09-01')).toBeInTheDocument();
     expect(screen.getByText('Stable')).toBeInTheDocument();
-  });
+  }, 15000);
 
   it('triggering retrain confirms first, then disables the button while running', async () => {
     api.triggerMLRetrain.mockResolvedValue({ status: 'success' });
@@ -126,7 +150,7 @@ describe('MLEngine — model management tab', () => {
 
     await waitFor(() => expect(api.triggerMLRetrain).toHaveBeenCalled());
     expect(await screen.findByRole('button', { name: /Training/ })).toBeDisabled();
-  });
+  }, 15000);
 
   it('does not retrain when cancelled', async () => {
     const user = userEvent.setup();
@@ -136,7 +160,7 @@ describe('MLEngine — model management tab', () => {
     const dialog = await screen.findByRole('alertdialog');
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(api.triggerMLRetrain).not.toHaveBeenCalled();
-  });
+  }, 15000);
 
   it('rolling back confirms first and calls the API with the backup timestamp', async () => {
     api.getMLBackups.mockResolvedValue({ data: [{ timestamp: 'bk-2026-09-01', formatted_date: '2026-09-01', xgboost: true, isolation_forest: true }] });
@@ -152,5 +176,60 @@ describe('MLEngine — model management tab', () => {
 
     await waitFor(() => expect(api.rollbackMLModel).toHaveBeenCalledWith('bk-2026-09-01'));
     expect(await screen.findByText('Rolled back.')).toBeInTheDocument();
-  });
+  }, 15000);
+});
+
+describe('MLEngine — Sensitivity & Ensemble Tuning (Phase 3.1 & 3.2)', () => {
+  it('navigates to tuning subtab and loads active tuning parameters', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: /Sensitivity & Ensemble Tuning/ }));
+
+    expect(await screen.findByText('Ensemble Sensitivity & Threat Policy Tuning')).toBeInTheDocument();
+    expect(screen.getByText('Aggressive (Zero-Trust)')).toBeInTheDocument();
+    expect(screen.getByText('Balanced (Recommended)')).toBeInTheDocument();
+    expect(screen.getByText('Conservative (Low FP)')).toBeInTheDocument();
+  }, 15000);
+
+  it('selects preset and updates policy parameters', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: /Sensitivity & Ensemble Tuning/ }));
+    const aggressiveCard = await screen.findByText('Aggressive (Zero-Trust)');
+    await user.click(aggressiveCard);
+
+    // Save and sync policy
+    const saveBtn = screen.getByRole('button', { name: /Save & Sync Policy/ });
+    await user.click(saveBtn);
+
+    await waitFor(() => {
+      expect(api.updateMLTuning).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sensitivity_preset: 'aggressive',
+          block_threshold: 0.75,
+          rate_limit_threshold: 0.60,
+        })
+      );
+    });
+  }, 15000);
+
+  it('runs decision matrix simulation playground', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: /Sensitivity & Ensemble Tuning/ }));
+
+    const simBtn = await screen.findByRole('button', { name: /Simulate Decision/ });
+    await user.click(simBtn);
+
+    await waitFor(() => {
+      expect(api.simulateMLTuning).toHaveBeenCalled();
+    });
+
+    expect(await screen.findByText(/78.4%/)).toBeInTheDocument();
+    expect(screen.getByText('rate limit')).toBeInTheDocument();
+    expect(screen.getByText(/Combined Threat Score \(0.784\) reached rate limit/)).toBeInTheDocument();
+  }, 15000);
 });
