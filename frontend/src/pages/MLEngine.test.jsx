@@ -15,11 +15,13 @@ vi.mock('../services/api', () => ({
   getMLFeatureImportance: vi.fn(),
   getMLLogs: vi.fn(),
   getMLModelInfo: vi.fn(),
+  getMLRetrainHistory: vi.fn(),
   getMLRetrainStatus: vi.fn(),
   getMLStats: vi.fn(),
   getMLTimeline: vi.fn(),
   getMLTuning: vi.fn(),
   rollbackMLModel: vi.fn(),
+  runMLDriftCheck: vi.fn(),
   simulateMLTuning: vi.fn(),
   triggerMLRetrain: vi.fn(),
   updateMLTuning: vi.fn(),
@@ -57,6 +59,29 @@ beforeEach(() => {
   api.getMLBackups.mockResolvedValue({ data: [] });
   api.getMLFeatureImportance.mockResolvedValue({ data: [] });
   api.getMLDriftHistory.mockResolvedValue({ data: [] });
+  api.getMLRetrainHistory.mockResolvedValue({ data: [] });
+  api.runMLDriftCheck.mockResolvedValue({
+    status: 'success',
+    report: {
+      id: 99,
+      timestamp: '2026-11-09T12:00:00',
+      total_requests: 1200,
+      avg_threat_score: 0.38,
+      drift_detected: false,
+      reasons: [],
+      vector_metrics: {
+        status: 'nominal',
+        vectors: {
+          threat_score: { name: 'Threat Score Baseline', current: 0.38, baseline: 0.35, threshold: 0.60, status: 'nominal' },
+          xgb_anomaly: { name: 'XGBoost Attack Drift', current: 0.12, baseline: 0.10, threshold: 0.25, status: 'nominal' },
+          iso_novelty: { name: 'Novelty / Outlier Vector', current: 0.14, baseline: 0.10, threshold: 0.20, status: 'nominal' },
+          false_positive: { name: 'Analyst FP Feedback', current: 0.02, baseline: 0.03, threshold: 0.15, status: 'nominal' },
+          crs_anomaly: { name: 'CRS Score Elevation', current: 0.05, baseline: 0.08, threshold: 0.25, status: 'nominal' },
+        },
+        top_drifting_endpoints: [{ uri: '/api/v1/auth', count: 45, avg_threat: 0.42 }],
+      },
+    },
+  });
   api.getMLTuning.mockResolvedValue({
     block_threshold: 0.85,
     rate_limit_threshold: 0.70,
@@ -176,6 +201,47 @@ describe('MLEngine — model management tab', () => {
 
     await waitFor(() => expect(api.rollbackMLModel).toHaveBeenCalledWith('bk-2026-09-01'));
     expect(await screen.findByText('Rolled back.')).toBeInTheDocument();
+  }, 15000);
+
+  it('renders behavioral drift multi-vector profiling and executes on-demand drift check', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('button', { name: /Model Control & Retraining/ }));
+
+    expect(await screen.findByText(/Behavioral Drift Multi-Vector Profiling/)).toBeInTheDocument();
+    expect(screen.getByText('Threat Score Baseline')).toBeInTheDocument();
+    expect(screen.getByText('XGBoost Attack Drift')).toBeInTheDocument();
+    expect(screen.getByText('Novelty / Outlier Vector')).toBeInTheDocument();
+    expect(screen.getByText('Analyst FP Feedback')).toBeInTheDocument();
+    expect(screen.getByText('CRS Score Elevation')).toBeInTheDocument();
+
+    const runBtn = screen.getByRole('button', { name: /Run Drift Analysis Now/ });
+    await user.click(runBtn);
+
+    await waitFor(() => expect(api.runMLDriftCheck).toHaveBeenCalled());
+    expect(await screen.findByText(/Drift multi-vector analysis completed/)).toBeInTheDocument();
+  }, 15000);
+
+  it('renders automated retraining execution history', async () => {
+    api.getMLRetrainHistory.mockResolvedValue({
+      data: [{
+        id: 1,
+        timestamp: '2026-11-09T02:00:00',
+        trigger_type: 'scheduled_weekly',
+        trigger_details: 'Weekly schedule',
+        duration_seconds: 42.5,
+        accuracy: 0.99,
+        status: 'success',
+      }],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('button', { name: /Model Control & Retraining/ }));
+
+    expect(await screen.findByText(/Automated Retraining Execution History/)).toBeInTheDocument();
+    expect(await screen.findByText('scheduled_weekly')).toBeInTheDocument();
+    expect(screen.getByText('42.5s')).toBeInTheDocument();
+    expect(screen.getByText('99.0%')).toBeInTheDocument();
   }, 15000);
 });
 

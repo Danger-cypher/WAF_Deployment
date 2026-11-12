@@ -124,3 +124,80 @@ def test_standalone_path_defaults_to_subprocess_trigger(tmp_path, monkeypatch):
     drift_monitor.monitor_drift()  # no callback passed
 
     assert len(called_with) == 1
+
+
+def test_multi_vector_metrics_generated_and_saved(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "ml_events.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE ml_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            threat_score REAL, xgb_prob REAL, iso_score REAL, admin_label TEXT,
+            crs_score REAL, uri TEXT
+        )
+        """
+    )
+    for i in range(10):
+        conn.execute(
+            "INSERT INTO ml_events (threat_score, xgb_prob, iso_score, crs_score, uri) VALUES (?, ?, ?, ?, ?)",
+            (0.45, 0.30, -0.10, 4.0, f"/api/v1/users/{i}"),
+        )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("ML_DB_PATH", db_path)
+    importlib.reload(drift_monitor)
+
+    report = drift_monitor.monitor_drift()
+    assert report is not None
+    assert "vector_metrics" in report
+    vm = report["vector_metrics"]
+    assert "status" in vm
+    assert "vectors" in vm
+    assert "threat_score" in vm["vectors"]
+    assert "xgb_anomaly" in vm["vectors"]
+    assert "iso_novelty" in vm["vectors"]
+    assert "false_positive" in vm["vectors"]
+    assert "crs_anomaly" in vm["vectors"]
+    assert len(vm["top_drifting_endpoints"]) > 0
+
+    history = drift_monitor.get_drift_history()
+    assert len(history) == 1
+    assert "vector_metrics" in history[0]
+    assert history[0]["vector_metrics"]["vectors"]["threat_score"]["current"] == 0.45
+
+
+def test_force_latest_analyzes_past_records_when_no_recent_events(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "ml_events.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE ml_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME,
+            threat_score REAL, xgb_prob REAL, iso_score REAL
+        )
+        """
+    )
+    # Insert events from 10 days ago (outside 24h window)
+    for _ in range(5):
+        conn.execute(
+            "INSERT INTO ml_events (timestamp, threat_score, xgb_prob, iso_score) VALUES ('2026-01-01 12:00:00', ?, ?, ?)",
+            (0.3, 0.1, 0.2),
+        )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("ML_DB_PATH", db_path)
+    importlib.reload(drift_monitor)
+
+    # Standard check skips because no events in last 24h
+    res_normal = drift_monitor.monitor_drift(force_latest=False)
+    assert res_normal is None
+
+    # On-demand force_latest falls back to latest events
+    res_forced = drift_monitor.monitor_drift(force_latest=True)
+    assert res_forced is not None
+    assert res_forced["total_requests"] == 5
+    assert res_forced["avg_threat_score"] == 0.3
+

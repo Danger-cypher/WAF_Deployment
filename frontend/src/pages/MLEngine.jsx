@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Activity, AlertTriangle as AlertTriangleIcon, Brain, CheckCircle, Clock,
+  Activity, AlertTriangle as AlertTriangleIcon, Brain, Calendar, CheckCircle, Clock,
   Gauge, Globe, Lock, Play, RotateCcw, Save, Server, Settings as SettingsIcon,
-  ShieldAlert, Sliders, Sparkles, Zap,
+  ShieldAlert, Sliders, Sparkles, Zap, RefreshCw, TrendingUp, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import {
   Area, Bar, CartesianGrid, Cell, ComposedChart, Pie, PieChart, Tooltip as RechartsTooltip,
@@ -12,7 +12,7 @@ import {
 import {
   getMLBackups, getMLDriftHistory, getMLFeatureImportance, getMLLogs, getMLModelInfo,
   getMLRetrainStatus, getMLStats, getMLTimeline, getMLTuning, rollbackMLModel,
-  simulateMLTuning, triggerMLRetrain, updateMLTuning,
+  simulateMLTuning, triggerMLRetrain, updateMLTuning, runMLDriftCheck, getMLRetrainHistory,
 } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import { HelpText } from '../components/Tooltip';
@@ -52,6 +52,9 @@ export default function MLAnalytics() {
   const [backups, setBackups] = useState([]);
   const [featureImportance, setFeatureImportance] = useState([]);
   const [driftHistory, setDriftHistory] = useState([]);
+  const [retrainHistory, setRetrainHistory] = useState([]);
+  const [runningDriftCheck, setRunningDriftCheck] = useState(false);
+  const [selectedDriftReport, setSelectedDriftReport] = useState(null);
   const [, setLoadingManagement] = useState(false);
   const [triggeringRetrain, setTriggeringRetrain] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
@@ -232,11 +235,42 @@ export default function MLAnalytics() {
       if (imp && !imp.error) setFeatureImportance(imp.data || []);
 
       const drift = await getMLDriftHistory();
-      if (drift && !drift.error) setDriftHistory(drift.data || []);
+      if (drift && !drift.error) {
+        const dList = drift.data || [];
+        setDriftHistory(dList);
+        if (dList.length > 0 && !selectedDriftReport) {
+          setSelectedDriftReport(dList[0]);
+        }
+      }
+
+      const rHistory = await getMLRetrainHistory();
+      if (rHistory && !rHistory.error) setRetrainHistory(rHistory.data || []);
     } catch (err) {
       console.error("Failed to load ML management data:", err);
     } finally {
       setLoadingManagement(false);
+    }
+  };
+
+  const handleRunDriftCheck = async () => {
+    setRunningDriftCheck(true);
+    try {
+      const res = await runMLDriftCheck();
+      if (res && res.status === 'success') {
+        showToast('Drift multi-vector analysis completed successfully.', 'success');
+        if (res.report) {
+          setSelectedDriftReport(res.report);
+        }
+        const drift = await getMLDriftHistory();
+        if (drift && !drift.error) setDriftHistory(drift.data || []);
+      } else {
+        showToast(res?.message || 'Drift check finished with notice', 'warning');
+      }
+    } catch (err) {
+      console.error('Failed to run drift check:', err);
+      showToast('Failed to execute drift check: ' + err.message, 'error');
+    } finally {
+      setRunningDriftCheck(false);
     }
   };
 
@@ -265,6 +299,8 @@ export default function MLAnalytics() {
               if (imp && !imp.error) setFeatureImportance(imp.data || []);
               const drift = await getMLDriftHistory();
               if (drift && !drift.error) setDriftHistory(drift.data || []);
+              const rHistory = await getMLRetrainHistory();
+              if (rHistory && !rHistory.error) setRetrainHistory(rHistory.data || []);
             }
           }
         } catch (err) {
@@ -1107,14 +1143,267 @@ export default function MLAnalytics() {
             </div>
           </div>
 
-          {/* Drift Monitoring History */}
+          {/* Multi-Vector Behavioral Drift & Anomaly Profiling (Phase 3.3) */}
+          {(() => {
+            const activeDrift = selectedDriftReport || (driftHistory.length > 0 ? driftHistory[0] : null);
+            const vm = activeDrift?.vector_metrics || {};
+            const vMap = vm.vectors || {};
+            const overallStatus = vm.status || (activeDrift?.drift_detected ? 'breached' : 'nominal');
+            const endpoints = vm.top_drifting_endpoints || [];
+
+            return (
+              <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div className="card-title" style={{ marginBottom: 0 }}>
+                      <AlertTriangleIcon size={18} color="var(--accent-color)" />
+                      <span>Behavioral Drift Multi-Vector Profiling & Health Assessment</span>
+                    </div>
+                    <span style={{
+                      padding: '3px 10px',
+                      borderRadius: '12px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      background: overallStatus === 'breached' ? 'var(--danger-bg)' : overallStatus === 'warning' ? 'var(--warning-bg)' : 'var(--success-bg)',
+                      color: overallStatus === 'breached' ? 'var(--danger-color)' : overallStatus === 'warning' ? 'var(--warning-color)' : 'var(--success-color)',
+                      border: `1px solid ${overallStatus === 'breached' ? 'var(--danger-color)' : overallStatus === 'warning' ? 'var(--warning-color)' : 'var(--success-color)'}`,
+                    }}>
+                      {overallStatus === 'breached' ? 'Drift Breached (Retrain Due/Triggered)' : overallStatus === 'warning' ? 'Drift Warning (Approaching Baseline)' : 'Nominal Baseline (Telemetry Stable)'}
+                    </span>
+                    <HelpText>
+                      Monitors statistical drift across five independent behavioral vectors (threat score baseline, attack confidence, novelty anomaly, analyst feedback, and CRS score elevation). Breaches trigger automated retraining according to policy.
+                    </HelpText>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    {activeDrift?.timestamp && (
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+                        Inspected: {formatLocalTime(activeDrift.timestamp)} ({activeDrift.total_requests?.toLocaleString() || 0} reqs)
+                      </span>
+                    )}
+                    <button
+                      onClick={handleRunDriftCheck}
+                      disabled={runningDriftCheck}
+                      className="modal-btn"
+                      style={{ padding: '6px 14px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      <RefreshCw size={13} className={runningDriftCheck ? 'animate-spin' : ''} />
+                      {runningDriftCheck ? 'Analyzing...' : 'Run Drift Analysis Now'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Vector Metrics Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+                  {/* Vector 1: Threat Score Baseline */}
+                  <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>Threat Score Baseline</span>
+                      <span style={{
+                        fontSize: '9px', padding: '1px 5px', borderRadius: '3px', fontWeight: 600, textTransform: 'uppercase',
+                        background: vMap.threat_score?.status === 'breached' ? 'var(--danger-bg)' : vMap.threat_score?.status === 'warning' ? 'var(--warning-bg)' : 'var(--success-bg)',
+                        color: vMap.threat_score?.status === 'breached' ? 'var(--danger-color)' : vMap.threat_score?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)'
+                      }}>
+                        {vMap.threat_score?.status || 'nominal'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                      <span style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                        {(vMap.threat_score?.current ?? (activeDrift?.avg_threat_score || 0)).toFixed(3)}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>/ {vMap.threat_score?.threshold ?? 0.60}</span>
+                    </div>
+                    <div style={{ width: '100%', height: '6px', background: 'var(--surface-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${Math.min(100, ((vMap.threat_score?.current ?? (activeDrift?.avg_threat_score || 0)) / (vMap.threat_score?.threshold || 0.60)) * 100)}%`,
+                        height: '100%',
+                        background: vMap.threat_score?.status === 'breached' ? 'var(--danger-color)' : vMap.threat_score?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)',
+                      }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)' }}>
+                      <span>Baseline: 0.35</span>
+                      <span>Cutoff: &gt;0.60</span>
+                    </div>
+                  </div>
+
+                  {/* Vector 2: XGBoost Attack Anomaly */}
+                  <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>XGBoost Attack Drift</span>
+                      <span style={{
+                        fontSize: '9px', padding: '1px 5px', borderRadius: '3px', fontWeight: 600, textTransform: 'uppercase',
+                        background: vMap.xgb_anomaly?.status === 'breached' ? 'var(--danger-bg)' : vMap.xgb_anomaly?.status === 'warning' ? 'var(--warning-bg)' : 'var(--success-bg)',
+                        color: vMap.xgb_anomaly?.status === 'breached' ? 'var(--danger-color)' : vMap.xgb_anomaly?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)'
+                      }}>
+                        {vMap.xgb_anomaly?.status || 'nominal'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                      <span style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                        {((vMap.xgb_anomaly?.current ?? (activeDrift?.xgb_anomaly_rate || 0)) * 100).toFixed(1)}%
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>/ 25.0%</span>
+                    </div>
+                    <div style={{ width: '100%', height: '6px', background: 'var(--surface-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${Math.min(100, ((vMap.xgb_anomaly?.current ?? (activeDrift?.xgb_anomaly_rate || 0)) / 0.25) * 100)}%`,
+                        height: '100%',
+                        background: vMap.xgb_anomaly?.status === 'breached' ? 'var(--danger-color)' : vMap.xgb_anomaly?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)',
+                      }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)' }}>
+                      <span>Baseline: 10%</span>
+                      <span>Cutoff: &gt;25%</span>
+                    </div>
+                  </div>
+
+                  {/* Vector 3: Isolation Forest Novelty */}
+                  <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>Novelty / Outlier Vector</span>
+                      <span style={{
+                        fontSize: '9px', padding: '1px 5px', borderRadius: '3px', fontWeight: 600, textTransform: 'uppercase',
+                        background: vMap.iso_novelty?.status === 'breached' ? 'var(--danger-bg)' : vMap.iso_novelty?.status === 'warning' ? 'var(--warning-bg)' : 'var(--success-bg)',
+                        color: vMap.iso_novelty?.status === 'breached' ? 'var(--danger-color)' : vMap.iso_novelty?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)'
+                      }}>
+                        {vMap.iso_novelty?.status || 'nominal'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                      <span style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                        {((vMap.iso_novelty?.current ?? (activeDrift?.iso_anomaly_rate || 0)) * 100).toFixed(1)}%
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>/ 20.0%</span>
+                    </div>
+                    <div style={{ width: '100%', height: '6px', background: 'var(--surface-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${Math.min(100, ((vMap.iso_novelty?.current ?? (activeDrift?.iso_anomaly_rate || 0)) / 0.20) * 100)}%`,
+                        height: '100%',
+                        background: vMap.iso_novelty?.status === 'breached' ? 'var(--danger-color)' : vMap.iso_novelty?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)',
+                      }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)' }}>
+                      <span>Baseline: 10%</span>
+                      <span>Cutoff: &gt;20%</span>
+                    </div>
+                  </div>
+
+                  {/* Vector 4: Analyst FP Feedback */}
+                  <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>Analyst FP Feedback</span>
+                      <span style={{
+                        fontSize: '9px', padding: '1px 5px', borderRadius: '3px', fontWeight: 600, textTransform: 'uppercase',
+                        background: vMap.false_positive?.status === 'breached' ? 'var(--danger-bg)' : vMap.false_positive?.status === 'warning' ? 'var(--warning-bg)' : 'var(--success-bg)',
+                        color: vMap.false_positive?.status === 'breached' ? 'var(--danger-color)' : vMap.false_positive?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)'
+                      }}>
+                        {vMap.false_positive?.status || 'nominal'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                      <span style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                        {((vMap.false_positive?.current ?? (activeDrift?.xgb_fp_rate || 0)) * 100).toFixed(1)}%
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>/ 15.0%</span>
+                    </div>
+                    <div style={{ width: '100%', height: '6px', background: 'var(--surface-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${Math.min(100, ((vMap.false_positive?.current ?? (activeDrift?.xgb_fp_rate || 0)) / 0.15) * 100)}%`,
+                        height: '100%',
+                        background: vMap.false_positive?.status === 'breached' ? 'var(--danger-color)' : vMap.false_positive?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)',
+                      }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)' }}>
+                      <span>Baseline: 3%</span>
+                      <span>Cutoff: &gt;15%</span>
+                    </div>
+                  </div>
+
+                  {/* Vector 5: CRS Anomaly Elevation */}
+                  <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>CRS Score Elevation</span>
+                      <span style={{
+                        fontSize: '9px', padding: '1px 5px', borderRadius: '3px', fontWeight: 600, textTransform: 'uppercase',
+                        background: vMap.crs_anomaly?.status === 'breached' ? 'var(--danger-bg)' : vMap.crs_anomaly?.status === 'warning' ? 'var(--warning-bg)' : 'var(--success-bg)',
+                        color: vMap.crs_anomaly?.status === 'breached' ? 'var(--danger-color)' : vMap.crs_anomaly?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)'
+                      }}>
+                        {vMap.crs_anomaly?.status || 'nominal'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                      <span style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                        {((vMap.crs_anomaly?.current ?? 0) * 100).toFixed(1)}%
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>/ 25.0%</span>
+                    </div>
+                    <div style={{ width: '100%', height: '6px', background: 'var(--surface-subtle)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${Math.min(100, ((vMap.crs_anomaly?.current ?? 0) / 0.25) * 100)}%`,
+                        height: '100%',
+                        background: vMap.crs_anomaly?.status === 'breached' ? 'var(--danger-color)' : vMap.crs_anomaly?.status === 'warning' ? 'var(--warning-color)' : 'var(--success-color)',
+                      }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)' }}>
+                      <span>Baseline: 8%</span>
+                      <span>Cutoff: &gt;25%</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Top Drifting Endpoints & Breach Reasons Row */}
+                {(activeDrift?.reasons?.length > 0 || endpoints.length > 0) && (
+                  <div style={{ display: 'grid', gridTemplateColumns: activeDrift?.reasons?.length > 0 && endpoints.length > 0 ? '1fr 1fr' : '1fr', gap: '12px', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
+                    {activeDrift?.reasons?.length > 0 && (
+                      <div style={{ background: 'var(--danger-bg)', border: '1px solid rgba(255, 69, 58, 0.2)', borderRadius: '6px', padding: '10px 14px' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--danger-color)', marginBottom: '4px' }}>
+                          Breach Triggers Detected:
+                        </div>
+                        <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: 'var(--text-primary)' }}>
+                          {activeDrift.reasons.map((r, i) => (
+                            <li key={i}>{r}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {endpoints.length > 0 && (
+                      <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '10px 14px' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                          Top Drifting URIs by Average Threat Score:
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {endpoints.map((ep, i) => (
+                            <span key={i} style={{
+                              fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
+                              background: 'var(--surface-subtle)', border: '1px solid var(--border-color)',
+                              fontFamily: 'var(--font-mono)', color: 'var(--text-primary)',
+                              display: 'inline-flex', alignItems: 'center', gap: '6px'
+                            }}>
+                              <span>{ep.uri}</span>
+                              <strong style={{ color: ep.avg_threat > 0.6 ? 'var(--danger-color)' : 'var(--warning-color)' }}>
+                                {ep.avg_threat.toFixed(2)}
+                              </strong>
+                              <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>({ep.count})</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Drift Monitoring History & Automated Retraining Audit Row (Phase 3.3 & 3.4) */}
           <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="card-title">
               <AlertTriangleIcon size={18} color="var(--accent-color)" />
-              Drift Monitoring
-              <HelpText>Checks telemetry from the last 24h against drift thresholds (avg threat score, false-positive rate, anomaly rate) every few hours. A breach auto-triggers a retrain, tracked in the console below.</HelpText>
+              Drift Check Telemetry History
+              <HelpText>Periodic and on-demand drift evaluations. Click any row to inspect its multi-vector metrics in the profiling panel above.</HelpText>
             </div>
-            <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', maxHeight: '340px' }}>
+            <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', maxHeight: '320px' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>
@@ -1126,22 +1415,36 @@ export default function MLAnalytics() {
                 </thead>
                 <tbody>
                   {driftHistory.length > 0 ? (
-                    driftHistory.map((d) => (
-                      <tr key={d.id} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
-                        <td style={{ padding: '10px', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>{formatLocalTime(d.timestamp)}</td>
-                        <td style={{ padding: '10px', textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{d.total_requests?.toLocaleString()}</td>
-                        <td style={{ padding: '10px', textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{d.avg_threat_score?.toFixed(3)}</td>
-                        <td style={{ padding: '10px', textAlign: 'right' }} title={d.reasons?.join('; ') || ''}>
-                          <span style={{
-                            fontSize: '10px', padding: '1px 6px', borderRadius: '3px',
-                            background: d.drift_detected ? 'var(--danger-bg)' : 'var(--success-bg)',
-                            color: d.drift_detected ? 'var(--danger-color)' : 'var(--success-color)'
-                          }}>
-                            {d.drift_detected ? 'Drift → Retrain' : 'Stable'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
+                    driftHistory.map((d) => {
+                      const isSelected = selectedDriftReport?.id === d.id;
+                      return (
+                        <tr
+                          key={d.id}
+                          onClick={() => setSelectedDriftReport(d)}
+                          style={{
+                            borderBottom: '1px solid var(--border-subtle)',
+                            color: 'var(--text-primary)',
+                            cursor: 'pointer',
+                            background: isSelected ? 'var(--surface-subtle)' : 'transparent',
+                          }}
+                        >
+                          <td style={{ padding: '10px', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                            {formatLocalTime(d.timestamp)}
+                          </td>
+                          <td style={{ padding: '10px', textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{d.total_requests?.toLocaleString()}</td>
+                          <td style={{ padding: '10px', textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{d.avg_threat_score?.toFixed(3)}</td>
+                          <td style={{ padding: '10px', textAlign: 'right' }} title={d.reasons?.join('; ') || ''}>
+                            <span style={{
+                              fontSize: '10px', padding: '1px 6px', borderRadius: '3px',
+                              background: d.drift_detected ? 'var(--danger-bg)' : 'var(--success-bg)',
+                              color: d.drift_detected ? 'var(--danger-color)' : 'var(--success-color)'
+                            }}>
+                              {d.drift_detected ? 'Drift Breach' : 'Stable'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td colSpan="4" style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)' }}>No drift checks recorded yet.</td>
@@ -1152,12 +1455,83 @@ export default function MLAnalytics() {
             </div>
           </div>
 
+          {/* Automated Retraining Audit Trail (Phase 3.4) */}
+          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div className="card-title">
+              <Calendar size={18} color="var(--accent-color)" />
+              Automated Retraining Execution History
+              <HelpText>Audit log of model retraining runs triggered manually, via drift breaches, or via scheduled intervals.</HelpText>
+            </div>
+            <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', maxHeight: '320px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>
+                    <th style={{ padding: '10px' }}>Executed</th>
+                    <th style={{ padding: '10px' }}>Trigger</th>
+                    <th style={{ padding: '10px', textAlign: 'center' }}>Duration</th>
+                    <th style={{ padding: '10px', textAlign: 'center' }}>Accuracy</th>
+                    <th style={{ padding: '10px', textAlign: 'right' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {retrainHistory.length > 0 ? (
+                    retrainHistory.map((rh) => (
+                      <tr key={rh.id} style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
+                        <td style={{ padding: '10px', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                          {formatLocalTime(rh.timestamp)}
+                        </td>
+                        <td style={{ padding: '10px' }}>
+                          <span style={{
+                            fontSize: '10px', padding: '1px 6px', borderRadius: '3px',
+                            background: rh.trigger_type?.startsWith('drift') ? 'var(--warning-bg)' : rh.trigger_type?.startsWith('scheduled') ? 'var(--surface-subtle)' : 'var(--bg-tertiary)',
+                            color: rh.trigger_type?.startsWith('drift') ? 'var(--warning-color)' : 'var(--text-primary)',
+                            border: '1px solid var(--border-subtle)',
+                          }} title={rh.trigger_details || ''}>
+                            {rh.trigger_type === 'drift_breach' ? 'Drift Breach' : rh.trigger_type === 'manual' ? 'Manual' : rh.trigger_type}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>
+                          {rh.duration_seconds ? `${rh.duration_seconds.toFixed(1)}s` : 'N/A'}
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>
+                          {rh.accuracy ? `${(rh.accuracy * 100).toFixed(1)}%` : 'N/A'}
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'right' }}>
+                          <span style={{
+                            fontSize: '10px', padding: '1px 6px', borderRadius: '3px',
+                            background: rh.status === 'success' ? 'var(--success-bg)' : 'var(--danger-bg)',
+                            color: rh.status === 'success' ? 'var(--success-color)' : 'var(--danger-color)',
+                          }}>
+                            {rh.status === 'success' ? 'Success' : 'Failed'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="5" style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)' }}>
+                        No execution records logged yet. Retraining history will populate after the next training run.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {/* Retrainer Console Terminal */}
           <div className="chart-card glass-panel" style={{ gridColumn: 'span 12', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-              <div className="card-title" style={{ marginBottom: 0 }}>
-                <Activity size={18} color="var(--accent-color)" />
-                ML Retrainer Console Log
+              <div>
+                <div className="card-title" style={{ marginBottom: '2px' }}>
+                  <Activity size={18} color="var(--accent-color)" />
+                  ML Retrainer Console Log
+                </div>
+                {retrainStatus.trigger_details && (
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    Trigger reason: <strong style={{ color: 'var(--text-primary)' }}>{retrainStatus.trigger_details}</strong>
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Status:</span>

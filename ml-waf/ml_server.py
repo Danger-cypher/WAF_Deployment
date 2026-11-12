@@ -418,7 +418,9 @@ retrain_state = {
     "status": "idle",
     "start_time": None,
     "end_time": None,
-    "error": None
+    "error": None,
+    "trigger_type": "manual",
+    "trigger_details": ""
 }
 # Guards the check-then-act on retrain_state["status"] shared between the
 # manual /retrain endpoint and the drift-triggered auto-retrain path.
@@ -426,7 +428,70 @@ retrain_lock = threading.Lock()
 RETRAIN_TIMEOUT_SECONDS = int(os.environ.get("RETRAIN_TIMEOUT_SECONDS", "1800"))
 
 
-def _try_claim_retrain_slot() -> bool:
+def init_retrain_table():
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retrain_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                trigger_type TEXT NOT NULL,
+                trigger_details TEXT,
+                status TEXT NOT NULL,
+                duration_seconds REAL,
+                accuracy REAL,
+                sample_count INTEGER,
+                error_message TEXT
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to initialize retrain_history table: {e}")
+
+init_retrain_table()
+
+
+def _save_retrain_history(
+    trigger_type: str,
+    trigger_details: str,
+    status: str,
+    duration_seconds: float,
+    accuracy: float = None,
+    sample_count: int = None,
+    error_message: str = None,
+):
+    try:
+        init_retrain_table()
+        conn = sqlite3.connect(DB_PATH, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute(
+            """
+            INSERT INTO retrain_history
+                (timestamp, trigger_type, trigger_details, status, duration_seconds, accuracy, sample_count, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.utcnow().isoformat(),
+                trigger_type,
+                trigger_details,
+                status,
+                round(duration_seconds, 2),
+                accuracy,
+                sample_count,
+                error_message,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to persist retrain history: {e}")
+
+
+def _try_claim_retrain_slot(trigger_type: str = "manual", trigger_details: str = "") -> bool:
     """Atomically claims the retrain slot. Returns False if one is already
     running, so callers on either path never launch retrain.sh twice."""
     with retrain_lock:
@@ -435,14 +500,17 @@ def _try_claim_retrain_slot() -> bool:
         retrain_state["status"] = "running"
         retrain_state["error"] = None
         retrain_state["start_time"] = datetime.now().isoformat()
+        retrain_state["trigger_type"] = trigger_type
+        retrain_state["trigger_details"] = trigger_details
         return True
 
 
-def run_retrain_subprocess():
+def run_retrain_subprocess(trigger_type: str = "manual", trigger_details: str = ""):
     """Runs retrain.sh. The caller must have already claimed the retrain
     slot via _try_claim_retrain_slot()."""
     global retrain_state
     import subprocess
+    start_ts = time.time()
     try:
         # retrain.sh already tee's everything (its own log() calls, plus
         # train_iso.py/train_xgb.py's stdout) into logs/retrain.log, so
@@ -483,45 +551,129 @@ def run_retrain_subprocess():
         retrain_state["error"] = str(e)
     finally:
         retrain_state["end_time"] = datetime.now().isoformat()
+        duration = time.time() - start_ts
+        acc = None
+        samples = None
+        try:
+            if os.path.exists(META_PATH):
+                with open(META_PATH, "r") as f:
+                    meta = json.load(f)
+                    acc = meta.get("xgboost", {}).get("accuracy")
+                    samples = meta.get("xgboost", {}).get("sample_count")
+        except Exception:
+            pass
+
+        _save_retrain_history(
+            trigger_type=trigger_type,
+            trigger_details=trigger_details,
+            status=retrain_state["status"],
+            duration_seconds=duration,
+            accuracy=acc,
+            sample_count=samples,
+            error_message=retrain_state["error"],
+        )
+        try:
+            from threat_score import _get_redis
+            r = _get_redis()
+            if r:
+                r.set("waf:ml:last_retrain_timestamp", datetime.utcnow().isoformat())
+        except Exception:
+            pass
 
 
 # ──────────────────────────────────────────────────────────────
-#  Drift monitoring — periodic in-process scheduler
+#  Drift monitoring & Automated Retraining Scheduler
 # ──────────────────────────────────────────────────────────────
-# drift_monitor.py existed in the codebase but nothing ever invoked it: no
-# cron entry, no scheduler, and it imported opensearchpy (not installed,
-# and no OpenSearch service exists in this stack) so it would have crashed
-# even if something had tried. Wired up here as a daemon thread instead of
-# a host cron job, since retrain.sh already assumes it's running inside
-# this container (writes to ./logs, reloads via localhost:9000/reload).
 DRIFT_CHECK_INTERVAL_SECONDS = int(os.environ.get("DRIFT_CHECK_INTERVAL_HOURS", "6")) * 3600
 
 
 def _on_drift_detected(reasons: list):
-    """Routes an auto-detected drift event through the same retrain_state
-    tracking as the manual /retrain endpoint, so the Admin UI's retrain
-    console reflects auto-triggered runs too and the two paths can't race."""
-    if not _try_claim_retrain_slot():
+    """Routes an auto-detected drift event through the retrain slot, respecting tuning schedule."""
+    import threat_score
+    tuning = threat_score.get_tuning_config()
+    schedule = tuning.get("auto_retrain_schedule", "weekly")
+    if schedule == "disabled":
+        logger.warning(
+            f"Drift detected ({', '.join(reasons)}) but automated retraining is disabled "
+            f"by policy (auto_retrain_schedule='disabled'). Retraining skipped."
+        )
+        return
+
+    reason_str = "; ".join(reasons)
+    if not _try_claim_retrain_slot(trigger_type="drift_breach", trigger_details=f"Drift breach: {reason_str}"):
         logger.info(
-            f"Drift detected ({', '.join(reasons)}) but a retrain is already "
+            f"Drift detected ({reason_str}) but a retrain is already "
             f"in progress — skipping this cycle."
         )
         return
-    logger.warning(f"Drift-triggered retrain starting. Reasons: {', '.join(reasons)}")
-    run_retrain_subprocess()
+    logger.warning(f"Drift-triggered retrain starting. Reasons: {reason_str}")
+    run_retrain_subprocess(trigger_type="drift_breach", trigger_details=f"Drift breach: {reason_str}")
+
+
+def _check_and_run_scheduled_retrain():
+    """Checks whether a scheduled periodic retrain (daily, weekly, monthly) is due."""
+    try:
+        import threat_score
+        tuning = threat_score.get_tuning_config()
+        schedule = tuning.get("auto_retrain_schedule", "weekly")
+        if schedule in ("disabled", "drift_only"):
+            return
+
+        r = threat_score._get_redis()
+        last_str = r.get("waf:ml:last_retrain_timestamp") if r else None
+        now = datetime.utcnow()
+        if last_str:
+            try:
+                last_dt = datetime.fromisoformat(last_str)
+                elapsed_seconds = (now - last_dt).total_seconds()
+            except Exception:
+                elapsed_seconds = float("inf")
+        else:
+            elapsed_seconds = float("inf")
+
+        interval_seconds = float("inf")
+        if schedule == "daily":
+            interval_seconds = 86400  # 24 hours
+        elif schedule == "weekly":
+            interval_seconds = 7 * 86400  # 7 days
+        elif schedule == "monthly":
+            interval_seconds = 30 * 86400  # 30 days
+
+        if elapsed_seconds >= interval_seconds:
+            trigger_title = f"{schedule.capitalize()} schedule ({elapsed_seconds / 3600:.1f}h elapsed)"
+            if not _try_claim_retrain_slot(trigger_type=f"scheduled_{schedule}", trigger_details=trigger_title):
+                logger.info(f"Scheduled retrain ({schedule}) due, but a retrain is already running.")
+                return
+            logger.info(f"Triggering scheduled retraining: {trigger_title}")
+            threading.Thread(
+                target=run_retrain_subprocess,
+                kwargs={"trigger_type": f"scheduled_{schedule}", "trigger_details": trigger_title},
+                daemon=True,
+            ).start()
+    except Exception as e:
+        logger.error(f"Error checking scheduled retrain: {e}")
 
 
 def _periodic_drift_check_loop():
     logger.info(
-        f"Drift monitor started — checking every "
+        f"Drift & retrain scheduler started — checking drift every "
         f"{DRIFT_CHECK_INTERVAL_SECONDS / 3600:.1f}h."
     )
+    last_drift_check = 0.0
     while True:
-        time.sleep(DRIFT_CHECK_INTERVAL_SECONDS)
-        try:
-            drift_monitor.monitor_drift(on_drift_detected=_on_drift_detected)
-        except Exception as e:
-            logger.error(f"Periodic drift check failed: {e}")
+        now_ts = time.time()
+        # Periodic check for scheduled calendar retrain every 10 minutes
+        _check_and_run_scheduled_retrain()
+
+        # Run drift monitor every DRIFT_CHECK_INTERVAL_SECONDS
+        if now_ts - last_drift_check >= DRIFT_CHECK_INTERVAL_SECONDS:
+            last_drift_check = now_ts
+            try:
+                drift_monitor.monitor_drift(on_drift_detected=_on_drift_detected)
+            except Exception as e:
+                logger.error(f"Periodic drift check failed: {e}")
+
+        time.sleep(600)  # Check scheduled conditions every 10 minutes
 
 
 threading.Thread(target=_periodic_drift_check_loop, daemon=True).start()
@@ -533,39 +685,51 @@ def get_drift_history_endpoint():
     return {"data": drift_monitor.get_drift_history(limit=50)}
 
 
+@app.post("/drift/check", dependencies=[Depends(verify_internal_key)])
+def run_drift_check_endpoint():
+    """Runs on-demand drift validation across latest telemetry."""
+    report = drift_monitor.monitor_drift(on_drift_detected=_on_drift_detected, force_latest=True)
+    return {"status": "success", "report": report}
+
+
+@app.get("/retrain/history", dependencies=[Depends(verify_internal_key)])
+def get_retrain_history_endpoint(limit: int = 20):
+    """Recent model retraining executions."""
+    if not os.path.exists(DB_PATH):
+        return {"data": []}
+    try:
+        init_retrain_table()
+        conn = sqlite3.connect(DB_PATH, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM retrain_history ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        conn.close()
+        return {"data": [dict(r) for r in rows]}
+    except Exception as e:
+        logger.error(f"Failed to fetch retrain history: {e}")
+        return {"data": []}
+
+
 @app.post("/retrain", dependencies=[Depends(verify_internal_key)])
 def trigger_retrain(background_tasks: BackgroundTasks):
     """Triggers the model retraining pipeline asynchronously."""
-    if not _try_claim_retrain_slot():
+    if not _try_claim_retrain_slot(trigger_type="manual", trigger_details="Triggered manually via Admin UI"):
         return {"status": "running", "message": "Retraining is already in progress"}
 
-    background_tasks.add_task(run_retrain_subprocess)
+    background_tasks.add_task(run_retrain_subprocess, trigger_type="manual", trigger_details="Triggered manually via Admin UI")
     return {"status": "success", "message": "Retraining triggered successfully"}
+
 
 @app.get("/retrain/status", dependencies=[Depends(verify_internal_key)])
 def get_retrain_status():
     """Returns the current retraining pipeline status and a short tail of
-    the training log file.
-
-    Kept deliberately small (previously the whole file, up to 20000 chars
-    of it) — this endpoint is polled every few seconds by the dashboard's
-    Management tab, and that dashboard has no DNS name so it's proxied
-    through the same WAF/CRS pipeline as any protected app. A large raw
-    dump of retrain.sh/sklearn output routinely matched CRS's generic
-    "PHP Information Leakage" response-body rule (953100) — real incident,
-    2026-09-04: repeated 403s on this exact endpoint fed the auto-
-    reputation repeat-offender tier and auto-blacklisted the admin's own
-    IP. A short tail is both cheaper to ship every poll and far less
-    likely to contain a false-positive phrase match.
-    """
+    the training log file."""
     log_path = os.path.join(BASE_DIR, "logs/retrain.log")
     logs = ""
     TAIL_BYTES = 4000
     if os.path.exists(log_path):
         try:
-            # Seek directly to the tail instead of reading the whole file
-            # (already 80KB+ and only grows with every retrain run) just
-            # to slice it afterward.
             with open(log_path, "rb") as f:
                 f.seek(0, os.SEEK_END)
                 size = f.tell()
@@ -582,7 +746,9 @@ def get_retrain_status():
         "start_time": retrain_state["start_time"],
         "end_time": retrain_state["end_time"],
         "error": retrain_state["error"],
-        "logs": logs
+        "trigger_type": retrain_state.get("trigger_type", "manual"),
+        "trigger_details": retrain_state.get("trigger_details", ""),
+        "logs": logs,
     }
 
 @app.get("/models/backups", dependencies=[Depends(verify_internal_key)])

@@ -276,6 +276,17 @@ async def rollback_ml_model(payload: RollbackPayload, current_user: TokenData = 
 async def get_ml_drift_history(current_user: TokenData = Depends(require_any_role)):
     return await _ml_api_request("GET", "/drift/history")
 
+@router.post("/ml/drift-check")
+async def trigger_ml_drift_check(current_user: TokenData = Depends(require_admin)):
+    return await _ml_api_request("POST", "/drift/check")
+
+@router.get("/ml/retrain/history")
+async def get_ml_retrain_history(
+    limit: int = Query(20, ge=1, le=100),
+    current_user: TokenData = Depends(require_any_role)
+):
+    return await _ml_api_request("GET", f"/retrain/history?limit={limit}")
+
 @router.get("/ml/feature-importance")
 async def get_ml_feature_importance(current_user: TokenData = Depends(require_any_role)):
     return await _ml_api_request("GET", "/models/feature-importance")

@@ -85,3 +85,32 @@ async def test_simulate_ml_tuning_returns_expected_decision():
     sim_req.tuning.block_threshold = 0.70
     res_block = await simulate_ml_tuning(sim_req, user)
     assert res_block["decision"] == "block"
+
+
+@pytest.mark.asyncio
+async def test_ml_drift_check_and_retrain_history_routes(monkeypatch):
+    from app.routes.ml import trigger_ml_drift_check, get_ml_retrain_history
+    import app.routes.ml as ml_routes
+
+    mock_calls = []
+
+    async def mock_ml_api_request(method, path, **kwargs):
+        mock_calls.append((method, path))
+        if path == "/drift/check":
+            return {"status": "success", "report": {"id": 1, "drift_detected": False}}
+        elif path.startswith("/retrain/history"):
+            return {"data": [{"id": 1, "trigger_type": "manual", "status": "success"}]}
+        return {"status": "ok"}
+
+    monkeypatch.setattr(ml_routes, "_ml_api_request", mock_ml_api_request)
+
+    admin_user = TokenData(username="admin", role="admin")
+    drift_res = await trigger_ml_drift_check(admin_user)
+    assert drift_res["status"] == "success"
+    assert ("POST", "/drift/check") in mock_calls
+
+    history_res = await get_ml_retrain_history(limit=10, current_user=admin_user)
+    assert len(history_res["data"]) == 1
+    assert history_res["data"][0]["trigger_type"] == "manual"
+    assert ("GET", "/retrain/history?limit=10") in mock_calls
+

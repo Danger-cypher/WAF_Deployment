@@ -1890,6 +1890,29 @@ export async function getMLDriftHistory() {
   }
 }
 
+export async function runMLDriftCheck() {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/drift-check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to trigger ML drift check:", error);
+    throw error;
+  }
+}
+
+export async function getMLRetrainHistory(limit = 20) {
+  try {
+    const response = await fetch(`${BASE_URL}/ml/retrain/history?limit=${limit}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch ML retrain history:", error);
+    throw error;
+  }
+}
+
 export async function getMLFeatureImportance() {
   try {
     const response = await fetch(`${BASE_URL}/ml/feature-importance`, { cache: 'no-store' });
