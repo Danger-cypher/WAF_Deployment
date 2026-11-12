@@ -29,6 +29,7 @@ from app.routes import (
     ws,
     auto_learning as auto_learning_route,
     siem,
+    reports,
 )
 from app.services.log_ingestor import backfill_logs, start_ingestor, start_ingestor_tasks
 from app.services.log_retention_service import start_log_retention_service
@@ -167,6 +168,10 @@ async def lifespan(app: FastAPI):
     # good_bot_service.py for why this exists.
     from app.services.good_bot_service import start_good_bot_service
     good_bot_task = asyncio.create_task(start_good_bot_service())
+
+    # Start automated compliance & executive report delivery scheduler
+    from app.services.report_service import start_report_scheduler
+    start_report_scheduler()
 
     # Start the heartbeat watchdog — checks whether the background tasks
     # above are actually still cycling, and alerts on the transition into
@@ -510,6 +515,7 @@ app.include_router(api_keys.router, tags=["API Keys"], dependencies=csrf_deps)
 app.include_router(virtual_patches.router, tags=["Virtual Patches"], dependencies=csrf_deps)
 app.include_router(auto_learning_route.router, tags=["Auto-Learning"], dependencies=csrf_deps)
 app.include_router(siem.router, tags=["SIEM Export"], dependencies=csrf_deps)
+app.include_router(reports.router, tags=["Reports"], dependencies=csrf_deps)
 # No csrf_deps: the WebSocket handshake has no Request object for the
 # double-submit CSRF check to inspect. Auth is instead done inside the
 # handler itself by reading the session cookie directly (see routes/ws.py).

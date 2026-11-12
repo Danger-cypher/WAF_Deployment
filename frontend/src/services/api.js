@@ -2790,3 +2790,75 @@ export async function downloadBackup(backupId, filename) {
   link.remove();
   window.URL.revokeObjectURL(url);
 }
+
+// ---------------------------------------------------------------------------
+// Compliance & Scheduled Security Reports (Phase 4)
+// ---------------------------------------------------------------------------
+export async function getExecutiveReportSummary(hours = 24, timeframe = '24h') {
+  try {
+    const response = await fetch(`${BASE_URL}/reports/executive-summary?hours=${hours}&timeframe=${timeframe}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch executive report summary:", error);
+    throw error;
+  }
+}
+
+export async function getReportSchedules() {
+  try {
+    const response = await fetch(`${BASE_URL}/reports/schedules`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch report schedules:", error);
+    throw error;
+  }
+}
+
+export async function createReportSchedule(data) {
+  try {
+    const response = await fetch(`${BASE_URL}/reports/schedules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to save report schedule:", error);
+    throw error;
+  }
+}
+
+export async function deleteReportSchedule(id) {
+  try {
+    const response = await fetch(`${BASE_URL}/reports/schedules/${id}`, { method: 'DELETE' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to delete report schedule:", error);
+    throw error;
+  }
+}
+
+export async function getReportDeliveryHistory(limit = 50) {
+  try {
+    const response = await fetch(`${BASE_URL}/reports/history?limit=${limit}`, { cache: 'no-store' });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to fetch report delivery history:", error);
+    throw error;
+  }
+}
+
+export async function dispatchReportNow(data) {
+  try {
+    const response = await fetch(`${BASE_URL}/reports/dispatch-now`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return await handleResponse(response);
+  } catch (error) {
+    console.error("Failed to dispatch report now:", error);
+    throw error;
+  }
+}
+
