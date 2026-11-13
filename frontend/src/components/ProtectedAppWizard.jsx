@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, Server, Lock, Globe, CheckCircle, AlertTriangle, ChevronRight, Copy, Check, ExternalLink, RefreshCw, Activity } from 'lucide-react';
 import {
@@ -9,6 +9,8 @@ import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import { FormField, TextInput, SelectInput, Checkbox } from './ui';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null }) => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -18,7 +20,11 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
   const [dnsStatus, setDnsStatus] = useState('pending'); // pending, checking, success, failed
   const [copied, setCopied] = useState(false);
   const { toast, showToast } = useToast();
+  const wizardRef = useRef(null);
+
   useEscapeToClose(onClose, isOpen);
+  useBodyScrollLock(isOpen);
+  useFocusTrap(wizardRef, isOpen);
 
   const emptyFormData = {
     appName: '',
@@ -44,13 +50,6 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
   const [touched, setTouched] = useState({});
 
   const [wafServerIP, setWafServerIP] = useState('Loading...');
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
-  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -258,7 +257,7 @@ const ProtectedAppWizard = ({ isOpen, onClose, onComplete, existingApp = null })
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="protected-app-wizard" role="dialog" aria-modal="true" aria-labelledby="app-wizard-title" onClick={(e) => e.stopPropagation()}>
+      <div ref={wizardRef} className="protected-app-wizard" role="dialog" aria-modal="true" aria-labelledby="app-wizard-title" onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
         <div className="wizard-header">

@@ -8,14 +8,14 @@
 ═══════════════════════════════════════════════════════════ */
 
 :root {
-  /* Core Backgrounds — Warm Slate (not pure black) */
-  --bg-void:       #070a0f;
-  --bg-primary:    #0a0d14;
-  --bg-secondary:  #0d1117;
-  --bg-tertiary:   #111827;
-  --bg-surface:    rgba(17, 24, 39, 0.8);
-  --bg-glass:      rgba(13, 17, 23, 0.75);
-  --bg-card:       #0f1623;
+  /* Core Backgrounds — Calm SOC Neutral Slate */
+  --bg-void:       #080b11;
+  --bg-primary:    #0a0e17;
+  --bg-secondary:  #0f1522;
+  --bg-tertiary:   #131b2c;
+  --bg-surface:    rgba(15, 21, 34, 0.85);
+  --bg-glass:      rgba(15, 21, 34, 0.75);
+  --bg-card:       #0e1420;
 
   /* Primary Accent — Indigo (professional SIEM standard) */
   --accent-color:  #818cf8;
@@ -148,6 +148,19 @@
   --radius-md:   8px;
   --radius-lg:   12px;
   --radius-pill: 999px;
+
+  /* Unified Z-Index System (Tokenized Scale) */
+  --z-base:       1;
+  --z-dropdown:   1000;
+  --z-sticky:     1100;
+  --z-sidebar:    1200;
+  --z-drawer:     1300;
+  --z-modal:      1400;
+  --z-dialog:     1500;
+  --z-toast:      1600;
+
+  /* Contrast tokens for text on accent backgrounds */
+  --accent-contrast: #070a0f;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -280,6 +293,9 @@
   --shadow-card:  0 1px 3px rgba(15, 23, 42, 0.04), 0 3px 12px rgba(15, 23, 42, 0.03);
   --shadow-hover: 0 4px 16px rgba(15, 23, 42, 0.06);
   --shadow-glow:  none;
+
+  /* Contrast tokens for text on accent backgrounds */
+  --accent-contrast: #ffffff;
 }
 
 /* ─── Reset ──────────────────────────────────────────────── */
@@ -1137,6 +1153,15 @@ body::before {
 .logs-table tbody tr:hover td:first-child {
   border-left: 2px solid var(--cyan-glow);
 }
+.logs-table tbody tr.focused-table-row td {
+  background: var(--accent-bg) !important;
+}
+.logs-table tbody tr.focused-table-row td:first-child {
+  border-left: 3px solid var(--accent-color) !important;
+}
+.logs-table tbody tr.focused-table-row {
+  outline: 1px solid var(--accent-border);
+}
 
 /* ─── Severity Badges ────────────────────────────────────── */
 .severity-badge {
@@ -1436,15 +1461,15 @@ body::before {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  /* Must be above sidebar (1000) and sidebar toggle (1100) */
-  z-index: 2000;
+  z-index: var(--z-modal, 1400);
   background: var(--overlay-bg);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 24px;
+  padding: clamp(12px, 3vw, 24px);
+  overscroll-behavior: contain;
 }
 .modal-content {
   background: var(--bg-secondary);
@@ -1755,14 +1780,21 @@ body::before {
 }
 
 /* Paranoia Selector */
-.paranoia-selector-wrapper { display: flex; gap: 12px; width: 100%; margin-top: 10px; }
+.paranoia-selector-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+  margin-top: 10px;
+}
 .paranoia-level-btn {
   cursor: pointer;
   text-align: left;
   background: var(--surface-subtle);
   border: 1px solid var(--glass-border);
   border-radius: 10px;
-  flex: 1;
+  flex: 1 1 min(100%, 140px);
+  min-width: min(100%, 130px);
   padding: 14px 16px;
   transition: all 0.3s ease;
   position: relative;
@@ -2006,14 +2038,14 @@ body::before {
   border-bottom: 1px solid var(--cyan-bg);
 }
 
-/* ─── Login Page (Streamlined Centered Sentinel Card) ─────────────────────── */
+/* ─── Login Page (Modern Split-Screen Enterprise SOC Portal) ─────────────── */
 .login-container {
   position: fixed;
   inset: 0;
   width: 100vw;
   height: 100vh;
   max-height: 100vh;
-  overflow: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -2022,6 +2054,7 @@ body::before {
   font-family: var(--font-body);
   user-select: none;
   z-index: 10;
+  -webkit-overflow-scrolling: touch;
 }
 
 :root[data-theme="light"] .login-container {
@@ -2221,22 +2254,285 @@ body::before {
   color: var(--accent-color);
 }
 
-/* ── Main Viewport Center Stage ────────────────────────── */
+/* ── Main Viewport Split-Screen Stage ────────────────────────── */
 .login-main-stage {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px 24px;
+  padding: 24px 32px;
   position: relative;
   z-index: 10;
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: none;
 }
 
-.login-main-stage::-webkit-scrollbar {
-  display: none;
+.login-split-container {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr);
+  gap: 52px;
+  max-width: 1160px;
+  width: 100%;
+  align-items: center;
+  margin: auto;
+}
+
+/* ── Left Column: Enterprise SOC Showcase & Telemetry ──────── */
+.login-hero-showcase {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  text-align: left;
+}
+
+.hero-kicker-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px;
+  width: fit-content;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-pill);
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.8px;
+}
+
+.kicker-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  box-shadow: 0 0 8px var(--accent-color);
+  animation: pulseGlow 1.8s ease-in-out infinite;
+}
+
+.hero-main-title {
+  font-family: var(--font-display);
+  font-size: clamp(26px, 3.2vw, 36px);
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1.18;
+  letter-spacing: -0.6px;
+  margin: 0;
+}
+
+:root[data-theme="dark"] .hero-main-title {
+  background: linear-gradient(180deg, #ffffff 15%, #94a3b8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.hero-main-description {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 520px;
+}
+
+/* ── High-Tech Animated Radar / Threat Visual ──────────────── */
+.hero-radar-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 20px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  margin-top: 4px;
+}
+
+:root[data-theme="light"] .hero-radar-card {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 10px 24px -8px rgba(15, 23, 42, 0.08);
+}
+
+.radar-canvas-container {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  flex-shrink: 0;
+}
+
+.radar-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.radar-scanner-sweep {
+  transform-origin: 100px 100px;
+  animation: radarRotate 4s linear infinite;
+}
+
+@keyframes radarRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.radar-center-shield {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.shield-icon-glow {
+  color: var(--accent-color);
+  filter: drop-shadow(0 0 10px var(--accent-glow));
+}
+
+.radar-ping-dot {
+  animation: radarPing 2s ease-in-out infinite alternate;
+}
+
+.radar-ping-dot-2 {
+  animation: radarPing 2.5s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes radarPing {
+  0% { opacity: 0.2; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1.2); }
+}
+
+.radar-telemetry-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.telemetry-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.telemetry-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+}
+
+.telemetry-value-active {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--success-color);
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+}
+
+.telemetry-submeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+/* ── Metrics Bento Grid ───────────────────────────────────── */
+.hero-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.metric-tile {
+  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+:root[data-theme="light"] .metric-tile {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.metric-tile:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.metric-number {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.5px;
+}
+
+.metric-title {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.metric-detail {
+  font-size: 11px;
+  color: var(--accent-color);
+  font-weight: 500;
+}
+
+:root[data-theme="light"] .metric-detail {
+  color: #4338ca;
+}
+
+/* ── Compliance Badges Row ────────────────────────────────── */
+.hero-compliance-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.compliance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+:root[data-theme="light"] .compliance-pill {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+/* ── Right Column: Authentication Card & Portal ────────────── */
+.login-auth-portal {
+  display: flex;
+  justify-content: center;
+  width: 100%;
 }
 
 .login-card-wrapper {
@@ -2249,20 +2545,20 @@ body::before {
 .login-form-card {
   width: 100%;
   padding: 30px 32px;
-  background: rgba(15, 22, 35, 0.78);
+  background: rgba(15, 22, 35, 0.88);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.5), 0 0 32px var(--accent-glow);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.55), 0 0 32px var(--accent-glow);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   position: relative;
   transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 :root[data-theme="light"] .login-form-card {
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.95);
   border-color: rgba(15, 23, 42, 0.12);
-  box-shadow: 0 20px 40px -12px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 20px 40px -12px rgba(15, 23, 42, 0.1), 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
 .login-card-header {
@@ -2592,15 +2888,12 @@ body::before {
   width: 100%;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: 12px;
+  padding: 10px 14px;
   background: var(--surface-subtle);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 12.5px;
-  font-weight: 500;
   text-decoration: none;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -2612,20 +2905,88 @@ body::before {
   color: #334155;
 }
 
+.login-sso-icon-box {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  color: var(--accent-color);
+  flex-shrink: 0;
+}
+
+.login-sso-text-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.login-sso-primary-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.login-sso-subtitle {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.2;
+}
+
+.sso-ext-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
 .login-sso-btn:hover {
   background: var(--surface-hover);
   border-color: var(--accent-border);
-  color: var(--accent-color);
+  transform: translateY(-1px);
 }
 
 :root[data-theme="light"] .login-sso-btn:hover {
   background: #f1f5f9;
   border-color: var(--accent-color);
-  color: var(--accent-color);
 }
 
-.sso-ext-icon {
-  opacity: 0.6;
+.login-sso-btn:hover .sso-ext-icon {
+  color: var(--accent-color);
+  transform: translate(2px, -2px);
+}
+
+.sso-providers-chips {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.sso-chip {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface-subtle);
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  letter-spacing: 0.3px;
+}
+
+:root[data-theme="light"] .sso-chip {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
 }
 
 /* ── Card Footer ───────────────────────────────────────── */
@@ -2714,6 +3075,122 @@ body::before {
   color: inherit;
   text-decoration: none;
   transition: color 0.2s ease;
+}
+
+/* ── Responsive Adaptations for Split Layout ───────────── */
+@media (max-width: 1024px) {
+  .login-main-stage {
+    padding: 20px 24px;
+    align-items: flex-start;
+  }
+
+  .login-split-container {
+    grid-template-columns: 1fr;
+    max-width: 480px;
+    gap: 24px;
+    padding-top: 12px;
+    padding-bottom: 24px;
+  }
+
+  .login-hero-showcase {
+    text-align: center;
+    align-items: center;
+  }
+
+  .hero-kicker-badge {
+    margin: 0 auto;
+  }
+
+  .hero-main-title {
+    font-size: 24px;
+  }
+
+  .hero-main-description {
+    max-width: 100%;
+    font-size: 13.5px;
+  }
+
+  .hero-radar-card {
+    display: none; /* Hide heavy radar on tablet/mobile to keep auth immediate */
+  }
+
+  .hero-metrics-grid {
+    width: 100%;
+    max-width: 440px;
+  }
+
+  .hero-compliance-row {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 640px) {
+  .login-main-stage {
+    padding: 12px 16px;
+  }
+
+  .login-split-container {
+    gap: 16px;
+    padding-top: 8px;
+    padding-bottom: 16px;
+  }
+
+  .hero-metrics-grid {
+    display: none; /* Keep mobile view ultra-focused on quick login */
+  }
+
+  .hero-compliance-row {
+    display: none;
+  }
+
+  .hero-main-title {
+    font-size: 20px;
+  }
+
+  .hero-main-description {
+    display: none;
+  }
+
+  .login-top-bar {
+    padding: 0 16px;
+  }
+
+  .login-status-indicator {
+    display: none; /* Conserve header space */
+  }
+
+  .login-form-card {
+    padding: 22px 18px;
+  }
+
+  .login-footer-bar {
+    height: auto;
+    padding: 12px 16px;
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
+
+  .footer-center {
+    display: none;
+  }
+
+  .footer-right {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-scanner-sweep {
+    animation: none;
+  }
+  .radar-ping-dot,
+  .radar-ping-dot-2,
+  .status-dot-pulse,
+  .kicker-pulse-dot {
+    animation: none;
+  }
 }
 
 .footer-dot {
@@ -2972,8 +3449,30 @@ body::before {
     margin-left: 0 !important;
     width: 100% !important;
     padding: 0 !important;
-    height: 100dvh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  .main-scroll-area {
+    height: calc(100dvh - 52px);
     overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px 16px 24px;
+  }
+  .app-footer {
+    position: static !important;
+    width: 100% !important;
+    padding: 14px 16px 24px !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+    text-align: center !important;
+  }
+  .app-footer .footer-left,
+  .app-footer .footer-center,
+  .app-footer .footer-right {
+    justify-content: center !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
   }
   .siem-topbar {
     padding: 0 16px;
@@ -3004,11 +3503,15 @@ body::before {
 }
 
 @media (width <= 480px) {
+  .density-toggle-group {
+    display: none !important;
+  }
   .siem-topbar {
     padding: 0 10px;
+    gap: 6px;
   }
   .siem-breadcrumb {
-    max-width: 115px;
+    max-width: clamp(80px, 26vw, 130px);
     font-size: 12px;
   }
   .siem-status-badge {
@@ -3021,6 +3524,78 @@ body::before {
   }
   .siem-topbar-right {
     gap: 6px;
+  }
+}
+
+@media (width <= 360px) {
+  .siem-breadcrumb {
+    display: none !important;
+  }
+}
+
+/* Responsive Grid Helper Classes */
+.col-span-12 { grid-column: span 12 !important; }
+.col-span-md-6 { grid-column: span 6; }
+.col-span-md-7 { grid-column: span 7; }
+.col-span-md-5 { grid-column: span 5; }
+@media (max-width: 768px) {
+  .col-span-md-6,
+  .col-span-md-7,
+  .col-span-md-5 {
+    grid-column: span 12 !important;
+  }
+}
+
+/* Minimum Touch Target Envelope on Touch Devices */
+@media (pointer: coarse), (max-width: 768px) {
+  .btn-sm,
+  .density-toggle-btn,
+  .report-action-btn,
+  .nav-item {
+    min-height: 40px;
+  }
+}
+
+/* Quick Action / Shortcut Buttons in Topbar */
+.siem-quick-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+.siem-quick-action-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+.siem-quick-action-btn kbd {
+  font-size: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 1px 4px;
+  color: var(--accent-color);
+}
+
+/* WCAG Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .pulse-dot {
+    animation: none !important;
   }
 }
 

@@ -4,6 +4,7 @@ import { Search, CornerDownLeft, ArrowUp, ArrowDown, Loader2 } from 'lucide-reac
 import { getRuleDetails } from '../services/api';
 import { getFlatNavItems } from '../navigation';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 const IP_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 const RULE_ID_PATTERN = /^\d{3,7}$/;
@@ -23,6 +24,7 @@ export default function CommandPalette({ isOpen, onClose, isAdmin, onNavigate, o
   const inputRef = useRef(null);
 
   useEscapeToClose(onClose, isOpen);
+  useBodyScrollLock(isOpen);
 
   useEffect(() => {
     if (isOpen) {
@@ -132,7 +134,6 @@ export default function CommandPalette({ isOpen, onClose, isAdmin, onNavigate, o
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Jump to a page, or search an IP / rule ID…"
-            aria-label="Command palette search"
             style={{
               flex: 1, background: 'transparent', border: 'none', outline: 'none',
               color: 'var(--text-primary)', fontSize: '14px', fontFamily: 'inherit',

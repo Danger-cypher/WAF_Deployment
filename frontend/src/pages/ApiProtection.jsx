@@ -628,7 +628,7 @@ export default function ApiProtection() {
       {/* Charts Section */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: '16px' }}>
         {/* Traffic Bands Chart */}
-        <div className="glass-panel chart-card" style={{ gridColumn: 'span 5', padding: '20px' }}>
+        <div className="glass-panel chart-card col-span-12 col-span-md-5" style={{ padding: '20px' }}>
           <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
             <ShieldCheck size={18} color="var(--success-color)" />
             <span>Traffic Classification Bands</span>
@@ -670,7 +670,7 @@ export default function ApiProtection() {
         </div>
 
         {/* Top Lists Card */}
-        <div className="glass-panel" style={{ gridColumn: 'span 7', padding: '20px', display: 'flex', flexDirection: 'column' }}>
+        <div className="glass-panel col-span-12 col-span-md-7" style={{ padding: '20px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <BarChart2 size={18} color="var(--sev-low)" />

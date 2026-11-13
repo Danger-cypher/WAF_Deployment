@@ -1,9 +1,12 @@
-import { useState, useEffect, Suspense, lazy } from 'react';
+import { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ShieldCheck, Activity, Menu, AlertCircle } from 'lucide-react';
+import { ShieldCheck, Activity, Menu, AlertCircle, X, Headphones, FileText, Keyboard } from 'lucide-react';
 import {
   getCurrentUser, logoutUser, markFalsePositive, updateFalsePositiveStatus, createExclusion,
 } from './services/api';
+import { useEscapeToClose } from './hooks/useEscapeToClose';
+import { useBodyScrollLock } from './hooks/useBodyScrollLock';
+import { useFocusTrap } from './hooks/useFocusTrap';
 
 import Login from './components/Login';
 import SsoCallback from './components/SsoCallback';
@@ -26,6 +29,7 @@ const ProtectedAppWizard = lazy(() => import('./components/ProtectedAppWizard'))
 const SecurityReports = lazy(() => import('./components/SecurityReports'));
 const UserManagement = lazy(() => import('./components/UserManagement'));
 const Profile = lazy(() => import('./components/Profile'));
+const KeyboardShortcutsModal = lazy(() => import('./components/KeyboardShortcutsModal'));
 
 const ThreatAnalytics = lazy(() => import('./pages/Overview'));
 const ProtectionSection = lazy(() => import('./pages/ProtectionSection'));
@@ -106,6 +110,7 @@ function App() {
   const [isAlertHistoryModalOpen, setIsAlertHistoryModalOpen] = useState(false);
   const [, setAdvancedInitialTab] = useState('false_positives');
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   // Set by the command palette when it resolves an IP/rule search to a
   // target tab — the target page reads it once as its initial search value
   // (via the initialSearch prop below) then calls onConsumeInitialSearch to
@@ -122,6 +127,12 @@ function App() {
   // straight to Settings > Activity Log instead of just General.
   const [pendingSettingsTab, setPendingSettingsTab] = useState(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [footerModal, setFooterModal] = useState(null); // 'support' | 'privacy' | null
+  const footerModalRef = useRef(null);
+
+  useEscapeToClose(() => setFooterModal(null), Boolean(footerModal));
+  useBodyScrollLock(Boolean(footerModal));
+  useFocusTrap(footerModalRef, Boolean(footerModal));
 
   // Wrapper that syncs tab state + URL together
   const setActiveTab = (tabId) => {
@@ -280,13 +291,19 @@ function App() {
     }
   }, [activeTab, userRole]);
 
-  // Command palette: Ctrl/Cmd+K from anywhere while authenticated.
+  // Global hotkeys: Ctrl/Cmd+K (Command Palette) and ? (Shortcuts Cheatsheet)
   useEffect(() => {
     if (!isAuthenticated) return;
     const handleKeyDown = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsPaletteOpen(true);
+      } else if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const tag = document.activeElement?.tagName;
+        if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && !document.activeElement?.isContentEditable) {
+          e.preventDefault();
+          setIsShortcutsOpen((prev) => !prev);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -411,6 +428,17 @@ function App() {
           </div>
           <div className="siem-topbar-right">
             <DensityToggle />
+            <button
+              type="button"
+              className="siem-quick-action-btn"
+              onClick={() => setIsShortcutsOpen(true)}
+              title="Keyboard Shortcuts (?)"
+              aria-label="View keyboard shortcuts"
+            >
+              <Keyboard size={13} />
+              <span>Shortcuts</span>
+              <kbd>?</kbd>
+            </button>
             {/* WAF Active status badge */}
             <div className="siem-status-badge active">
               <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--success-color)', boxShadow: '0 0 6px var(--success-glow)' }} />
@@ -604,6 +632,15 @@ function App() {
           onSearchRule={handlePaletteSearchRule}
         />
 
+        {isShortcutsOpen && (
+          <Suspense fallback={null}>
+            <KeyboardShortcutsModal
+              isOpen={isShortcutsOpen}
+              onClose={() => setIsShortcutsOpen(false)}
+            />
+          </Suspense>
+        )}
+
         <AnimatePresence>
           {globalSuccessMsg && (
             <motion.div
@@ -654,11 +691,95 @@ function App() {
       <div className="footer-right">
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--accent-color)' }}>v2.0.0-2026</span>
         <div className="footer-divider" />
-        <a href="#support">Support</a>
+        <button type="button" className="footer-link-btn" onClick={() => setFooterModal('support')}>Support</button>
         <div className="footer-divider" />
-        <a href="#privacy">Privacy Policy</a>
+        <button type="button" className="footer-link-btn" onClick={() => setFooterModal('privacy')}>Privacy Policy</button>
+        <div className="footer-divider" />
+        <button type="button" className="footer-link-btn" onClick={() => setIsShortcutsOpen(true)}>Shortcuts (?)</button>
       </div>
     </footer>
+
+    {/* Footer Info Modal (Support / Privacy) */}
+    <AnimatePresence>
+      {footerModal && (
+        <div className="modal-overlay" style={{ zIndex: 'var(--z-modal, 1400)' }} onClick={() => setFooterModal(null)}>
+          <motion.div
+            ref={footerModalRef}
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="footer-info-modal-title"
+            style={{ maxWidth: '520px', width: '92vw', padding: '24px' }}
+            onClick={(e) => e.stopPropagation()}
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+          >
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div id="footer-info-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {footerModal === 'support' ? (
+                  <>
+                    <Headphones size={18} color="var(--accent-color)" />
+                    <span>CyberSentinel Enterprise Support</span>
+                  </>
+                ) : (
+                  <>
+                    <FileText size={18} color="var(--accent-color)" />
+                    <span>Data Privacy & SOC Telemetry</span>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setFooterModal(null)}
+                aria-label="Close dialog"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ fontSize: '13.5px', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+              {footerModal === 'support' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <p>
+                    For incident escalation, false positive remediation escalations, or rule tuning guidance, contact the 24/7 Security Operations Center.
+                  </p>
+                  <div style={{ background: 'var(--surface-subtle)', padding: '12px 14px', borderRadius: '8px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div><strong>SOC Desk:</strong> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-color)' }}>soc@enterprise.internal</span></div>
+                    <div><strong>Hotline:</strong> <span style={{ fontFamily: 'var(--font-mono)' }}>+1 (800) 555-0199 (Tier 3 SecOps)</span></div>
+                    <div><strong>Node Cluster:</strong> <span style={{ fontFamily: 'var(--font-mono)' }}>CS-NODE-01 (Production Gateway)</span></div>
+                    <div><strong>SLA:</strong> Priority 1 (Critical Outage / Bypass): 15-minute response</div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <p>
+                    CyberSentinel WAF operates under strict on-premise zero-external-telemetry data governance.
+                  </p>
+                  <div style={{ background: 'var(--surface-subtle)', padding: '12px 14px', borderRadius: '8px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div>• <strong>Data Sovereignty:</strong> All inspect logs and telemetry remain inside local ClickHouse storage.</div>
+                    <div>• <strong>Payload Sanitization:</strong> Authentication headers, session cookies, and passwords are encrypted and redacted before indexing.</div>
+                    <div>• <strong>Regulatory Standards:</strong> Compliant with PCI-DSS v4.0 Req 10, SOC 2 Type II, and ISO/IEC 27001.</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setFooterModal(null)}
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
     </>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Users, Plus, Trash2, KeyRound, X, ShieldCheck, ShieldAlert, Power, Smartphone, Server, Monitor } from 'lucide-react';
 import { listUsers, createUser, updateUser, resetUserPassword, deleteUser, adminDisableUserMfa, getProtectedApps, getUserSessions, revokeUserSession } from '../services/api';
@@ -8,6 +8,8 @@ import Button from './Button';
 import { Checkbox, FormField, TextInput, SelectInput } from './ui';
 import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { usePagination } from '../hooks/usePagination';
 import Pagination from './Pagination';
 
@@ -23,10 +25,14 @@ const inputStyle = {
 };
 
 function ModalShell({ title, onClose, children }) {
+  const shellRef = useRef(null);
   useEscapeToClose(onClose, true);
+  useBodyScrollLock(true);
+  useFocusTrap(shellRef, true);
+
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="user-mgmt-modal-title" style={{ maxWidth: '420px' }} onClick={(e) => e.stopPropagation()}>
+      <div ref={shellRef} className="modal-content" role="dialog" aria-modal="true" aria-labelledby="user-mgmt-modal-title" style={{ maxWidth: '420px' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-title" id="user-mgmt-modal-title">{title}</div>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close">

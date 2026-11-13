@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Login from './Login';
@@ -16,6 +16,10 @@ beforeEach(() => {
     stroke: () => {},
   });
   vi.stubGlobal('fetch', vi.fn());
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 function fillAndSubmit(user, { username = 'admin', password = 'wrongpass' } = {}) {

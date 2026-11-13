@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ShieldAlert as AlertIcon, Globe, X, ShieldCheck, Copy, Check, ChevronUp, ChevronDown, Ban, ShieldOff } from 'lucide-react';
 import { formatLocalTime } from '../utils/helpers';
 import HighlightedJson from './JsonViewer';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { getLogExplain } from '../services/api';
 import Button from './ui/Button';
 
@@ -24,22 +26,11 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
   const [explainData, setExplainData] = useState(null);
   const [explainLoading, setExplainLoading] = useState(false);
   const [explainError, setExplainError] = useState('');
+  const drawerRef = useRef(null);
 
   useEscapeToClose(onClose, isOpen);
-
-  useEffect(() => {
-    if (!isOpen || !onNavigate) return;
-    const handleKeyDown = (e) => {
-      // Ignore navigation while focus is inside a text field (e.g. a future
-      // in-drawer search box) so arrow keys behave normally there.
-      const tag = document.activeElement?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (e.key === 'ArrowUp' && canGoPrev) { e.preventDefault(); onNavigate('prev'); }
-      else if (e.key === 'ArrowDown' && canGoNext) { e.preventDefault(); onNavigate('next'); }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onNavigate, canGoPrev, canGoNext]);
+  useBodyScrollLock(isOpen);
+  useFocusTrap(drawerRef, isOpen);
 
   useEffect(() => {
     if (copied) {
@@ -136,9 +127,33 @@ export default function LogDetailsModal({ isOpen, log, onClose, onMarkFalsePosit
     }
   };
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      if ((e.key === 'ArrowUp' || e.key === 'k') && onNavigate && canGoPrev) {
+        e.preventDefault();
+        onNavigate('prev');
+      } else if ((e.key === 'ArrowDown' || e.key === 'j') && onNavigate && canGoNext) {
+        e.preventDefault();
+        onNavigate('next');
+      } else if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        handleCopy();
+      } else if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey && onMarkFalsePositive && log) {
+        e.preventDefault();
+        onMarkFalsePositive(log);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onNavigate, canGoPrev, canGoNext, log, onMarkFalsePositive]);
+
   return createPortal(
     <div className="log-drawer-overlay" onClick={onClose}>
-      <div className="log-drawer" role="dialog" aria-modal="true" aria-labelledby="log-details-drawer-title" onClick={(e) => e.stopPropagation()}>
+      <div ref={drawerRef} className="log-drawer" role="dialog" aria-modal="true" aria-labelledby="log-details-drawer-title" onClick={(e) => e.stopPropagation()}>
         <div className="log-drawer-header">
           <div className="log-drawer-title" id="log-details-drawer-title">
             <AlertIcon size={18} color="var(--danger-color)" />

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Activity, ChevronLeft, ChevronRight, Code, FileText, Globe, Layers, Search, ShieldCheck } from 'lucide-react';
+import { Activity, ChevronLeft, ChevronRight, Code, FileText, Globe, Layers, Search, ShieldCheck, Target } from 'lucide-react';
 import { getLogs, getGroupedLogs, getGeneralSettings } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import LogDetailsModal from '../components/LogDetailsModal';
@@ -83,6 +83,9 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
   const [selectedLog, setSelectedLog] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedLogs, setExpandedLogs] = useState(new Set());
+  const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
+  const searchInputRef = useRef(null);
+  const focusedRowRef = useRef(null);
 
   // Whichever list the currently-open drawer's row came from (the flat
   // timeline, or one group's drill-down events) — lets Up/Down in
@@ -405,6 +408,68 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
     });
   }, [groupedLogs, sortField, sortOrder]);
 
+  // Auto-scroll focused row into view smoothly
+  useEffect(() => {
+    if (focusedRowIndex >= 0 && focusedRowRef.current) {
+      focusedRowRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [focusedRowIndex]);
+
+  // Analyst Triage Keyboard Navigation (j/k, Enter, f, x, e, /)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const tag = document.activeElement?.tagName;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.activeElement?.isContentEditable) {
+        return;
+      }
+      if (isModalOpen || selectedLog) return;
+
+      const list = viewMode === 'flat' ? sortedLogs : [];
+      if (!list.length) return;
+
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        setFocusedRowIndex((prev) => Math.min(prev + 1, list.length - 1));
+      } else if (e.key === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter') {
+        if (focusedRowIndex >= 0 && focusedRowIndex < list.length) {
+          e.preventDefault();
+          openLogDetails(list, focusedRowIndex);
+        }
+      } else if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey) {
+        if (focusedRowIndex >= 0 && focusedRowIndex < list.length) {
+          e.preventDefault();
+          onMarkFalsePositive?.(list[focusedRowIndex]);
+        }
+      } else if (e.key.toLowerCase() === 'x' && !e.ctrlKey && !e.metaKey) {
+        if (focusedRowIndex >= 0 && focusedRowIndex < list.length) {
+          e.preventDefault();
+          if (onCreateRule) onCreateRule(list[focusedRowIndex]);
+          else if (onCreateException) onCreateException(list[focusedRowIndex]);
+        }
+      } else if (e.key.toLowerCase() === 'e' && !e.ctrlKey && !e.metaKey) {
+        if (focusedRowIndex >= 0 && focusedRowIndex < list.length) {
+          e.preventDefault();
+          const rowId = list[focusedRowIndex].id || focusedRowIndex;
+          setExpandedLogs((prev) => {
+            const next = new Set(prev);
+            if (next.has(rowId)) next.delete(rowId);
+            else next.add(rowId);
+            return next;
+          });
+        }
+      } else if (e.key === '/') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [viewMode, sortedLogs, focusedRowIndex, isModalOpen, selectedLog, onMarkFalsePositive, onCreateRule, onCreateException]);
+
   const totalPages = Math.ceil((viewMode === 'grouped' ? groupedTotal : total) / size);
 
   const getSortIcon = (field) => {
@@ -432,8 +497,9 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
           <div className="search-input-wrapper">
             <Search size={14} color="var(--text-secondary)" style={{ position: 'absolute', left: '12px' }} />
             <input
+              ref={searchInputRef}
               type="text"
-              placeholder="Search IP, URI, rule..."
+              placeholder="Search IP, URI, rule... (/ to jump)"
               aria-label="Search events by IP, URI, or rule"
               className="search-input"
               value={search}
@@ -536,7 +602,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
               whiteSpace: 'nowrap',
             }}
           >
-            <span style={{ fontSize: '15px' }}>🎯</span>
+            <Target size={14} />
             {focusMode ? 'Focus: Critical + High' : 'Focus Mode'}
           </button>
 
@@ -766,9 +832,13 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
                     return (
                       <React.Fragment key={rowId}>
                         <tr
+                          ref={index === focusedRowIndex ? focusedRowRef : null}
+                          className={index === focusedRowIndex ? 'focused-table-row' : ''}
+                          onClick={() => setFocusedRowIndex(index)}
                           style={{
-                            background: isNewLog ? 'rgba(0, 212, 255, 0.03)' : 'transparent',
-                            borderLeft: isNewLog ? '3px solid var(--accent-color)' : 'none'
+                            background: index === focusedRowIndex ? 'var(--accent-bg)' : isNewLog ? 'rgba(0, 212, 255, 0.03)' : 'transparent',
+                            borderLeft: index === focusedRowIndex ? '3px solid var(--accent-color)' : isNewLog ? '3px solid var(--accent-color)' : 'none',
+                            cursor: 'pointer'
                           }}
                         >
                           <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{formatLocalTime(log?.timestamp)}</td>
@@ -784,7 +854,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
                             </span>
                           </td>
                           <td style={{ fontWeight: 500 }}>{log?.attack_type || '-'}</td>
-                          <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{log?.rule_id || '-'}</td>
+                          <td style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{log?.rule_id || '-'}</td>
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                               <div className="pulse-dot" style={{
@@ -803,7 +873,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
                           </td>
                           <td className="payload-cell"
                             onClick={() => toggleExpand(rowId)}
-                            style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-primary)', maxBreakWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}
+                            style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-primary)', maxBreakWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}
                             title={reconstructedCommand}
                           >
                             {log?.uri || '-'}
@@ -837,7 +907,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
                         {expandedLogs.has(rowId) && (
                           <tr className="expanded-log-row">
                             <td colSpan="8" style={{ padding: '16px 24px', background: 'var(--sev-low-bg)', borderBottom: '1px solid var(--sev-low-border)' }}>
-                              <div style={{ fontFamily: 'monospace', fontSize: '13px', color: 'var(--sev-low)', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
+                              <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--sev-low)', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
                                 <strong style={{ color: 'var(--sev-low)', marginRight: '8px' }}>RECONSTRUCTED COMMAND:</strong><br />
                                 <span style={{ marginTop: '8px', display: 'block', padding: '12px', background: 'var(--inset-bg)', borderRadius: '6px', border: '1px solid var(--surface-hover)' }}>
                                   {reconstructedCommand}
@@ -916,7 +986,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
                           </span>
                         </td>
                         <td style={{ fontWeight: 500 }}>{group.attack_type || '-'}</td>
-                        <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{group.rule_id || '-'}</td>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{group.rule_id || '-'}</td>
                         <td>
                           <span style={{
                             fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '13px',
@@ -925,7 +995,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
                             {group.event_count}
                           </span>
                         </td>
-                        <td style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' }}>
                           {group.sample_uri || '-'}
                         </td>
                         <td style={{ textAlign: 'right' }}>
@@ -967,7 +1037,7 @@ export default function LiveLogs({ onMarkFalsePositive, onCreateRule, onCreateEx
                                       <tr key={ev.id}>
                                         <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{formatLocalTime(ev.timestamp)}</td>
                                         <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{ev.http_code || '-'}</td>
-                                        <td style={{ fontFamily: 'monospace', fontSize: '12px', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.uri || '-'}</td>
+                                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.uri || '-'}</td>
                                         <td style={{ textAlign: 'right' }}>
                                           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                                             {onMarkFalsePositive && (

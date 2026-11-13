@@ -1,8 +1,12 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, Server, Bell, CheckCircle, AlertTriangle, ChevronRight, Zap } from 'lucide-react';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 const SetupWizard = ({ onComplete }) => {
+  const wizardRef = useRef(null);
   const [currentStep, setCurrentStep] = useState(1);
   const [setupData, setSetupData] = useState({
     appName: '',
@@ -12,6 +16,15 @@ const SetupWizard = ({ onComplete }) => {
     alertEmail: '',
     alertSeverity: 'High'
   });
+
+  const handleSkip = () => {
+    localStorage.setItem('waf_setup_complete', 'true');
+    onComplete(null);
+  };
+
+  useBodyScrollLock(true);
+  useFocusTrap(wizardRef, true);
+  useEscapeToClose(handleSkip, true);
 
   const steps = [
     { id: 1, title: 'Protect Your Application', icon: Server },
@@ -31,11 +44,6 @@ const SetupWizard = ({ onComplete }) => {
     }
   };
 
-  const handleSkip = () => {
-    localStorage.setItem('waf_setup_complete', 'true');
-    onComplete(null);
-  };
-
   const canProceed = () => {
     switch (currentStep) {
       case 1:
@@ -53,7 +61,13 @@ const SetupWizard = ({ onComplete }) => {
 
   return (
     <div className="setup-wizard-overlay">
-      <div className="setup-wizard-container">
+      <div
+        ref={wizardRef}
+        className="setup-wizard-container"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Setup Wizard"
+      >
         
         {/* Header with Progress */}
         <div className="setup-wizard-header">

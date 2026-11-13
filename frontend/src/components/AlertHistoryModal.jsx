@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { getAlertHistory, acknowledgeAlert, getAlertStats } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
@@ -6,14 +6,19 @@ import { useToast } from '../hooks/useToast';
 import Toast from './Toast';
 import Button from './Button';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 export default function AlertHistoryModal({ isOpen, onClose }) {
   const [history, setHistory] = useState([]);
   const [stats, setStats] = useState(null);
   const [selectedAlert, setSelectedAlert] = useState(null);
   const { toast, showToast } = useToast();
+  const modalRef = useRef(null);
 
   useEscapeToClose(() => (selectedAlert ? setSelectedAlert(null) : onClose()), isOpen);
+  useBodyScrollLock(isOpen);
+  useFocusTrap(modalRef, isOpen);
 
   const fetchHistory = async () => {
     try {
@@ -45,8 +50,8 @@ export default function AlertHistoryModal({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay-bg)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9999, padding: '24px' }}>
-      <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="alert-history-modal-title" style={{ background: 'var(--bg-secondary)', padding: '24px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)', width: '900px', maxWidth: '94vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+    <div className="modal-overlay" style={{ zIndex: 'var(--z-modal, 1400)' }} onClick={onClose}>
+      <div ref={modalRef} className="modal-content" role="dialog" aria-modal="true" aria-labelledby="alert-history-modal-title" style={{ width: '900px', maxWidth: '94vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 id="alert-history-modal-title" style={{ fontSize: '18px', fontWeight: 700, color: 'var(--accent-color)', fontFamily: 'var(--font-display)' }}>Triggered Alert History Logs</h3>
           <Button variant="ghost" size="sm" icon={X} onClick={onClose} aria-label="Close alert history" />

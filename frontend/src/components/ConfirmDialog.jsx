@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
 import Button from './Button';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 /**
  * The one shared confirmation modal — pair with useConfirm(). Replaces
@@ -9,8 +11,12 @@ import Button from './Button';
  * themed, keyboard-accessible dialog instead of an unstyled OS prompt.
  */
 export default function ConfirmDialog({ request, onConfirm, onCancel }) {
+  const dialogRef = useRef(null);
   const confirmBtnRef = useRef(null);
   const cancelBtnRef = useRef(null);
+
+  useBodyScrollLock(Boolean(request));
+  useFocusTrap(dialogRef, Boolean(request));
 
   useEffect(() => {
     if (!request) return;
@@ -30,11 +36,12 @@ export default function ConfirmDialog({ request, onConfirm, onCancel }) {
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
           style={{
             position: 'fixed', inset: 0, background: 'var(--overlay-bg)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100000, padding: '24px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 'var(--z-dialog, 1500)', padding: '24px',
           }}
           onClick={onCancel}
         >
           <motion.div
+            ref={dialogRef}
             initial={{ opacity: 0, y: 12, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.97 }}
             transition={{ duration: 0.15 }}
             role="alertdialog"

@@ -778,7 +778,7 @@ export default function MLAnalytics() {
           </div>
 
           {/* Leaderboards */}
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6">
             <div className="card-title">
               <Globe size={18} color="var(--accent-color)" />
               Highly Suspect Target Endpoints
@@ -797,7 +797,7 @@ export default function MLAnalytics() {
                   <tbody>
                     {stats.top_anomalous_uris.map((item, idx) => (
                       <tr key={idx} style={{ borderBottom: '1px solid var(--surface-subtle)', color: 'var(--text-primary)' }}>
-                        <td style={{ padding: '10px 0', fontFamily: 'monospace', color: 'var(--accent-color)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.uri}>
+                        <td style={{ padding: '10px 0', fontFamily: 'var(--font-mono)', color: 'var(--accent-color)', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.uri}>
                           {item.uri}
                         </td>
                         <td style={{ padding: '10px 0', textAlign: 'center' }}>{item.count}</td>
@@ -814,7 +814,7 @@ export default function MLAnalytics() {
             </div>
           </div>
 
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6">
             <div className="card-title">
               <Server size={18} color="var(--accent-color)" />
               Top Suspect Client IPs
@@ -999,7 +999,7 @@ export default function MLAnalytics() {
       {activeSubTab === 'management' && (
         <>
           {/* Models Status Cards */}
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Brain size={18} color="var(--accent-color)" />
               <span>Supervised Model: XGBoost Classifier</span>
@@ -1034,7 +1034,7 @@ export default function MLAnalytics() {
             </div>
           </div>
 
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Brain size={18} color="var(--ml-color)" />
               <span>Anomaly Detector: Isolation Forest</span>
@@ -1067,7 +1067,7 @@ export default function MLAnalytics() {
           </div>
 
           {/* Explainability Feature Importance & Rollback Row */}
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="card-title">
               <Brain size={18} color="var(--accent-color)" />
               Explainability — Model Features Contribution
@@ -1091,7 +1091,7 @@ export default function MLAnalytics() {
             </div>
           </div>
 
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="card-title">
               <Clock size={18} color="var(--accent-color)" />
               Historical Backups & Rollback Control
@@ -1397,7 +1397,7 @@ export default function MLAnalytics() {
           })()}
 
           {/* Drift Monitoring History & Automated Retraining Audit Row (Phase 3.3 & 3.4) */}
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="card-title">
               <AlertTriangleIcon size={18} color="var(--accent-color)" />
               Drift Check Telemetry History
@@ -1456,7 +1456,7 @@ export default function MLAnalytics() {
           </div>
 
           {/* Automated Retraining Audit Trail (Phase 3.4) */}
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div className="card-title">
               <Calendar size={18} color="var(--accent-color)" />
               Automated Retraining Execution History
@@ -1660,7 +1660,7 @@ export default function MLAnalytics() {
           </div>
 
           {/* Decision Cutoff Thresholds Card */}
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Gauge size={18} color="var(--accent-color)" />
               <span>Graduated Decision Cutoff Thresholds</span>
@@ -1829,7 +1829,7 @@ export default function MLAnalytics() {
           </div>
 
           {/* Model Weights & Retraining Card */}
-          <div className="chart-card glass-panel" style={{ gridColumn: 'span 6', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="chart-card glass-panel col-span-12 col-span-md-6" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Zap size={18} color="var(--accent-color)" />
               <span>Ensemble Component Weights & Feedback</span>

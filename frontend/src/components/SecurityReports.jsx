@@ -7,6 +7,9 @@ import {
 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { ChartTooltip, Button, Badge, SelectInput } from './ui';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import {
   getStats, getAttackTypes, getTopIPs, getHealth, getSecurityStatistics,
   getWafSettings, getHardeningSettings, getLogSettings, getProtectedApps,
@@ -784,6 +787,10 @@ export default function SecurityReports() {
 
   // Automated delivery modal state
   const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const scheduleModalRef = useRef(null);
+  useEscapeToClose(() => setShowScheduleModal(false), showScheduleModal);
+  useBodyScrollLock(showScheduleModal);
+  useFocusTrap(scheduleModalRef, showScheduleModal);
   const [scheduleSubTab, setScheduleSubTab] = useState('schedules'); // 'schedules' | 'history' | 'instant'
   const [schedules, setSchedules] = useState([]);
   const [deliveryHistory, setDeliveryHistory] = useState([]);
@@ -1061,7 +1068,7 @@ export default function SecurityReports() {
                 fontWeight: 600,
                 border: 'none',
                 background: timeframe === '24h' ? 'var(--accent-color)' : 'transparent',
-                color: timeframe === '24h' ? '#000' : 'var(--text-secondary)',
+                color: timeframe === '24h' ? 'var(--accent-contrast, #ffffff)' : 'var(--text-secondary)',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease'
               }}
@@ -1078,7 +1085,7 @@ export default function SecurityReports() {
                 fontWeight: 600,
                 border: 'none',
                 background: timeframe === '7d' ? 'var(--accent-color)' : 'transparent',
-                color: timeframe === '7d' ? '#000' : 'var(--text-secondary)',
+                color: timeframe === '7d' ? 'var(--accent-contrast, #ffffff)' : 'var(--text-secondary)',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease'
               }}
@@ -1095,7 +1102,7 @@ export default function SecurityReports() {
                 fontWeight: 600,
                 border: 'none',
                 background: timeframe === '30d' ? 'var(--accent-color)' : 'transparent',
-                color: timeframe === '30d' ? '#000' : 'var(--text-secondary)',
+                color: timeframe === '30d' ? 'var(--accent-contrast, #ffffff)' : 'var(--text-secondary)',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease'
               }}
@@ -1207,6 +1214,7 @@ export default function SecurityReports() {
         {showScheduleModal && (
           <div className="modal-overlay" onClick={() => setShowScheduleModal(false)}>
             <motion.div
+              ref={scheduleModalRef}
               className="modal-content"
               style={{ maxWidth: '860px', maxHeight: '88vh' }}
               onClick={(e) => e.stopPropagation()}

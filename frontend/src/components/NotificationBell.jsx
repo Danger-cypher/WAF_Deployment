@@ -20,7 +20,13 @@ export default function NotificationBell({ onOpenHistory, onOpenSettings }) {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedAlert, setSelectedAlert] = useState(null);
   const { toast, showToast } = useToast();
-  useEscapeToClose(() => setSelectedAlert(null), !!selectedAlert);
+  useEscapeToClose(() => {
+    if (selectedAlert) {
+      setSelectedAlert(null);
+    } else if (isOpen) {
+      setIsOpen(false);
+    }
+  }, isOpen || !!selectedAlert);
   const [wsConnected, setWsConnected] = useState(false);
   const dropdownRef = useRef(null);
   const prefsRef = useRef({ muted_severities: [], muted_event_types: [] });

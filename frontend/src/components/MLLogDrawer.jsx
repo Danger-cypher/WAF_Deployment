@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Activity, AlertTriangle as AlertTriangleIcon, Brain, Check, Copy, X } from 'lucide-react';
 import { getLogById, labelMLEvent } from '../services/api';
 import { formatLocalTime } from '../utils/helpers';
 import HighlightedJson from './JsonViewer';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 /**
  * The "inspect this ML evaluation" drawer opened from the MLEngine analytics
@@ -19,15 +21,11 @@ export default function MLLogDrawer({ log, onClose, onLabelUpdate, showToast }) 
   const [copied, setCopied] = useState(false);
   const [copiedRaw, setCopiedRaw] = useState(false);
   const [labeling, setLabeling] = useState(false);
+  const drawerRef = useRef(null);
 
   useEscapeToClose(onClose, !!log);
-
-  useEffect(() => {
-    if (!log) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
-  }, [log]);
+  useBodyScrollLock(!!log);
+  useFocusTrap(drawerRef, !!log);
 
   useEffect(() => {
     if (log && log.unique_id) {
@@ -138,7 +136,7 @@ export default function MLLogDrawer({ log, onClose, onLabelUpdate, showToast }) 
 
   return createPortal(
     <div className="log-drawer-overlay" onClick={onClose}>
-      <div className="log-drawer" role="dialog" aria-modal="true" aria-labelledby="ml-log-drawer-title" onClick={(e) => e.stopPropagation()}>
+      <div ref={drawerRef} className="log-drawer" role="dialog" aria-modal="true" aria-labelledby="ml-log-drawer-title" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="log-drawer-header">
           <div className="log-drawer-title" id="ml-log-drawer-title">

@@ -14,7 +14,7 @@ import {
   getLiveStreamWsUrl,
 } from '../services/api';
 import { NoTrafficEmptyState, FetchErrorState } from '../components/EmptyStates';
-import { ChartTooltip } from '../components/ui';
+import { ChartTooltip, Checkbox } from '../components/ui';
 import { DEFAULT_KPI_ORDER, KPI_LABELS, loadKpiPrefs, saveKpiPrefs } from '../utils/kpiPrefs';
 import { applyLiveStatsBump } from '../utils/liveStatsBump';
 
@@ -185,10 +185,15 @@ export function KpiCustomizePanel({ order, hidden, onChange, onClose }) {
           const lastVisible = !isHidden && hidden.length >= order.length - 1;
           return (
             <div key={id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 2px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, fontSize: '12.5px', color: isHidden ? 'var(--text-muted)' : 'var(--text-primary)', cursor: lastVisible ? 'not-allowed' : 'pointer' }}>
-                <input type="checkbox" checked={!isHidden} disabled={lastVisible} onChange={() => toggle(id)} />
-                {KPI_LABELS[id]}
-              </label>
+              <div style={{ flex: 1, minWidth: 0, fontSize: '12.5px' }}>
+                <Checkbox
+                  id={`kpi-order-${id}`}
+                  checked={!isHidden}
+                  disabled={lastVisible}
+                  onChange={() => toggle(id)}
+                  label={KPI_LABELS[id]}
+                />
+              </div>
               <button type="button" onClick={() => move(id, -1)} disabled={idx === 0} aria-label={`Move ${KPI_LABELS[id]} up`}
                 style={{ background: 'none', border: 'none', color: idx === 0 ? 'var(--text-muted)' : 'var(--text-secondary)', cursor: idx === 0 ? 'default' : 'pointer', display: 'flex', padding: '2px' }}>
                 <ChevronUp size={13} />

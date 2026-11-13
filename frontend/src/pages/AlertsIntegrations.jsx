@@ -556,7 +556,7 @@ export default function AlertsIntegrations({ userRole }) {
             <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ background: 'var(--surface-subtle)', border: '1px solid var(--border-color)', padding: '20px', borderRadius: '8px', marginBottom: '16px' }}>
               <form onSubmit={handleSubmitRule} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <h4 style={{ margin: 0, fontSize: '14px', color: 'var(--sev-low)' }}>{editingRuleId != null ? 'Edit Incident Alerting Rule' : 'Create Incident Alerting Rule'}</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label htmlFor="ai-rule-name" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Rule Name</label>
                     <input id="ai-rule-name" className="settings-input" type="text" placeholder="e.g. Critical Threat Event" required value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} />
@@ -580,7 +580,7 @@ export default function AlertsIntegrations({ userRole }) {
                     </select>
                   </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label htmlFor="ai-rule-conditions" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Conditions JSON (Optional)</label>
                     <textarea

@@ -16,6 +16,8 @@ import { useToast } from '../hooks/useToast';
 import Toast from '../components/Toast';
 import { useConfirm } from '../hooks/useConfirm';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { Checkbox } from '../components/ui';
 import Pagination from '../components/Pagination';
 import { FetchErrorState } from '../components/EmptyStates';
 import CanaryTrendChart from '../components/CanaryTrendChart';
@@ -106,6 +108,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
     if (ruleToDisable) setRuleToDisable(null);
     else if (selectedRule) setSelectedRule(null);
   }, !!(ruleToDisable || selectedRule));
+  useBodyScrollLock(Boolean(ruleToDisable || selectedRule));
 
   // Notification states
   const { toast, showToast } = useToast();
@@ -493,24 +496,20 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)' }}>
-                    <input
-                      type="checkbox"
-                      checked={rolloutSettings.auto_promote_enabled}
-                      disabled={userRole !== 'admin'}
-                      onChange={(e) => setRolloutSettings({ ...rolloutSettings, auto_promote_enabled: e.target.checked })}
-                    />
-                    Auto-promote low-risk canary rules
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)' }}>
-                    <input
-                      type="checkbox"
-                      checked={rolloutSettings.auto_rollback_enabled}
-                      disabled={userRole !== 'admin'}
-                      onChange={(e) => setRolloutSettings({ ...rolloutSettings, auto_rollback_enabled: e.target.checked })}
-                    />
-                    Auto-rollback high-risk canary rules
-                  </label>
+                  <Checkbox
+                    id="canary-auto-promote"
+                    checked={rolloutSettings.auto_promote_enabled}
+                    disabled={userRole !== 'admin'}
+                    onChange={(e) => setRolloutSettings({ ...rolloutSettings, auto_promote_enabled: e.target.checked })}
+                    label="Auto-promote low-risk canary rules"
+                  />
+                  <Checkbox
+                    id="canary-auto-rollback"
+                    checked={rolloutSettings.auto_rollback_enabled}
+                    disabled={userRole !== 'admin'}
+                    onChange={(e) => setRolloutSettings({ ...rolloutSettings, auto_rollback_enabled: e.target.checked })}
+                    label="Auto-rollback high-risk canary rules"
+                  />
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
                   <div>
@@ -1006,7 +1005,7 @@ export default function Rules({ userRole, initialSearch, onConsumeInitialSearch 
       {createPortal(
         <AnimatePresence>
           {ruleToDisable && (
-            <div className="modal-overlay" style={{ zIndex: 1100 }}>
+            <div className="modal-overlay" style={{ zIndex: 'var(--z-dialog, 1500)' }}>
               <motion.div
                 className="modal-content pulse-warning"
                 role="alertdialog"

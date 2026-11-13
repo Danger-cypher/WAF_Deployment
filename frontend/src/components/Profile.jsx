@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { User, X, ShieldCheck, KeyRound, Save, BellOff, Smartphone, Monitor } from 'lucide-react';
 import { useToast } from '../hooks/useToast';
 import { useConfirm } from '../hooks/useConfirm';
@@ -6,6 +6,8 @@ import Toast from './Toast';
 import Button from './Button';
 import { initialsFor, formatLocalTime } from '../utils/helpers';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import {
   getMyProfile, updateMyProfile, changeMyPassword,
   getMyNotificationPreferences, updateMyNotificationPreferences,
@@ -48,7 +50,10 @@ const labelStyle = {
 const fieldGroupStyle = { display: 'flex', flexDirection: 'column', gap: '12px' };
 
 export default function Profile({ onClose }) {
+  const profileRef = useRef(null);
   useEscapeToClose(onClose, true);
+  useBodyScrollLock(true);
+  useFocusTrap(profileRef, true);
   const confirm = useConfirm();
   const [profile, setProfile] = useState(null);
   const [displayName, setDisplayName] = useState('');
@@ -240,6 +245,7 @@ export default function Profile({ onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
+        ref={profileRef}
         className="modal-content"
         role="dialog"
         aria-modal="true"
@@ -486,7 +492,7 @@ export default function Profile({ onClose }) {
                           {s.is_current && (
                             <span style={{
                               fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: 'var(--radius-pill)',
-                              background: 'var(--accent-color)', color: '#fff', textTransform: 'uppercase',
+                              background: 'var(--accent-color)', color: 'var(--accent-contrast, #ffffff)', textTransform: 'uppercase',
                             }}>
                               This device
                             </span>
